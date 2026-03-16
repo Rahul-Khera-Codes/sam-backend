@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Test Voice Agent (LiveKit)</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 560px; margin: 2rem auto; padding: 0 1rem; }
+    label { display: block; margin-top: 1rem; font-weight: 500; }
+    input, textarea { width: 100%; padding: 0.5rem; margin-top: 0.25rem; box-sizing: border-box; }
+    textarea { min-height: 80px; font-family: monospace; }
+    button { margin-top: 1rem; padding: 0.5rem 1rem; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .status { margin-top: 1rem; padding: 0.5rem; border-radius: 6px; }
+    .status.connected { background: #dcfce7; color: #166534; }
+    .status.error { background: #fee2e2; color: #991b1b; }
+    .status.info { background: #e0e7ff; color: #3730a3; }
+    h1 { font-size: 1.25rem; }
+    p { color: #666; font-size: 0.875rem; }
+  </style>
+</head>
+<body>
+  <h1>Test voice agent locally</h1>
+  <p>Paste the <strong>LiveKit URL</strong> and <strong>token</strong> from <code>POST /calls/initiate</code> (or from the app after "Test with Web Call"). Start the worker in a terminal first, then Connect. Use your mic to talk to the AI.</p>
+
+  <label>LiveKit WebSocket URL (e.g. wss://xxx.livekit.cloud)</label>
+  <input type="text" id="url" placeholder="wss://your-project.livekit.cloud" />
+
+  <label>LiveKit token (JWT from initiate response)</label>
+  <textarea id="token" placeholder="eyJhbG..."></textarea>
+
+  <button id="btn" onclick="toggle()">Connect</button>
+  <div id="status"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client/dist/livekit-client.umd.min.js"></script>
+  <script>
+    (function() {
+      var Room = window.LivekitClient.Room;
+      var RoomEvent = window.LivekitClient.RoomEvent;
+      var createLocalAudioTrack = window.LivekitClient.createLocalAudioTrack;
+      window.room = null;
+
+      window.connect = async function() {
+        var url = document.getElementById('url').value.trim();
+        var token = document.getElementById('token').value.trim();
+        if (!url || !token) {
+          setStatus('Enter URL and token.', 'error');
+          return;
+        }
+        setStatus('Connecting...', 'info');
+        var room = new Room();
+        room.on(RoomEvent.TrackSubscribed, function(track, publication, participant) {
+          if (track.kind === 'audio') {
+            var el = track.attach();
+            el.autoplay = true;
+            document.body.appendChild(el);
+            el.play().catch(function() {});
+          }
+        });
+        try {
+          await room.connect(url, token);
+          var audioTrack = await createLocalAudioTrack();
+          await room.localParticipant.publishTrack(audioTrack, { name: 'mic' });
+          window.room = room;
+          setStatus('Connected. Speak into your mic — the AI should respond.', 'connected');
+          document.getElementById('btn').textContent = 'Disconnect';
+        } catch (e) {
+          setStatus('Failed: ' + e.message, 'error');
+        }
+      };
+
+      window.disconnect = function() {
+        if (window.room) {
+          window.room.disconnect();
+          window.room = null;
+        }
+        setStatus('Disconnected.', 'info');
+        document.getElementById('btn').textContent = 'Connect';
+      };
+
+      window.toggle = function() {
+        if (window.room) disconnect();
+        else connect();
+      };
+
+      function setStatus(msg, type) {
+        var el = document.getElementById('status');
+        el.textContent = msg;
+        el.className = 'status ' + (type || 'info');
+      }
+    })();
+  </script>
+</body>
+</html>
