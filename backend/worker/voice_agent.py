@@ -163,25 +163,91 @@ class VoiceAgentWorker:
         token = self._prepare_room_and_token()
         start_time = datetime.now(timezone.utc)
 
+        # Build a business-aware system prompt so the agent can greet with
+        # the company name and location.
+        system_prompt = SYSTEM_PROMPT
+        try:
+            company_name = "your company"
+            location_phrase = ""
+
+            biz_result = (
+                supabase_admin.table("businesses")
+                .select("*")
+                .eq("id", self.business_id)
+                .limit(1)
+                .execute()
+            )
+            biz_data = getattr(biz_result, "data", None) or []
+            biz = biz_data[0] if isinstance(biz_data, list) and biz_data else None
+            if isinstance(biz, dict) and biz.get("name"):
+                company_name = biz["name"]
+
+            call_result = (
+                supabase_admin.table("calls")
+                .select("location_id")
+                .eq("id", self.call_id)
+                .limit(1)
+                .execute()
+            )
+            call_data = getattr(call_result, "data", None) or []
+            call_row = call_data[0] if isinstance(call_data, list) and call_data else None
+            location_id = call_row.get("location_id") if isinstance(call_row, dict) else None
+
+            if location_id:
+                loc_result = (
+                    supabase_admin.table("locations")
+                    .select("*")
+                    .eq("id", location_id)
+                    .limit(1)
+                    .execute()
+                )
+                loc_data = getattr(loc_result, "data", None) or []
+                loc = loc_data[0] if isinstance(loc_data, list) and loc_data else None
+                if isinstance(loc, dict):
+                    parts = [
+                        loc.get("name"),
+                        loc.get("city"),
+                        loc.get("state"),
+                        loc.get("country"),
+                    ]
+                    spoken = ", ".join([p for p in parts if p])
+                    if spoken:
+                        location_phrase = f" in {spoken}"
+
+            system_prompt = f"""
+You are the AI phone receptionist for {company_name}{location_phrase}.
+Always start the call with a short, friendly welcome that includes the business name{', and the location if helpful' if location_phrase else ''}.
+Example: \"Thank you for calling {company_name}{location_phrase}, how can I help you today?\"
+
+Then continue the conversation following these rules:
+{SYSTEM_PROMPT}
+"""
+        except Exception as e:
+            logger.warning(f"[Worker] Failed to build business-aware prompt, falling back to default: {e}")
+
         try:
             # Open GPT-4o Realtime WebSocket first so we can register room handlers before connecting
             async with self.openai.realtime.connect(
                 model="gpt-4o-realtime-preview-2024-12-17"
             ) as connection:
 
-                # Configure the session
-                await connection.session.update(session={
-                    "instructions": SYSTEM_PROMPT,
-                    "voice": "alloy",
-                    "input_audio_format": "pcm16",
-                    "output_audio_format": "pcm16",
-                    "input_audio_transcription": {"model": "gpt-4o-transcribe"},
-                    "turn_detection": {
-                        "type": "server_vad",
-                        "threshold": 0.5,
-                        "silence_duration_ms": 800,
-                    },
-                })
+                # Configure the session (type required by API for custom instructions)
+                await connection.session.update(
+                    session={
+                        "type": "realtime",
+                        "instructions": system_prompt,
+                        # Let the model use its default voice; explicit 'voice'
+                        # is rejected on this Realtime model version.
+                        "input_audio_format": "pcm16",
+                        "output_audio_format": "pcm16",
+                        "input_audio_transcription": {"model": "gpt-4o-transcribe"},
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "threshold": 0.5,
+                            "silence_duration_ms": 800,
+                        },
+                    }
+                )
 
                 logger.info(f"[Worker] GPT-4o Realtime session opened for call {self.call_id}")
 
@@ -222,11 +288,17 @@ class VoiceAgentWorker:
                             _frames_sent += 1
                             if _frames_sent in (1, 50, 200):
                                 logger.info(f"[Worker] Sent {_frames_sent} audio frames to GPT ({len(pcm_bytes)} bytes each)")
+                    except asyncio.CancelledError:
+                        logger.info("[Worker] stream_audio cancelled")
+                        raise
                     except Exception as e:
                         if "ConnectionClosed" in type(e).__name__ or "1000" in str(e):
                             logger.info("[Worker] stream_audio: connection closed normally")
                             return
-                        logger.warning("[Worker] stream_audio error: %s", e, exc_info=True)
+                        logger.warning(
+                            "[Worker] stream_audio ended (caller audio stopped). Agent will not hear until rejoin: %s",
+                            e,
+                        )
 
                 def on_track_subscribed(track, publication, participant):
                     if track.kind == rtc.TrackKind.KIND_AUDIO:
@@ -234,6 +306,15 @@ class VoiceAgentWorker:
                         logger.info(f"[Worker] Subscribed to audio track from {participant.identity}")
 
                 self.room.on("track_subscribed", on_track_subscribed)
+
+                def on_disconnected(reason=None, error=None):
+                    logger.warning("[Worker] LiveKit room disconnected: reason=%s error=%s", reason, error)
+
+                def on_reconnecting():
+                    logger.info("[Worker] LiveKit reconnecting…")
+
+                self.room.on("disconnected", on_disconnected)
+                self.room.on("reconnecting", on_reconnecting)
 
                 await self.room.connect(settings.livekit_url, token)
                 logger.info(f"[Worker] Connected to LiveKit room: {self.room_id}")
@@ -243,6 +324,10 @@ class VoiceAgentWorker:
                 options = rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
                 await self.room.local_participant.publish_track(agent_track, options)
                 logger.info("[Worker] Agent audio track published")
+
+                # Trigger an immediate welcome so the agent speaks first (company name + location)
+                await connection.response.create()
+                logger.info("[Worker] Requested initial welcome response")
 
                 # Start streaming existing tracks (only if on_track_subscribed didn't already)
                 for participant in self.room.participants.values():
