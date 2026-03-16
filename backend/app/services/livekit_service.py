@@ -1,9 +1,14 @@
+import json
 import uuid
 
 from livekit.api import LiveKitAPI, AccessToken, VideoGrants
 from livekit.protocol import room as proto_room
+from livekit.protocol.agent_dispatch import CreateAgentDispatchRequest
 
 from app.core.config import settings
+
+# Agent name must match @server.rtc_session(agent_name="...") in the LiveKit Agents app
+VOICE_AGENT_NAME = "voice-agent"
 
 
 def generate_room_id() -> str:
@@ -35,10 +40,44 @@ async def create_room(room_id: str) -> dict:
         await api.aclose()
 
 
-def generate_user_token(room_id: str, participant_name: str) -> str:
+async def create_agent_dispatch(
+    room_id: str,
+    *,
+    metadata: dict | None = None,
+) -> None:
+    """
+    Explicitly dispatch the voice-agent to a room.
+    Required when using LiveKit Agents with agent_name (no automatic dispatch).
+    Call this after creating the room so the agent joins when the user connects.
+    """
+    api = LiveKitAPI(
+        url=settings.livekit_url,
+        api_key=settings.livekit_api_key,
+        api_secret=settings.livekit_api_secret,
+    )
+    try:
+        req = CreateAgentDispatchRequest(
+            agent_name=VOICE_AGENT_NAME,
+            room=room_id,
+            metadata=json.dumps(metadata) if metadata else "",
+        )
+        await api.agent_dispatch.create_dispatch(req)
+        print(f"[LiveKit] agent dispatch created room={room_id} agent={VOICE_AGENT_NAME}", flush=True)
+    finally:
+        await api.aclose()
+
+
+def generate_user_token(
+    room_id: str,
+    participant_name: str,
+    *,
+    metadata: dict | None = None,
+) -> str:
     """
     Generates a LiveKit access token for the frontend user (caller).
     The frontend uses this token to join the room.
+    If metadata is provided (e.g. call_id, business_id, location_id), it is
+    set on the token so the LiveKit Agents voice-agent can read participant.metadata.
     """
     token = (
         AccessToken(
@@ -53,9 +92,12 @@ def generate_user_token(room_id: str, participant_name: str) -> str:
                 room=room_id,
                 can_publish=True,
                 can_subscribe=True,
+                can_update_own_metadata=True,  # match working uni project: metadata on token applies
             )
         )
     )
+    if metadata:
+        token = token.with_metadata(json.dumps(metadata))
     return token.to_jwt()
 
 

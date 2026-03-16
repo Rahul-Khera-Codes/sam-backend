@@ -1,0 +1,6 @@
+# LiveKit Agents with OpenAI Realtime (Voice AI quickstart pattern)
+livekit-agents[openai]~=1.4
+python-dotenv>=1.0.0
+# Fetch business/location for welcome message
+supabase>=2.28.0
+livekit-plugins-noise-cancellation~=0.2

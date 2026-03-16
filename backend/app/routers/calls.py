@@ -1,6 +1,7 @@
 import os
 import sys
 import subprocess
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -17,6 +18,8 @@ from app.schemas.calls import (
 from app.services import livekit_service
 from typing import List, Optional
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 # Backend root (parent of app/) — worker is run as python -m worker.voice_agent from here
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -250,32 +253,41 @@ async def initiate_call(
 
     call_id = result.data[0]["id"]
 
-    # 3. Generate LiveKit token for the frontend user
+    # 3. Generate LiveKit token for the frontend user (metadata for LiveKit Agents voice-agent)
     participant_name = body.caller_name or f"user-{user_id[:8]}"
-    user_token = livekit_service.generate_user_token(room_id, participant_name)
+    user_token = livekit_service.generate_user_token(
+        room_id,
+        participant_name,
+        metadata={
+            "call_id": call_id,
+            "business_id": body.business_id,
+            "location_id": body.location_id or "",
+        },
+    )
 
     # 4. Update call status to active
     supabase_admin.table("calls").update({"status": "active"}).eq("id", call_id).execute()
 
-    # 5. Spawn voice agent worker (joins LiveKit room as AI)
-    try:
-        subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "worker.voice_agent",
-                "--call-id", call_id,
-                "--room-id", room_id,
-                "--business-id", body.business_id,
-            ],
-            cwd=str(_BACKEND_ROOT),
-            env=os.environ.copy(),
-            start_new_session=True,
-        )
-    except Exception as e:
-        # Log but don't fail the request; caller still has room + token
-        import logging
-        logging.getLogger(__name__).warning("Failed to spawn voice agent worker: %s", e)
+    # 5. Voice agent: LiveKit Agents (automatic dispatch when user joins) or legacy worker
+    use_livekit_agent = settings.use_livekit_agent
+    logger.warning(f"use_livekit_agent: {use_livekit_agent}")
+    if not use_livekit_agent:
+        try:
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "worker.voice_agent",
+                    "--call-id", call_id,
+                    "--room-id", room_id,
+                    "--business-id", body.business_id,
+                ],
+                cwd=str(_BACKEND_ROOT),
+                env=os.environ.copy(),
+                start_new_session=True,
+            )
+        except Exception as e:
+            logger.warning("Failed to spawn voice agent worker: %s", e)
 
     return {
         "call_id": call_id,

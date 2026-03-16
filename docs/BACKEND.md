@@ -159,14 +159,20 @@ The **voice agent** is the first concrete integration between the frontend and t
    - Show recent activity via `GET /calls/recent-activity?business_id=...`.
    - Show transcript and summary via `GET /calls/{id}/transcript` and `GET /calls/{id}/summary`.
 
-### 6.2 Worker
+### 6.2 Worker (legacy)
 
 - **File**: `backend/worker/voice_agent.py`.
-- **Run**: `python -m worker.voice_agent --call-id <uuid> --room-id <room> --business-id <uuid>` (typically started after `POST /calls/initiate`).
+- **Run**: `python -m worker.voice_agent --call-id <uuid> --room-id <room> --business-id <uuid>` (typically started after `POST /calls/initiate` when `USE_LIVEKIT_AGENT` is not set).
 - **Stack**: LiveKit (join room, publish/subscribe audio), OpenAI GPT-4o Realtime (audio in/out, transcription), Supabase admin client (transcripts, call_summaries, call status).
-- **System prompt**: Currently a fixed string; intended to be replaced with business-specific (or brand-voice) prompt from DB.
+- **System prompt**: Business/location-aware; fetches from Supabase and greets with company name.
 
-### 6.3 Supabase Tables Used by Voice and Calls
+### 6.3 LiveKit Agents (optional)
+
+- **Directory**: `agent/`. Implements the same flow using the official [LiveKit Agents](https://docs.livekit.io/agents/start/voice-ai/) pattern: `AgentServer`, `AgentSession`, `openai.realtime.RealtimeModel`.
+- When `USE_LIVEKIT_AGENT=1` is set, the backend does **not** spawn the legacy worker; the agent in `agent/` is used instead (dispatched by LiveKit Cloud or your agent process). The user token includes metadata `call_id`, `business_id`, `location_id` so the agent can greet with company/location.
+- **Transcripts/summaries**: The legacy worker writes to Supabase; the LiveKit Agents agent does not yet. Phase 2 options: (A) agent writes transcripts/summaries to Supabase directly, or (B) agent calls FastAPI e.g. `POST /calls/{id}/transcript-events` and the backend writes to Supabase. See `agent/README.md`.
+
+### 6.4 Supabase Tables Used by Voice and Calls
 
 The backend expects (or creates) at least:
 
@@ -175,7 +181,7 @@ The backend expects (or creates) at least:
 - **call_summaries** — call_id, business_id, summary_text, key_topics, insights, generated_at.
 - **recordings** (optional) — call_id, storage_bucket, storage_path, duration_seconds, file_size_bytes; used by `GET /calls/{id}/recording`.
 
-### 6.4 Settings and Communication
+### 6.5 Settings and Communication
 
 - **agent_settings** — Feature flags (inbound_calling, outbound_calling, call_forwarding, send_texts_during_after_calls, missed_call_text_back, callback_scheduling, reschedule_cancel_appointments, confirmation_reminder_calls, multi_language_support, feedback_after_call).
 - **agent_state** — Single row per business: is_active (global on/off).
@@ -219,6 +225,7 @@ Backend reads from environment (e.g. `.env` in `backend/` or docker-compose):
 | `livekit_api_key` | LiveKit API key |
 | `livekit_api_secret` | LiveKit API secret |
 | `openai_api_key` | OpenAI API key (worker) |
+| `USE_LIVEKIT_AGENT` | If set to `1`/`true`/`yes`, the backend does not spawn the legacy worker; use the LiveKit Agents service in `agent/` instead. |
 | `cors_origins` | Comma-separated origins (e.g. `http://localhost:5173`) |
 | `aws_*`, `s3_bucket_name` | Optional, for recording storage if not using Supabase Storage |
 
@@ -228,9 +235,9 @@ Backend reads from environment (e.g. `.env` in `backend/` or docker-compose):
 
 - **Local**: From `backend/`, `uvicorn app.main:app --reload --port 8000` (or 8003 if you prefer). Ensure `.env` is set.
 - **Docker**: `docker-compose up`; API is exposed on host port 8003, mapped to container 8000.
-- **Worker**: Run manually or via your process manager:  
-  `python -m worker.voice_agent --call-id <uuid> --room-id <room> --business-id <uuid>`  
-  after creating a call with `POST /calls/initiate`.
+- **Worker** (when not using LiveKit Agents): The API spawns it automatically after `POST /calls/initiate` unless `USE_LIVEKIT_AGENT` is set. Or run manually:  
+  `python -m worker.voice_agent --call-id <uuid> --room-id <room> --business-id <uuid>`.
+- **LiveKit Agents** (optional): From `agent/`, run `python agent.py dev` (or deploy via `lk agent create`). Set `USE_LIVEKIT_AGENT=1` in the backend env so the API does not spawn the legacy worker.
 
 ---
 
