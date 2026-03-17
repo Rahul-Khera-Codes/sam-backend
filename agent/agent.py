@@ -1,8 +1,10 @@
 """
 SAM Voice Agent — LiveKit Agents (Realtime) entrypoint.
-Uses the official Voice AI quickstart pattern: AgentServer + AgentSession + OpenAI Realtime.
 Reads business_id, location_id, call_id from participant metadata (set by backend token)
-and builds a company/location-aware welcome.
+and builds instructions from:
+- Business name + location (welcome)
+- Global settings (businesses: language, country, date_format, time_format)
+- Brand voice (brand_voice_profiles: tone, style, vocabulary, do_not_say, sample_responses)
 """
 
 import json
@@ -43,32 +45,153 @@ def _get_supabase():
     return None
 
 
+def _fetch_business(supabase, business_id: str) -> dict | None:
+    """Fetch business row (global settings: language, country, date_format, time_format)."""
+    if not supabase or not business_id:
+        return None
+    try:
+        r = supabase.table("businesses").select("*").eq("id", business_id).limit(1).execute()
+        data = getattr(r, "data", None) or []
+        return data[0] if isinstance(data, list) and data and isinstance(data[0], dict) else None
+    except Exception as e:
+        logger.warning("Failed to fetch business: %s", e)
+        return None
+
+
+def _fetch_location(supabase, location_id: str) -> dict | None:
+    """Fetch location row for spoken address."""
+    if not supabase or not location_id:
+        return None
+    try:
+        r = supabase.table("locations").select("*").eq("id", location_id).limit(1).execute()
+        data = getattr(r, "data", None) or []
+        return data[0] if isinstance(data, list) and data and isinstance(data[0], dict) else None
+    except Exception as e:
+        logger.warning("Failed to fetch location: %s", e)
+        return None
+
+
+def _fetch_brand_voice(supabase, business_id: str) -> dict | None:
+    """Fetch active brand voice profile (tone, style, vocabulary, do_not_say, sample_responses)."""
+    if not supabase or not business_id:
+        return None
+    try:
+        r = (
+            supabase.table("brand_voice_profiles")
+            .select("*")
+            .eq("business_id", business_id)
+            .eq("is_active", True)
+            .limit(1)
+            .execute()
+        )
+        data = getattr(r, "data", None) or []
+        return data[0] if isinstance(data, list) and data and isinstance(data[0], dict) else None
+    except Exception as e:
+        logger.warning("Failed to fetch brand voice: %s", e)
+        return None
+
+
+def _format_global_settings(business: dict) -> str:
+    """Format global settings (language, region, date/time format) for instructions."""
+    parts = []
+    lang = business.get("language")
+    country = business.get("country")
+    date_fmt = business.get("date_format")
+    time_fmt = business.get("time_format")
+    if lang or country:
+        locale = " and ".join(p for p in [lang, country] if p)
+        if locale:
+            parts.append(f"Use the business language and region: {locale}. Speak in that language unless the caller uses another.")
+    if date_fmt:
+        parts.append(f"When stating dates use this format: {date_fmt}.")
+    if time_fmt:
+        parts.append(f"When stating times use {time_fmt} format.")
+    if not parts:
+        return ""
+    return "Global settings: " + " ".join(parts) + "\n\n"
+
+
+def _format_brand_voice(profile: dict) -> str:
+    """Format brand voice (tone, style, vocabulary, do_not_say, sample_responses) for instructions."""
+    parts = []
+    tone = profile.get("tone")
+    style = profile.get("style")
+    if tone:
+        parts.append(f"Tone: {tone}.")
+    if style:
+        parts.append(f"Style: {style}.")
+
+    vocabulary = profile.get("vocabulary")
+    if vocabulary is not None:
+        if isinstance(vocabulary, str):
+            try:
+                vocabulary = json.loads(vocabulary)
+            except json.JSONDecodeError:
+                vocabulary = None
+        if isinstance(vocabulary, list) and vocabulary:
+            preferred = []
+            avoid = []
+            for item in vocabulary:
+                if isinstance(item, dict):
+                    if item.get("preferred"):
+                        preferred.append(str(item["preferred"]))
+                    if item.get("avoid"):
+                        avoid.append(str(item["avoid"]))
+            if preferred:
+                parts.append(f"Prefer saying: {', '.join(preferred)}.")
+            if avoid:
+                parts.append(f"Avoid saying: {', '.join(avoid)}.")
+
+    do_not_say = profile.get("do_not_say")
+    if do_not_say and isinstance(do_not_say, list):
+        phrases = [str(p) for p in do_not_say if p]
+        if phrases:
+            parts.append(f"Never say these words or phrases: {', '.join(phrases)}.")
+
+    sample_responses = profile.get("sample_responses")
+    if sample_responses is not None:
+        if isinstance(sample_responses, str):
+            try:
+                sample_responses = json.loads(sample_responses)
+            except json.JSONDecodeError:
+                sample_responses = None
+        if isinstance(sample_responses, list) and sample_responses:
+            examples = []
+            for item in sample_responses[:3]:
+                if isinstance(item, dict) and item.get("scenario") and item.get("response"):
+                    examples.append(f"Example ({item.get('scenario')}): \"{item.get('response')}\"")
+            if examples:
+                parts.append("Follow the style of these example responses: " + "; ".join(examples) + ".")
+
+    if not parts:
+        return ""
+    return "Brand voice: " + " ".join(parts) + "\n\n"
+
+
 def build_instructions(business_id: str | None, location_id: str | None) -> str:
-    """Build instructions with company name and location when available."""
+    """Build instructions from business, location, global settings, and brand voice."""
     company_name = "your company"
     location_phrase = ""
+    global_block = ""
+    brand_block = ""
     supabase = _get_supabase()
-    if supabase and business_id:
-        try:
-            r = supabase.table("businesses").select("*").eq("id", business_id).limit(1).execute()
-            data = getattr(r, "data", None) or []
-            row = data[0] if isinstance(data, list) and data else None
-            if isinstance(row, dict) and row.get("name"):
-                company_name = row["name"]
-        except Exception as e:
-            logger.warning("Failed to fetch business: %s", e)
+
+    business = _fetch_business(supabase, business_id) if business_id else None
+    if business and business.get("name"):
+        company_name = business["name"]
+        global_block = _format_global_settings(business)
+    brand = _fetch_brand_voice(supabase, business_id) if business_id else None
+    if brand:
+        brand_block = _format_brand_voice(brand)
+
     if supabase and location_id:
-        try:
-            r = supabase.table("locations").select("*").eq("id", location_id).limit(1).execute()
-            data = getattr(r, "data", None) or []
-            row = data[0] if isinstance(data, list) and data else None
-            if isinstance(row, dict):
-                parts = [row.get("name"), row.get("city"), row.get("state"), row.get("country")]
-                spoken = ", ".join(p for p in parts if p)
-                if spoken:
-                    location_phrase = f" in {spoken}"
-        except Exception as e:
-            logger.warning("Failed to fetch location: %s", e)
+        loc = _fetch_location(supabase, location_id)
+        if loc:
+            parts = [loc.get("name"), loc.get("city"), loc.get("state"), loc.get("country")]
+            spoken = ", ".join(p for p in parts if p)
+            if spoken:
+                location_phrase = f" in {spoken}"
+
     welcome = (
         f"You are the AI phone receptionist for {company_name}{location_phrase}. "
         "Always start the call with a short, friendly welcome that includes the business name"
@@ -78,9 +201,9 @@ def build_instructions(business_id: str | None, location_id: str | None) -> str:
     welcome += (
         ". Example: \"Thank you for calling "
         f"{company_name}{location_phrase}, how can I help you today?\" "
-        "Then continue the conversation following these rules:\n"
+        "Then continue the conversation following these rules:\n\n"
     )
-    return welcome + DEFAULT_INSTRUCTIONS.strip()
+    return welcome + global_block + brand_block + DEFAULT_INSTRUCTIONS.strip()
 
 
 class Assistant(Agent):
