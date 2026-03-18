@@ -187,6 +187,27 @@ The backend expects (or creates) at least:
 - **agent_state** — Single row per business: is_active (global on/off).
 - **communication_settings** — Scripts per channel (call, email, sms) and type (reminder, followup): is_enabled, days_offset, script. These align with the frontend’s Customer Service Settings (Call/Email/SMS, reminder vs follow-up, days before/after, script text).
 
+### 6.6 Real inbound calls: phone number to business and agent context
+
+Today, **Test with Web Call** sends `business_id` (and optional `location_id`) from the frontend when the user clicks initiate. For **real inbound calls** (customer dials a business number), the system must:
+
+1. **Resolve the dialed number to a business (and optionally a location)**  
+   When the call arrives (e.g. via LiveKit SIP, Twilio, or your telephony connector), the backend must look up which business (and which location, if you use one number per location) that number belongs to. That implies a **mapping store**, for example:
+   - A **phone_numbers** (or **inbound_numbers**) table: `phone_number` (e.g. E.164), `business_id`, `location_id` (optional).  
+   - Or configuration in your SIP/connector that passes `business_id`/`location_id` in the request so the API can create the room and token with that context.
+
+2. **Create the call and room with that context**  
+   Same as today: create call record with `business_id`, `location_id`, `direction=inbound`, create LiveKit room, issue token with **participant metadata** `{ "call_id", "business_id", "location_id" }`. The agent receives this metadata and already loads:
+   - Business name and global settings (language, country, date/time format)
+   - Brand voice (tone, style, vocabulary, do_not_say, sample_responses)
+   - **All locations** for the business (name, address, phone) and **employees per location** (from `user_roles` + `user_locations` + `profiles`), so the agent can say "We have locations at …" and "At [Location]: [staff names]" for booking.
+   - Instructions for **booking and rescheduling** (collect preferred location, date, time, service/staff; confirm back; do not invent availability).
+
+3. **Optional: backend endpoint for inbound webhook**  
+   A webhook (e.g. `POST /calls/inbound` or handled inside your SIP/connector) that: receives the incoming number (and any provider data), looks up `business_id` (and `location_id`), then creates the call record and LiveKit room and returns the room/token so the telephony stack can connect the caller into the room. The voice agent then runs with the same metadata and full context as above.
+
+The voice agent does **not** need to know whether the call came from the web "Test with Web Call" or from a real phone number; it only needs `business_id` and optional `location_id` in participant metadata so it can load business, locations, employees, and booking/reschedule behavior.
+
 ---
 
 ## 7. Alignment With the Frontend

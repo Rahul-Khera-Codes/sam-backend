@@ -30,6 +30,11 @@ You are a helpful AI customer service assistant.
 Be friendly, professional, and concise.
 If you cannot help with something, offer to transfer the caller to a human agent.
 Always confirm any appointments or bookings back to the caller clearly.
+
+Booking and rescheduling: You can help customers book new appointments or reschedule existing ones.
+When they want to book: ask for preferred location (if the business has multiple), date, time, and service or staff preference if relevant; repeat back to confirm.
+When they want to reschedule: ask for their name or phone so you can look up the appointment, then the new date and time; confirm back.
+Do not make up availability—offer to create or update the appointment and, if your system supports it, say you will confirm shortly, or transfer to the front desk to finalize.
 """
 
 
@@ -69,6 +74,55 @@ def _fetch_location(supabase, location_id: str) -> dict | None:
     except Exception as e:
         logger.warning("Failed to fetch location: %s", e)
         return None
+
+
+def _fetch_locations(supabase, business_id: str) -> list[dict]:
+    """Fetch all active locations for the business (for listing and booking)."""
+    if not supabase or not business_id:
+        return []
+    try:
+        r = (
+            supabase.table("locations")
+            .select("id, name, address, phone")
+            .eq("business_id", business_id)
+            .execute()
+        )
+        data = getattr(r, "data", None) or []
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        logger.warning("Failed to fetch locations: %s", e)
+        return []
+
+
+def _fetch_employees_by_location(supabase, business_id: str) -> dict[str, list[str]]:
+    """Fetch employees (staff) per location: location_id -> list of display names. Uses user_roles + user_locations + profiles."""
+    if not supabase or not business_id:
+        return {}
+    try:
+        ur = supabase.table("user_roles").select("user_id").eq("business_id", business_id).execute()
+        user_ids = [row["user_id"] for row in (getattr(ur, "data", None) or []) if isinstance(row, dict) and row.get("user_id")]
+        if not user_ids:
+            return {}
+        ul = supabase.table("user_locations").select("user_id, location_id").in_("user_id", user_ids).execute()
+        pairs = [(row["user_id"], row["location_id"]) for row in (getattr(ul, "data", None) or []) if isinstance(row, dict) and row.get("location_id")]
+        if not pairs:
+            return {}
+        pf = supabase.table("profiles").select("id, first_name, last_name").in_("id", user_ids).execute()
+        names = {}
+        for row in getattr(pf, "data", None) or []:
+            if isinstance(row, dict) and row.get("id"):
+                first = (row.get("first_name") or "").strip()
+                last = (row.get("last_name") or "").strip()
+                names[row["id"]] = f"{first} {last}".strip() or "Staff"
+        result: dict[str, list[str]] = {}
+        for user_id, loc_id in pairs:
+            name = names.get(user_id)
+            if name and loc_id:
+                result.setdefault(loc_id, []).append(name)
+        return result
+    except Exception as e:
+        logger.warning("Failed to fetch employees by location: %s", e)
+        return {}
 
 
 def _fetch_brand_voice(supabase, business_id: str) -> dict | None:
@@ -168,12 +222,38 @@ def _format_brand_voice(profile: dict) -> str:
     return "Brand voice: " + " ".join(parts) + "\n\n"
 
 
+def _format_locations_and_employees(
+    locations: list[dict],
+    employees_by_location: dict[str, list[str]],
+) -> str:
+    """Format locations and staff per location for booking/reschedule context."""
+    if not locations:
+        return ""
+    lines = []
+    for loc in locations:
+        loc_id = loc.get("id")
+        name = loc.get("name") or "Unknown"
+        address = loc.get("address") or ""
+        phone = loc.get("phone") or ""
+        parts = [f"Location: {name}"]
+        if address:
+            parts.append(f"address: {address}")
+        if phone:
+            parts.append(f"phone: {phone}")
+        staff = (employees_by_location.get(loc_id) if loc_id else []) or []
+        if staff:
+            parts.append(f"staff: {', '.join(staff)}")
+        lines.append("; ".join(parts))
+    return "Locations and staff (use for booking and rescheduling): " + " | ".join(lines) + "\n\n"
+
+
 def build_instructions(business_id: str | None, location_id: str | None) -> str:
     """Build instructions from business, location, global settings, and brand voice."""
     company_name = "your company"
     location_phrase = ""
     global_block = ""
     brand_block = ""
+    locations_block = ""
     supabase = _get_supabase()
 
     business = _fetch_business(supabase, business_id) if business_id else None
@@ -183,6 +263,10 @@ def build_instructions(business_id: str | None, location_id: str | None) -> str:
     brand = _fetch_brand_voice(supabase, business_id) if business_id else None
     if brand:
         brand_block = _format_brand_voice(brand)
+    if business_id:
+        locations = _fetch_locations(supabase, business_id)
+        employees_by_location = _fetch_employees_by_location(supabase, business_id)
+        locations_block = _format_locations_and_employees(locations, employees_by_location)
 
     if supabase and location_id:
         loc = _fetch_location(supabase, location_id)
@@ -203,7 +287,7 @@ def build_instructions(business_id: str | None, location_id: str | None) -> str:
         f"{company_name}{location_phrase}, how can I help you today?\" "
         "Then continue the conversation following these rules:\n\n"
     )
-    return welcome + global_block + brand_block + DEFAULT_INSTRUCTIONS.strip()
+    return welcome + global_block + brand_block + locations_block + DEFAULT_INSTRUCTIONS.strip()
 
 
 class Assistant(Agent):
