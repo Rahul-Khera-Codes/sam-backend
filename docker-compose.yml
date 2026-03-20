@@ -1,5 +1,5 @@
 services:
-  api:
+  sam-backend:
     build: ./backend
     ports:
       - "8003:8000"
@@ -9,3 +9,15 @@ services:
       - ./backend:/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     restart: unless-stopped
+
+  sam-agent:
+    build: ./agent
+    ports:
+      - "8001:8001"
+    env_file:
+      - ./agent/.env.local
+    volumes:
+      - ./agent:/app
+    command: python agent.py dev
+    restart: unless-stopped
+    

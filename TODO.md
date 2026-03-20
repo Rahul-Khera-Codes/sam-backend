@@ -99,14 +99,23 @@ These don't exist yet on the backend (frontend queries Supabase directly — bac
 - [ ] Update agent to handle `direction: inbound` vs `outbound` differently (inbound: wait and greet; outbound: initiate opener)
 
 ### Google Calendar Integration
-- [ ] `google_calendar_tokens` table — `(staff_id, access_token, refresh_token, expiry)`
-- [ ] Google OAuth flow for staff — connect Google account in Account Settings
-- [ ] On `create_appointment`: create Google Calendar event on staff's calendar, store `google_event_id` on appointment row
-- [ ] On `update_appointment`: PATCH the Google Calendar event
-- [ ] On `cancel_appointment`: DELETE the Google Calendar event
+- [x] `google_calendar_tokens` table — `(staff_id, business_id, google_email, access_token, refresh_token, token_expiry)` with RLS
+- [x] `google_event_id` column added to `appointments` table
+- [x] Backend `google_calendar_service.py` — OAuth URL builder, token exchange, refresh, revoke, create/update/delete event
+- [x] Backend `GET /integrations/google/auth-url` — returns OAuth consent URL
+- [x] Backend `POST /integrations/google/callback` — exchanges code, saves tokens to DB
+- [x] Backend `GET /integrations/google/status` — returns connected state + google_email
+- [x] Backend `DELETE /integrations/google/disconnect` — revokes + deletes tokens
+- [x] Backend config: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` settings
+- [x] Frontend `Integrations.tsx` — fully wired: connect button → OAuth redirect, callback handling, disconnect, connected email shown
+- [x] Frontend `voiceAgentApi.ts` — `getGoogleCalendarAuthUrl`, `completeGoogleCalendarOAuth`, `getGoogleCalendarStatus`, `disconnectGoogleCalendar`
+- [x] Agent `book_appointment` — creates Google Calendar event after DB insert, stores `google_event_id`
+- [x] Agent `update_appointment` — PATCHes Google Calendar event after DB update
+- [x] Agent `cancel_appointment` — DELETEs Google Calendar event before DB delete
+- [x] Agent token auto-refresh — checks expiry before every API call, refreshes and updates DB
+- [ ] **NEEDS**: Google Cloud project + OAuth 2.0 credentials (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`) — add to both `backend/.env` and `agent/.env.local`
 - [ ] Customer confirmation: send `.ics` file via SMS or email on booking
 - [ ] Super admin view: in-app calendar reads from `appointments` table across all staff (already partially done via Calendar.tsx)
-- [ ] Integrations page: wire up "Connect Google Calendar" button (currently `console.log()` only)
 
 ### SMS Sending
 - [ ] Choose provider: Twilio SMS (when available) or AWS SNS as alternative
@@ -129,7 +138,7 @@ These don't exist yet on the backend (frontend queries Supabase directly — bac
 - [ ] HR Employee page
 - [ ] Executive Assistant page
 - [ ] Billing page
-- [ ] Integrations page — wire up Google Calendar OAuth (currently `console.log()`)
+- [x] Integrations page — Google Calendar OAuth fully wired (connect, callback, disconnect, status)
 - [ ] Integrations page — wire up Twilio connection
 - [ ] Setup checklist in `/dashboard/customer-service` — sync state to backend (currently all mock/UI-only)
 

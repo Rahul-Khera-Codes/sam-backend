@@ -30,6 +30,9 @@ load_dotenv(".env.local")
 
 logger = logging.getLogger("voice-agent")
 
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_CALENDAR_BASE = "https://www.googleapis.com/calendar/v3"
+
 DEFAULT_INSTRUCTIONS = """
 You are a helpful AI customer service assistant.
 Be friendly, professional, and concise in all responses.
@@ -55,6 +58,152 @@ General rules:
 - Confirm details clearly before any write action (book, update, cancel).
 - If a tool returns an error, apologise and offer to transfer to a human.
 """
+
+
+# ── Google Calendar helpers (agent-side, async HTTP) ─────────────────────────
+
+async def _gcal_refresh_token(refresh_token: str) -> dict | None:
+    """Refresh a Google access token. Returns token dict or None."""
+    try:
+        import httpx
+        client_id = os.getenv("GOOGLE_CLIENT_ID", "")
+        client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
+        if not client_id or not client_secret:
+            return None
+        async with httpx.AsyncClient() as http:
+            r = await http.post(GOOGLE_TOKEN_URL, data={
+                "refresh_token": refresh_token,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "grant_type": "refresh_token",
+            })
+            if r.status_code == 200:
+                return r.json()
+    except Exception as e:
+        logger.warning("Google token refresh failed: %s", e)
+    return None
+
+
+async def _gcal_get_valid_token(supabase, staff_id: str) -> str | None:
+    """
+    Fetch the Google Calendar token for a staff member and refresh if expired.
+    Returns a valid access token or None if not connected / refresh failed.
+    """
+    try:
+        r = supabase.table("google_calendar_tokens").select("*").eq("staff_id", staff_id).limit(1).execute()
+        data = getattr(r, "data", None) or []
+        if not data:
+            return None
+        row = data[0]
+
+        expiry_raw = row.get("token_expiry")
+        if expiry_raw:
+            try:
+                expiry = datetime.fromisoformat(str(expiry_raw).replace("Z", "+00:00"))
+            except ValueError:
+                expiry = datetime.now(timezone.utc)
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) >= expiry:
+                refreshed = await _gcal_refresh_token(row["refresh_token"])
+                if not refreshed:
+                    return None
+                new_expiry = datetime.now(timezone.utc) + timedelta(seconds=refreshed.get("expires_in", 3600) - 60)
+                supabase.table("google_calendar_tokens").update({
+                    "access_token": refreshed["access_token"],
+                    "token_expiry": new_expiry.isoformat(),
+                }).eq("id", row["id"]).execute()
+                return refreshed["access_token"]
+
+        return row["access_token"]
+    except Exception as e:
+        logger.warning("Failed to get Google token for staff %s: %s", staff_id, e)
+        return None
+
+
+def _gcal_build_event(appointment: dict) -> dict:
+    """Build a Google Calendar event body from an appointment dict."""
+    date = appointment.get("appointment_date", "")
+    time_str = appointment.get("appointment_time", "00:00")
+    duration_raw = appointment.get("duration", "60")
+    try:
+        duration_minutes = int(str(duration_raw).split()[0])
+    except (ValueError, IndexError):
+        duration_minutes = 60
+
+    hour, minute = map(int, time_str.split(":"))
+    end_total = hour * 60 + minute + duration_minutes
+    end_hour, end_minute = divmod(end_total, 60)
+
+    description_parts = []
+    if appointment.get("service"):
+        description_parts.append(f"Service: {appointment['service']}")
+    if appointment.get("notes"):
+        description_parts.append(f"Notes: {appointment['notes']}")
+
+    return {
+        "summary": f"{appointment.get('client_name', 'Client')} — {appointment.get('service', 'Appointment')}",
+        "description": "\n".join(description_parts),
+        "start": {"dateTime": f"{date}T{time_str}:00", "timeZone": "UTC"},
+        "end": {"dateTime": f"{date}T{end_hour:02d}:{end_minute:02d}:00", "timeZone": "UTC"},
+    }
+
+
+async def _gcal_create_event(supabase, staff_id: str, appointment: dict) -> str | None:
+    """Create a Google Calendar event. Returns google_event_id or None."""
+    access_token = await _gcal_get_valid_token(supabase, staff_id)
+    if not access_token:
+        return None
+    try:
+        import httpx
+        async with httpx.AsyncClient() as http:
+            r = await http.post(
+                f"{GOOGLE_CALENDAR_BASE}/calendars/primary/events",
+                headers={"Authorization": f"Bearer {access_token}"},
+                json=_gcal_build_event(appointment),
+            )
+            if r.status_code == 200:
+                return r.json().get("id")
+    except Exception as e:
+        logger.warning("Failed to create Google Calendar event: %s", e)
+    return None
+
+
+async def _gcal_update_event(supabase, staff_id: str, google_event_id: str, appointment: dict) -> bool:
+    """Update an existing Google Calendar event."""
+    access_token = await _gcal_get_valid_token(supabase, staff_id)
+    if not access_token:
+        return False
+    try:
+        import httpx
+        async with httpx.AsyncClient() as http:
+            r = await http.patch(
+                f"{GOOGLE_CALENDAR_BASE}/calendars/primary/events/{google_event_id}",
+                headers={"Authorization": f"Bearer {access_token}"},
+                json=_gcal_build_event(appointment),
+            )
+            return r.status_code == 200
+    except Exception as e:
+        logger.warning("Failed to update Google Calendar event %s: %s", google_event_id, e)
+    return False
+
+
+async def _gcal_delete_event(supabase, staff_id: str, google_event_id: str) -> bool:
+    """Delete a Google Calendar event."""
+    access_token = await _gcal_get_valid_token(supabase, staff_id)
+    if not access_token:
+        return False
+    try:
+        import httpx
+        async with httpx.AsyncClient() as http:
+            r = await http.delete(
+                f"{GOOGLE_CALENDAR_BASE}/calendars/primary/events/{google_event_id}",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            return r.status_code in (204, 410)
+    except Exception as e:
+        logger.warning("Failed to delete Google Calendar event %s: %s", google_event_id, e)
+    return False
 
 
 # ── Supabase helpers ──────────────────────────────────────────────────────────
@@ -932,6 +1081,21 @@ class Assistant(Agent):
             if data:
                 appt_id = data[0].get("id", "")
                 short_id = appt_id[:8].upper()
+
+                # ── Google Calendar: create event on staff's calendar ──────
+                gcal_event_id = await _gcal_create_event(
+                    self._supabase,
+                    staff["user_id"],
+                    {**row, "client_name": client_name},
+                )
+                if gcal_event_id and appt_id:
+                    try:
+                        self._supabase.table("appointments").update(
+                            {"google_event_id": gcal_event_id}
+                        ).eq("id", appt_id).execute()
+                    except Exception:
+                        pass  # Non-fatal — booking already saved
+
                 return (
                     f"Appointment confirmed! "
                     f"{client_name} is booked for {service_label} "
@@ -1040,6 +1204,22 @@ class Assistant(Agent):
 
             self._supabase.table("appointments").update(updates).eq("id", full_id).execute()
 
+            # ── Google Calendar: update event if staff has connected calendar ──
+            appt_row_r = (
+                self._supabase.table("appointments")
+                .select("google_event_id, assigned_user_id, appointment_date, appointment_time, duration, service, client_name, notes")
+                .eq("id", full_id)
+                .limit(1)
+                .execute()
+            )
+            appt_rows = getattr(appt_row_r, "data", None) or []
+            if appt_rows:
+                appt_row = appt_rows[0]
+                google_event_id = appt_row.get("google_event_id")
+                assigned_uid = appt_row.get("assigned_user_id")
+                if google_event_id and assigned_uid:
+                    await _gcal_update_event(self._supabase, assigned_uid, google_event_id, appt_row)
+
             change_parts = []
             if new_date:
                 change_parts.append(f"date to {new_date}")
@@ -1065,7 +1245,7 @@ class Assistant(Agent):
         try:
             r_all = (
                 self._supabase.table("appointments")
-                .select("id, client_name, service, appointment_date, appointment_time")
+                .select("id, client_name, service, appointment_date, appointment_time, assigned_user_id, google_event_id")
                 .eq("business_id", self._business_id)
                 .gte("appointment_date", datetime.now().strftime("%Y-%m-%d"))
                 .execute()
@@ -1077,6 +1257,12 @@ class Assistant(Agent):
             )
             if not match:
                 return f"Could not find appointment with reference '{appointment_ref}'. Please use find_appointments first."
+
+            # ── Google Calendar: delete event before removing from DB ─────
+            google_event_id = match.get("google_event_id")
+            assigned_uid = match.get("assigned_user_id")
+            if google_event_id and assigned_uid:
+                await _gcal_delete_event(self._supabase, assigned_uid, google_event_id)
 
             self._supabase.table("appointments").delete().eq("id", match["id"]).execute()
 

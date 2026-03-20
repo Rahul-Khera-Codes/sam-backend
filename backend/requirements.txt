@@ -21,6 +21,11 @@ numpy>=1.24.0
 # AWS S3 (optional - for recordings if not using Supabase Storage)
 boto3==1.34.110
 
+# Google Calendar OAuth (used by integrations router + google_calendar_service)
+google-auth==2.29.0
+google-auth-oauthlib==1.2.0
+google-api-python-client==2.127.0
+
 # HTTP
 httpx==0.27.0
 
