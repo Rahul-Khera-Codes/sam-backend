@@ -206,6 +206,24 @@ async def _gcal_delete_event(supabase, staff_id: str, google_event_id: str) -> b
     return False
 
 
+def _gcal_get_superadmin_id(supabase, business_id: str) -> str | None:
+    """Return the user_id of the first super_admin for a business, or None."""
+    try:
+        r = (
+            supabase.table("user_roles")
+            .select("user_id")
+            .eq("business_id", business_id)
+            .eq("role", "super_admin")
+            .limit(1)
+            .execute()
+        )
+        data = getattr(r, "data", None) or []
+        return data[0]["user_id"] if data else None
+    except Exception as e:
+        logger.warning("Failed to fetch superadmin for business %s: %s", business_id, e)
+        return None
+
+
 # ── Supabase helpers ──────────────────────────────────────────────────────────
 
 def _get_supabase():
@@ -1074,7 +1092,7 @@ class Assistant(Agent):
                 "appointment_time": time,
                 "duration": duration_str,
                 "notes": combined_notes,
-                "created_by": "voice-agent",
+                "created_by": staff["user_id"],
             }
             r = self._supabase.table("appointments").insert(row).execute()
             data = getattr(r, "data", None) or []
@@ -1082,16 +1100,30 @@ class Assistant(Agent):
                 appt_id = data[0].get("id", "")
                 short_id = appt_id[:8].upper()
 
-                # ── Google Calendar: create event on staff's calendar ──────
-                gcal_event_id = await _gcal_create_event(
-                    self._supabase,
-                    staff["user_id"],
-                    {**row, "client_name": client_name},
+                # ── Google Calendar: create event on staff + admin calendars ─
+                appt_data = {**row, "client_name": client_name}
+                gcal_updates: dict = {}
+
+                # Staff calendar
+                staff_event_id = await _gcal_create_event(
+                    self._supabase, staff["user_id"], appt_data,
                 )
-                if gcal_event_id and appt_id:
+                if staff_event_id:
+                    gcal_updates["google_event_id"] = staff_event_id
+
+                # Superadmin calendar (skip if staff IS the superadmin)
+                admin_id = _gcal_get_superadmin_id(self._supabase, self._business_id)
+                if admin_id and admin_id != staff["user_id"]:
+                    admin_event_id = await _gcal_create_event(
+                        self._supabase, admin_id, appt_data,
+                    )
+                    if admin_event_id:
+                        gcal_updates["google_event_id_admin"] = admin_event_id
+
+                if gcal_updates and appt_id:
                     try:
                         self._supabase.table("appointments").update(
-                            {"google_event_id": gcal_event_id}
+                            gcal_updates
                         ).eq("id", appt_id).execute()
                     except Exception:
                         pass  # Non-fatal — booking already saved
@@ -1204,10 +1236,10 @@ class Assistant(Agent):
 
             self._supabase.table("appointments").update(updates).eq("id", full_id).execute()
 
-            # ── Google Calendar: update event if staff has connected calendar ──
+            # ── Google Calendar: update event on staff + admin calendars ──────
             appt_row_r = (
                 self._supabase.table("appointments")
-                .select("google_event_id, assigned_user_id, appointment_date, appointment_time, duration, service, client_name, notes")
+                .select("google_event_id, google_event_id_admin, assigned_user_id, appointment_date, appointment_time, duration, service, client_name, notes")
                 .eq("id", full_id)
                 .limit(1)
                 .execute()
@@ -1215,10 +1247,16 @@ class Assistant(Agent):
             appt_rows = getattr(appt_row_r, "data", None) or []
             if appt_rows:
                 appt_row = appt_rows[0]
-                google_event_id = appt_row.get("google_event_id")
                 assigned_uid = appt_row.get("assigned_user_id")
-                if google_event_id and assigned_uid:
-                    await _gcal_update_event(self._supabase, assigned_uid, google_event_id, appt_row)
+
+                # Staff calendar
+                if appt_row.get("google_event_id") and assigned_uid:
+                    await _gcal_update_event(self._supabase, assigned_uid, appt_row["google_event_id"], appt_row)
+
+                # Admin calendar
+                admin_id = _gcal_get_superadmin_id(self._supabase, self._business_id)
+                if appt_row.get("google_event_id_admin") and admin_id:
+                    await _gcal_update_event(self._supabase, admin_id, appt_row["google_event_id_admin"], appt_row)
 
             change_parts = []
             if new_date:
@@ -1245,7 +1283,7 @@ class Assistant(Agent):
         try:
             r_all = (
                 self._supabase.table("appointments")
-                .select("id, client_name, service, appointment_date, appointment_time, assigned_user_id, google_event_id")
+                .select("id, client_name, service, appointment_date, appointment_time, assigned_user_id, google_event_id, google_event_id_admin")
                 .eq("business_id", self._business_id)
                 .gte("appointment_date", datetime.now().strftime("%Y-%m-%d"))
                 .execute()
@@ -1258,11 +1296,14 @@ class Assistant(Agent):
             if not match:
                 return f"Could not find appointment with reference '{appointment_ref}'. Please use find_appointments first."
 
-            # ── Google Calendar: delete event before removing from DB ─────
-            google_event_id = match.get("google_event_id")
+            # ── Google Calendar: delete events on staff + admin calendars ─
             assigned_uid = match.get("assigned_user_id")
-            if google_event_id and assigned_uid:
-                await _gcal_delete_event(self._supabase, assigned_uid, google_event_id)
+            if match.get("google_event_id") and assigned_uid:
+                await _gcal_delete_event(self._supabase, assigned_uid, match["google_event_id"])
+
+            admin_id = _gcal_get_superadmin_id(self._supabase, self._business_id)
+            if match.get("google_event_id_admin") and admin_id:
+                await _gcal_delete_event(self._supabase, admin_id, match["google_event_id_admin"])
 
             self._supabase.table("appointments").delete().eq("id", match["id"]).execute()
 

@@ -29,12 +29,13 @@ router = APIRouter(prefix="/integrations/google", tags=["integrations"])
 @router.get("/auth-url")
 async def get_auth_url(
     business_id: str,
+    return_to: str = "/dashboard/settings/integrations",
     user_id: str = Depends(get_user_id),
 ):
     """
     Returns the Google OAuth consent URL.
-    Frontend should redirect the user (or open a popup) to this URL.
-    `state` encodes user_id + business_id so the callback can save tokens correctly.
+    `return_to` is the frontend path Google should redirect back to after OAuth.
+    `state` encodes user_id + business_id + return_to.
     """
     if not settings.google_client_id:
         raise HTTPException(
@@ -42,7 +43,7 @@ async def get_auth_url(
             detail="Google Calendar integration is not configured on this server.",
         )
 
-    state = json.dumps({"user_id": user_id, "business_id": business_id})
+    state = json.dumps({"user_id": user_id, "business_id": business_id, "return_to": return_to})
     url = gcal.build_auth_url(
         client_id=settings.google_client_id,
         redirect_uri=settings.google_redirect_uri,

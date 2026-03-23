@@ -109,11 +109,14 @@ These don't exist yet on the backend (frontend queries Supabase directly — bac
 - [x] Backend config: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` settings
 - [x] Frontend `Integrations.tsx` — fully wired: connect button → OAuth redirect, callback handling, disconnect, connected email shown
 - [x] Frontend `voiceAgentApi.ts` — `getGoogleCalendarAuthUrl`, `completeGoogleCalendarOAuth`, `getGoogleCalendarStatus`, `disconnectGoogleCalendar`
-- [x] Agent `book_appointment` — creates Google Calendar event after DB insert, stores `google_event_id`
-- [x] Agent `update_appointment` — PATCHes Google Calendar event after DB update
-- [x] Agent `cancel_appointment` — DELETEs Google Calendar event before DB delete
+- [x] Agent `book_appointment` — creates event on **both** staff calendar + superadmin calendar; stores `google_event_id` (staff) + `google_event_id_admin`
+- [x] Agent `update_appointment` — PATCHes both staff + admin calendar events
+- [x] Agent `cancel_appointment` — DELETEs both staff + admin calendar events before DB delete
 - [x] Agent token auto-refresh — checks expiry before every API call, refreshes and updates DB
-- [ ] **NEEDS**: Google Cloud project + OAuth 2.0 credentials (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`) — add to both `backend/.env` and `agent/.env.local`
+- [x] `google_event_id_admin` column added to `appointments` table (migration 20260319000001)
+- [x] Account Settings — Google Calendar connect/disconnect section (all staff can connect their own calendar)
+- [x] OAuth `return_to` flow — callback redirects back to the page that initiated OAuth (Integrations or Account Settings)
+- [x] `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` added to `backend/.env`
 - [ ] Customer confirmation: send `.ics` file via SMS or email on booking
 - [ ] Super admin view: in-app calendar reads from `appointments` table across all staff (already partially done via Calendar.tsx)
 
