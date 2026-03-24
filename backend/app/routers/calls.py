@@ -132,14 +132,14 @@ async def get_call(
         supabase.table("calls")
         .select("*")
         .eq("id", call_id)
-        .maybeSingle()
+        .limit(1)
         .execute()
     )
 
     if not result.data:
         raise HTTPException(status_code=404, detail="Call not found")
 
-    return result.data
+    return result.data[0]
 
 
 # ── GET /calls/{id}/transcript ────────────────
@@ -174,14 +174,14 @@ async def get_summary(
         supabase.table("call_summaries")
         .select("*")
         .eq("call_id", call_id)
-        .maybeSingle()
+        .limit(1)
         .execute()
     )
 
     if not result.data:
         raise HTTPException(status_code=404, detail="Summary not found")
 
-    return result.data
+    return result.data[0]
 
 
 # ── GET /calls/{id}/recording ─────────────────
@@ -197,14 +197,14 @@ async def get_recording(
         supabase.table("recordings")
         .select("*")
         .eq("call_id", call_id)
-        .maybeSingle()
+        .limit(1)
         .execute()
     )
 
     if not result.data:
         raise HTTPException(status_code=404, detail="Recording not found")
 
-    recording = result.data
+    recording = result.data[0]
     bucket = recording.get("storage_bucket", "call-recordings")
     path = recording.get("storage_path")
 

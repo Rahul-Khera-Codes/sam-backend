@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-03-19 (session 2)
+Last updated: 2026-03-24 (session 4)
 
 ---
 
@@ -44,6 +44,7 @@ Last updated: 2026-03-19 (session 2)
 
 ### Bugs Fixed
 - [x] `ai-employees-app/.env` — stray backtick on `VITE_VOICE_AGENT_API_URL` caused 404 on `/calls/initiate`
+- [x] `user_services` RLS — staff could not select their own services; added policy `Users can manage their own service assignments` (migration `20260323000000_user_services_staff_rls.sql`)
 
 ### Frontend (`ai-employees-app`)
 - [x] React 18 + TypeScript + Vite + shadcn-ui + Tailwind
@@ -53,6 +54,15 @@ Last updated: 2026-03-19 (session 2)
 - [x] Select location screen (persisted in localStorage)
 - [x] Dashboard layout with sidebar navigation
 - [x] `/dashboard/customer-service` — voice agent UI: setup checklist, test call button, agent activity log
+- [x] Customer Service module — 5-page nested layout with CS sub-sidebar (`CustomerServiceLayout`)
+- [x] CS1 — Agent Performance dashboard: stat cards, call volume area chart, call distribution donut, response time bar chart, recent activity feed
+- [x] CS2 — Call Recordings & Transcripts: searchable call list, transcript/summary/insights tabs, audio playback bar, chat-bubble transcript view
+- [x] CS3 — AI Agent Scheduler: agent toggle, per-day schedule with time selectors, custom schedules, quick presets
+- [x] CS4 — Call Forwarding: contact list with role/priority badges, forwarding rules, quick actions, today's stats
+- [x] CS5 — AI Agent Settings: feature toggles grouped by category, configuration presets, recent changes
+- [x] Reusable `StatCard` component (`components/ui/stat-card.tsx`)
+- [x] Reusable `FeatureToggleRow` component (`components/ui/feature-toggle-row.tsx`)
+- [x] Dashboard layout max-width constraint removed — all pages now use full available width
 - [x] LiveKit client integration — Room(), mic enable, remote audio via Web Audio API
 - [x] Brand voice wizard (5-step: tone, style, vocabulary, do-not-say, review)
 - [x] Global settings page (language, region, date/time format)
@@ -143,7 +153,40 @@ These don't exist yet on the backend (frontend queries Supabase directly — bac
 - [ ] Billing page
 - [x] Integrations page — Google Calendar OAuth fully wired (connect, callback, disconnect, status)
 - [ ] Integrations page — wire up Twilio connection
-- [ ] Setup checklist in `/dashboard/customer-service` — sync state to backend (currently all mock/UI-only)
+- [ ] Setup checklist in `/dashboard/customer-service/setup` — sync state to backend (currently all mock/UI-only)
+- [ ] CS pages — wire real data from backend/Supabase (call recordings, scheduler, forwarding contacts are currently mock data)
+
+### CS Pages — API Wiring (frontend only, backend already exists)
+- [x] **CS1 AgentPerformance** — replace mock stats with `GET /analytics/summary`
+- [x] **CS1 AgentPerformance** — replace mock chart data with `GET /analytics/call-volume-trends?period=`
+- [x] **CS1 AgentPerformance** — replace mock donut data with `GET /analytics/call-distribution`
+- [x] **CS1 AgentPerformance** — replace mock activity feed with `GET /calls/recent-activity`
+- [x] **CS2 CallRecordings** — replace mock call list with `GET /calls?business_id=&status=&direction=&search=&page=`
+- [x] **CS2 CallRecordings** — load transcript on call select via `GET /calls/{id}/transcript`
+- [x] **CS2 CallRecordings** — load summary + insights on call select via `GET /calls/{id}/summary`
+- [x] **CS2 CallRecordings** — wire audio player to `GET /calls/{id}/recording` signed URL (shows "no recording" for test calls)
+- [x] **CS3 Scheduler** — wire agent on/off toggle to `GET/PUT /settings/agent/state`
+- [ ] **CS3 Scheduler** — new backend endpoint `GET/PUT /settings/agent/schedule` (backed by `business_hours` table) + wire frontend
+- [x] **CS4 CallForwarding** — replace mock contacts with `GET /forwarding/contacts`
+- [x] **CS4 CallForwarding** — wire toggle to `PUT /forwarding/contacts/{id}/toggle`
+- [x] **CS4 CallForwarding** — wire delete to `DELETE /forwarding/contacts/{id}`
+- [x] **CS4 CallForwarding** — wire Enable All / Disable All to `PUT /forwarding/contacts/bulk/toggle`
+- [x] **CS4 CallForwarding** — replace mock rules with `GET /forwarding/rules`
+- [x] **CS4 CallForwarding** — wire today's stats to `GET /analytics/summary` (`forwarded_calls`, `completed_calls`)
+- [x] **CS4 CallForwarding** — Add Contact modal wired to `POST /forwarding/contacts`
+- [x] **CS5 AgentSettings** — load feature flags from `GET /settings/agent` on mount
+- [x] **CS5 AgentSettings** — wire Save Changes to `PUT /settings/agent`
+- [x] **CS5 AgentSettings** — wire Reset to Default to `POST /settings/agent/reset`
+- [x] **CS5 AgentSettings** — load recent changes from `GET /settings/agent/audit-log`
+- [x] **CS5 AgentSettings** — wire agent on/off (Quick Actions) to `PUT /settings/agent/state`
+- [x] Add all new API functions to `voiceAgentApi.ts`: analytics, calls list, forwarding CRUD, agent settings CRUD
+- [x] `useDebounce` hook added (`src/hooks/useDebounce.ts`)
+
+### Deployment
+- [x] `ai-employees-app/Dockerfile` — multi-stage build: Node 20 Alpine (Vite build) → nginx Alpine (serve)
+- [x] `ai-employees-app/nginx.conf` — SPA fallback, static asset caching, gzip
+- [x] `ai-employees-app/docker-compose.yml` — single service, reads VITE_* vars from `.env` at build time
+- [ ] HTTPS / domain setup — `getUserMedia` (mic) requires secure context; bare IP HTTP doesn't work in browsers
 
 ---
 

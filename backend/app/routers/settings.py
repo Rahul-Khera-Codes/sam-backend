@@ -127,7 +127,7 @@ async def get_agent_state(
         supabase.table("agent_state")
         .select("*")
         .eq("business_id", business_id)
-        .maybeSingle()
+        .limit(1)
         .execute()
     )
 
@@ -139,7 +139,7 @@ async def get_agent_state(
         }).execute()
         return insert.data[0]
 
-    return result.data
+    return result.data[0]
 
 
 # ── PUT /settings/agent/state ─────────────────
