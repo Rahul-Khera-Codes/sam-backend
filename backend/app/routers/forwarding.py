@@ -81,6 +81,19 @@ async def delete_contact(
     return {"success": True}
 
 
+@router.put("/contacts/bulk/toggle")
+async def bulk_toggle_contacts(
+    business_id: str,
+    body: dict,
+    current_user: dict = Depends(get_current_user),
+):
+    supabase_admin.table("forwarding_contacts").update(
+        {"is_active": body.get("is_active")}
+    ).eq("business_id", business_id).execute()
+
+    return {"success": True}
+
+
 @router.put("/contacts/{contact_id}/toggle")
 async def toggle_contact(
     contact_id: str,
@@ -94,19 +107,6 @@ async def toggle_contact(
         .execute()
     )
     return result.data[0]
-
-
-@router.put("/contacts/bulk/toggle")
-async def bulk_toggle_contacts(
-    business_id: str,
-    body: dict,
-    current_user: dict = Depends(get_current_user),
-):
-    supabase_admin.table("forwarding_contacts").update(
-        {"is_active": body.get("is_active")}
-    ).eq("business_id", business_id).execute()
-
-    return {"success": True}
 
 
 # ── RULES ─────────────────────────────────────

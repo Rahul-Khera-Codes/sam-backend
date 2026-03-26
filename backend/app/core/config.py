@@ -24,10 +24,11 @@ class Settings(BaseSettings):
     aws_region: str = "us-east-1"
     s3_bucket_name: str = ""
 
-    # Google Calendar OAuth (optional — leave empty to disable the integration)
+    # Google OAuth (shared client_id/secret for Calendar + Gmail integrations)
     google_client_id: str = ""
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:5173/integrations/google/callback"
+    gmail_redirect_uri: str = "http://localhost:5173/integrations/gmail/callback"
 
     # App
     environment: str = "development"

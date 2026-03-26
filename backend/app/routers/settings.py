@@ -124,7 +124,7 @@ async def get_agent_state(
     current_user: dict = Depends(get_current_user),
 ):
     result = (
-        supabase.table("agent_state")
+        supabase_admin.table("agent_state")
         .select("*")
         .eq("business_id", business_id)
         .limit(1)
@@ -133,10 +133,10 @@ async def get_agent_state(
 
     if not result.data:
         # Auto-create if missing
-        insert = supabase_admin.table("agent_state").insert({
+        insert = supabase_admin.table("agent_state").upsert({
             "business_id": business_id,
             "is_active": True,
-        }).execute()
+        }, on_conflict="business_id").execute()
         return insert.data[0]
 
     return result.data[0]

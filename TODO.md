@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-03-24 (session 4)
+Last updated: 2026-03-25 (session 5 — Gmail integration)
 
 ---
 
@@ -45,6 +45,10 @@ Last updated: 2026-03-24 (session 4)
 ### Bugs Fixed
 - [x] `ai-employees-app/.env` — stray backtick on `VITE_VOICE_AGENT_API_URL` caused 404 on `/calls/initiate`
 - [x] `user_services` RLS — staff could not select their own services; added policy `Users can manage their own service assignments` (migration `20260323000000_user_services_staff_rls.sql`)
+- [x] `settings.py` `.maybeSingle()` AttributeError — Python supabase client has no `.maybeSingle()`; fixed to `.limit(1).execute()` + `result.data[0]`
+- [x] `calls.py` `.maybeSingle()` AttributeError — same fix in `get_call`, `get_summary`, `get_recording`
+- [x] `PUT /forwarding/contacts/bulk/toggle` 500 — FastAPI matched `"bulk"` as UUID param on `/{contact_id}/toggle`; fixed by moving `bulk/toggle` route above `/{contact_id}/toggle` in `forwarding.py`
+- [x] `GET /settings/agent/state` 500 duplicate key — regular `supabase` client blocked by RLS returned empty → INSERT failed with unique constraint; fixed by switching SELECT to `supabase_admin` and changing INSERT to `.upsert(on_conflict="business_id")`
 
 ### Frontend (`ai-employees-app`)
 - [x] React 18 + TypeScript + Vite + shadcn-ui + Tailwind
@@ -138,12 +142,21 @@ These don't exist yet on the backend (frontend queries Supabase directly — bac
 - [ ] Send missed-call text-back SMS (trigger on call end with status `missed`)
 - [ ] Wire up `missed_call_text_back` and `send_texts_during_after_calls` feature flags to actual sending logic
 
-### Email Sending
-- [ ] Choose provider: SendGrid or AWS SES
-- [ ] Email service in backend (`backend/app/services/email_service.py`)
-- [ ] Send appointment confirmation email on booking (include `.ics` attachment)
-- [ ] Send reminder email N days before appointment
-- [ ] Wire up `confirmation_reminder_calls` feature flag
+### Email Sending — Gmail Integration
+- [x] Gmail OAuth flow (business-level, one sending Gmail per business)
+- [x] `gmail_tokens` table — business_id unique key, stores access/refresh tokens
+- [x] `backend/app/services/email_service.py` — Gmail API send, token refresh, HTML template
+- [x] `GET/POST /integrations/gmail/auth-url|callback|status|disconnect` — OAuth routes
+- [x] `backend/app/core/config.py` — added `gmail_redirect_uri`
+- [x] `agent/agent.py` — `_gmail_send_confirmation` helper; fires after `book_appointment` if client_email provided
+- [x] `agent/agent.py` — `_gmail_send_staff_notification` helper; fires on every booking to assigned staff member (fetches staff email via `supabase.auth.admin.get_user_by_id`)
+- [x] Agent collects optional `client_email` in `book_appointment` tool
+- [x] Frontend `voiceAgentApi.ts` — `getGmailAuthUrl`, `completeGmailOAuth`, `getGmailStatus`, `disconnectGmail`
+- [x] Frontend `Integrations.tsx` — Gmail card fully wired (connect/disconnect/status badge)
+- [x] `App.tsx` — `/integrations/gmail/callback` route added
+- [ ] Add `.ics` calendar attachment to confirmation email
+- [ ] Send reminder email N days before appointment (needs scheduler/cron)
+- [ ] Wire up `confirmation_reminder_calls` feature flag to email trigger
 
 ### Frontend — Remaining Stubs
 - [ ] Marketing Employee page
