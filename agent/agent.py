@@ -43,15 +43,16 @@ Booking a new appointment:
 2. Ask what service they need, then use get_services if you don't already have the list.
 3. Ask if they have a preferred staff member; otherwise offer the next available using get_staff_for_service.
 4. Use get_available_slots to find open times and offer a few options.
-5. Collect the customer's name, phone number, and optionally their email address (if they'd like a confirmation email).
+5. Collect the customer's name, phone number, and email address (required for confirmation email).
 6. Repeat all details back clearly before calling book_appointment.
 7. Confirm the booking ID once done.
 
 Rescheduling or cancelling:
 1. Ask for the customer's name to look up their appointment using find_appointments.
-2. Confirm which appointment they mean.
-3. For reschedule: check new availability with get_available_slots, then call update_appointment.
-4. For cancel: confirm once more verbally, then call cancel_appointment.
+2. Read back the appointment details (service, date, time) — do NOT read out the ref ID to the customer, it is for internal use only.
+3. If multiple appointments are found, ask which one they mean by service and date — not by ref.
+4. For reschedule: check new availability with get_available_slots, then call update_appointment passing appointment_ref and client_name internally.
+5. For cancel: confirm once more verbally using service + date + time (e.g. "Just to confirm, you'd like to cancel your Haircut on April 2nd at 4 PM?"), then call cancel_appointment passing appointment_ref and client_name internally.
 
 General rules:
 - Never invent availability — always use the tools to check.
@@ -491,6 +492,410 @@ body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSy
         logger.warning("Failed to send staff notification email: %s", e)
 
 
+
+async def _gmail_send_reschedule_confirmation(
+    supabase,
+    business_id: str,
+    business_name: str,
+    business_phone: str,
+    client_name: str,
+    client_email: str,
+    service: str,
+    staff_name: str,
+    location: str,
+    new_date: str,
+    new_time: str,
+    duration_minutes: int,
+    confirmation_ref: str,
+) -> None:
+    """Send reschedule confirmation email to the customer (best-effort)."""
+    import base64
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    import httpx
+
+    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id)
+    if not access_token:
+        return
+
+    time_12h = _fmt_time_12h(new_time)
+    subject = f"Appointment Rescheduled — {service} on {new_date}"
+
+    plain = (
+        f"Hi {client_name},\n\nYour appointment has been rescheduled.\n\n"
+        f"Service:   {service}\nWith:      {staff_name}\nLocation:  {location}\n"
+        f"New Date:  {new_date}\nNew Time:  {time_12h}\nDuration:  {duration_minutes} min\n"
+        f"Ref:       {confirmation_ref}\n\n"
+        + (f"Need further changes? Call us at {business_phone}.\n\n" if business_phone else "")
+        + f"Thank you,\n{business_name}"
+    )
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"/>
+<style>
+body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}}
+.w{{max-width:560px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);}}
+.h{{background:#18181b;padding:28px 32px;}}.h h1{{margin:0;color:#fff;font-size:20px;}}.h p{{margin:4px 0 0;color:#a1a1aa;font-size:13px;}}
+.badge{{display:inline-block;background:#f59e0b;color:#fff;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;margin-top:12px;}}
+.b{{padding:28px 32px;}}.g{{font-size:16px;color:#18181b;margin:0 0 20px;}}
+.card{{background:#f9f9f9;border:1px solid #e4e4e7;border-radius:8px;padding:20px 24px;margin-bottom:24px;}}
+.row{{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #e4e4e7;}}
+.row:last-child{{border-bottom:none;}}.lbl{{color:#71717a;font-size:13px;}}.val{{color:#18181b;font-size:13px;font-weight:500;}}
+.ref{{background:#18181b;color:#fff;text-align:center;border-radius:8px;padding:14px;font-size:18px;letter-spacing:2px;font-weight:700;margin-bottom:24px;}}
+.ref-lbl{{font-size:11px;color:#a1a1aa;margin-bottom:4px;}}
+.foot{{padding:20px 32px;background:#f4f4f5;font-size:12px;color:#71717a;text-align:center;}}
+</style></head>
+<body><div class="w">
+<div class="h"><h1>{business_name}</h1><p>Appointment Rescheduled</p><span class="badge">RESCHEDULED</span></div>
+<div class="b">
+<p class="g">Hi {client_name}, your appointment has been rescheduled.</p>
+<div class="card">
+<div class="row"><span class="lbl">Service</span><span class="val">{service}</span></div>
+<div class="row"><span class="lbl">With</span><span class="val">{staff_name}</span></div>
+<div class="row"><span class="lbl">Location</span><span class="val">{location}</span></div>
+<div class="row"><span class="lbl">New Date</span><span class="val">{new_date}</span></div>
+<div class="row"><span class="lbl">New Time</span><span class="val">{time_12h}</span></div>
+<div class="row"><span class="lbl">Duration</span><span class="val">{duration_minutes} min</span></div>
+</div>
+<div class="ref"><div class="ref-lbl">CONFIRMATION REFERENCE</div>{confirmation_ref}</div>
+{"<p style='color:#71717a;font-size:13px;margin:0'>Need further changes? Call us at " + business_phone + "</p>" if business_phone else ""}
+</div>
+<div class="foot">&copy; {business_name} &bull; Automated notification</div>
+</div></body></html>"""
+
+    msg = MIMEMultipart("alternative")
+    msg["From"] = f"{business_name} <{sender_email}>"
+    msg["To"] = client_email
+    msg["Subject"] = subject
+    msg.attach(MIMEText(plain, "plain"))
+    msg.attach(MIMEText(html, "html"))
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+
+    try:
+        async with httpx.AsyncClient() as http:
+            resp = await http.post(
+                GMAIL_SEND_URL,
+                headers={"Authorization": f"Bearer {access_token}"},
+                json={"raw": raw},
+            )
+            if resp.status_code in (200, 201):
+                logger.info("Reschedule confirmation sent to %s", client_email)
+            else:
+                logger.warning("Gmail reschedule send failed %s: %s", resp.status_code, resp.text[:200])
+    except Exception as e:
+        logger.warning("Failed to send reschedule confirmation: %s", e)
+
+
+async def _gmail_send_staff_reschedule_notification(
+    supabase,
+    business_id: str,
+    business_name: str,
+    staff_user_id: str,
+    staff_name: str,
+    client_name: str,
+    client_phone: str,
+    client_email: str,
+    service: str,
+    location: str,
+    new_date: str,
+    new_time: str,
+    duration_minutes: int,
+    confirmation_ref: str,
+) -> None:
+    """Notify assigned staff of a rescheduled appointment (best-effort)."""
+    import base64
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    import httpx
+
+    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id)
+    if not access_token:
+        return
+
+    staff_email = ""
+    try:
+        resp = supabase.auth.admin.get_user_by_id(staff_user_id)
+        user = getattr(resp, "user", None)
+        if user:
+            staff_email = getattr(user, "email", "") or ""
+    except Exception as e:
+        logger.warning("Could not fetch staff email for %s: %s", staff_user_id, e)
+
+    if not staff_email:
+        return
+
+    time_12h = _fmt_time_12h(new_time)
+    subject = f"Appointment Rescheduled: {client_name} — {service} on {new_date}"
+
+    plain = (
+        f"Hi {staff_name},\n\nAn appointment has been rescheduled.\n\n"
+        f"Customer:  {client_name}\nPhone:     {client_phone}\n"
+        + (f"Email:     {client_email}\n" if client_email else "")
+        + f"Service:   {service}\nLocation:  {location}\n"
+        f"New Date:  {new_date}\nNew Time:  {time_12h}\nDuration:  {duration_minutes} min\n"
+        f"Ref:       {confirmation_ref}\n\n— {business_name}"
+    )
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"/>
+<style>
+body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}}
+.w{{max-width:560px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);}}
+.h{{background:#18181b;padding:28px 32px;}}.h h1{{margin:0;color:#fff;font-size:20px;}}.h p{{margin:4px 0 0;color:#a1a1aa;font-size:13px;}}
+.badge{{display:inline-block;background:#f59e0b;color:#fff;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;margin-top:12px;}}
+.b{{padding:28px 32px;}}.g{{font-size:16px;color:#18181b;margin:0 0 20px;}}
+.card{{background:#f9f9f9;border:1px solid #e4e4e7;border-radius:8px;padding:20px 24px;margin-bottom:24px;}}
+.section-label{{font-size:11px;font-weight:600;color:#71717a;text-transform:uppercase;letter-spacing:.8px;margin-bottom:12px;}}
+.row{{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #e4e4e7;}}
+.row:last-child{{border-bottom:none;}}.lbl{{color:#71717a;font-size:13px;}}.val{{color:#18181b;font-size:13px;font-weight:500;}}
+.foot{{padding:20px 32px;background:#f4f4f5;font-size:12px;color:#71717a;text-align:center;}}
+</style></head>
+<body><div class="w">
+<div class="h"><h1>{business_name}</h1><p>Appointment Rescheduled</p><span class="badge">RESCHEDULED</span></div>
+<div class="b">
+<p class="g">Hi {staff_name}, an appointment has been rescheduled.</p>
+<div class="card">
+<div class="section-label">Customer</div>
+<div class="row"><span class="lbl">Name</span><span class="val">{client_name}</span></div>
+<div class="row"><span class="lbl">Phone</span><span class="val">{client_phone}</span></div>
+{"<div class='row'><span class='lbl'>Email</span><span class='val'>" + client_email + "</span></div>" if client_email else ""}
+</div>
+<div class="card">
+<div class="section-label">New Schedule</div>
+<div class="row"><span class="lbl">Service</span><span class="val">{service}</span></div>
+<div class="row"><span class="lbl">Location</span><span class="val">{location}</span></div>
+<div class="row"><span class="lbl">New Date</span><span class="val">{new_date}</span></div>
+<div class="row"><span class="lbl">New Time</span><span class="val">{time_12h}</span></div>
+<div class="row"><span class="lbl">Duration</span><span class="val">{duration_minutes} min</span></div>
+<div class="row"><span class="lbl">Ref</span><span class="val">{confirmation_ref}</span></div>
+</div>
+</div>
+<div class="foot">&copy; {business_name} &bull; Staff notification</div>
+</div></body></html>"""
+
+    msg = MIMEMultipart("alternative")
+    msg["From"] = f"{business_name} <{sender_email}>"
+    msg["To"] = staff_email
+    msg["Subject"] = subject
+    msg.attach(MIMEText(plain, "plain"))
+    msg.attach(MIMEText(html, "html"))
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+
+    try:
+        async with httpx.AsyncClient() as http:
+            resp = await http.post(
+                GMAIL_SEND_URL,
+                headers={"Authorization": f"Bearer {access_token}"},
+                json={"raw": raw},
+            )
+            if resp.status_code in (200, 201):
+                logger.info("Staff reschedule notification sent to %s", staff_email)
+            else:
+                logger.warning("Staff reschedule notify failed %s: %s", resp.status_code, resp.text[:200])
+    except Exception as e:
+        logger.warning("Failed to send staff reschedule notification: %s", e)
+
+
+async def _gmail_send_cancellation_confirmation(
+    supabase,
+    business_id: str,
+    business_name: str,
+    business_phone: str,
+    client_name: str,
+    client_email: str,
+    service: str,
+    staff_name: str,
+    location: str,
+    date: str,
+    time: str,
+    duration_minutes: int,
+    confirmation_ref: str,
+) -> None:
+    """Send cancellation confirmation email to the customer (best-effort)."""
+    import base64
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    import httpx
+
+    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id)
+    if not access_token:
+        return
+
+    time_12h = _fmt_time_12h(time)
+    subject = f"Appointment Cancelled — {service} on {date}"
+
+    plain = (
+        f"Hi {client_name},\n\nYour appointment has been cancelled.\n\n"
+        f"Service:   {service}\nWith:      {staff_name}\nLocation:  {location}\n"
+        f"Date:      {date}\nTime:      {time_12h}\nRef:       {confirmation_ref}\n\n"
+        + (f"To book a new appointment, call us at {business_phone}.\n\n" if business_phone else "")
+        + f"Thank you,\n{business_name}"
+    )
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"/>
+<style>
+body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}}
+.w{{max-width:560px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);}}
+.h{{background:#18181b;padding:28px 32px;}}.h h1{{margin:0;color:#fff;font-size:20px;}}.h p{{margin:4px 0 0;color:#a1a1aa;font-size:13px;}}
+.badge{{display:inline-block;background:#ef4444;color:#fff;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;margin-top:12px;}}
+.b{{padding:28px 32px;}}.g{{font-size:16px;color:#18181b;margin:0 0 20px;}}
+.card{{background:#f9f9f9;border:1px solid #e4e4e7;border-radius:8px;padding:20px 24px;margin-bottom:24px;}}
+.row{{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #e4e4e7;}}
+.row:last-child{{border-bottom:none;}}.lbl{{color:#71717a;font-size:13px;}}.val{{color:#18181b;font-size:13px;font-weight:500;}}
+.ref{{background:#18181b;color:#fff;text-align:center;border-radius:8px;padding:14px;font-size:18px;letter-spacing:2px;font-weight:700;margin-bottom:24px;}}
+.ref-lbl{{font-size:11px;color:#a1a1aa;margin-bottom:4px;}}
+.foot{{padding:20px 32px;background:#f4f4f5;font-size:12px;color:#71717a;text-align:center;}}
+</style></head>
+<body><div class="w">
+<div class="h"><h1>{business_name}</h1><p>Appointment Cancelled</p><span class="badge">CANCELLED</span></div>
+<div class="b">
+<p class="g">Hi {client_name}, your appointment has been cancelled.</p>
+<div class="card">
+<div class="row"><span class="lbl">Service</span><span class="val">{service}</span></div>
+<div class="row"><span class="lbl">With</span><span class="val">{staff_name}</span></div>
+<div class="row"><span class="lbl">Location</span><span class="val">{location}</span></div>
+<div class="row"><span class="lbl">Date</span><span class="val">{date}</span></div>
+<div class="row"><span class="lbl">Time</span><span class="val">{time_12h}</span></div>
+</div>
+<div class="ref"><div class="ref-lbl">CANCELLED REFERENCE</div>{confirmation_ref}</div>
+{"<p style='color:#71717a;font-size:13px;margin:0'>To rebook, call us at " + business_phone + "</p>" if business_phone else ""}
+</div>
+<div class="foot">&copy; {business_name} &bull; Automated notification</div>
+</div></body></html>"""
+
+    msg = MIMEMultipart("alternative")
+    msg["From"] = f"{business_name} <{sender_email}>"
+    msg["To"] = client_email
+    msg["Subject"] = subject
+    msg.attach(MIMEText(plain, "plain"))
+    msg.attach(MIMEText(html, "html"))
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+
+    try:
+        async with httpx.AsyncClient() as http:
+            resp = await http.post(
+                GMAIL_SEND_URL,
+                headers={"Authorization": f"Bearer {access_token}"},
+                json={"raw": raw},
+            )
+            if resp.status_code in (200, 201):
+                logger.info("Cancellation email sent to %s", client_email)
+            else:
+                logger.warning("Gmail cancel send failed %s: %s", resp.status_code, resp.text[:200])
+    except Exception as e:
+        logger.warning("Failed to send cancellation email: %s", e)
+
+
+async def _gmail_send_staff_cancellation_notification(
+    supabase,
+    business_id: str,
+    business_name: str,
+    staff_user_id: str,
+    staff_name: str,
+    client_name: str,
+    client_phone: str,
+    client_email: str,
+    service: str,
+    location: str,
+    date: str,
+    time: str,
+    duration_minutes: int,
+    confirmation_ref: str,
+) -> None:
+    """Notify assigned staff of a cancelled appointment (best-effort)."""
+    import base64
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    import httpx
+
+    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id)
+    if not access_token:
+        return
+
+    staff_email = ""
+    try:
+        resp = supabase.auth.admin.get_user_by_id(staff_user_id)
+        user = getattr(resp, "user", None)
+        if user:
+            staff_email = getattr(user, "email", "") or ""
+    except Exception as e:
+        logger.warning("Could not fetch staff email for %s: %s", staff_user_id, e)
+
+    if not staff_email:
+        return
+
+    time_12h = _fmt_time_12h(time)
+    subject = f"Appointment Cancelled: {client_name} — {service} on {date}"
+
+    plain = (
+        f"Hi {staff_name},\n\nAn appointment has been cancelled.\n\n"
+        f"Customer:  {client_name}\nPhone:     {client_phone}\n"
+        + (f"Email:     {client_email}\n" if client_email else "")
+        + f"Service:   {service}\nLocation:  {location}\n"
+        f"Date:      {date}\nTime:      {time_12h}\n"
+        f"Ref:       {confirmation_ref}\n\n— {business_name}"
+    )
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"/>
+<style>
+body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}}
+.w{{max-width:560px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);}}
+.h{{background:#18181b;padding:28px 32px;}}.h h1{{margin:0;color:#fff;font-size:20px;}}.h p{{margin:4px 0 0;color:#a1a1aa;font-size:13px;}}
+.badge{{display:inline-block;background:#ef4444;color:#fff;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;margin-top:12px;}}
+.b{{padding:28px 32px;}}.g{{font-size:16px;color:#18181b;margin:0 0 20px;}}
+.card{{background:#f9f9f9;border:1px solid #e4e4e7;border-radius:8px;padding:20px 24px;margin-bottom:24px;}}
+.section-label{{font-size:11px;font-weight:600;color:#71717a;text-transform:uppercase;letter-spacing:.8px;margin-bottom:12px;}}
+.row{{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #e4e4e7;}}
+.row:last-child{{border-bottom:none;}}.lbl{{color:#71717a;font-size:13px;}}.val{{color:#18181b;font-size:13px;font-weight:500;}}
+.foot{{padding:20px 32px;background:#f4f4f5;font-size:12px;color:#71717a;text-align:center;}}
+</style></head>
+<body><div class="w">
+<div class="h"><h1>{business_name}</h1><p>Appointment Cancelled</p><span class="badge">CANCELLED</span></div>
+<div class="b">
+<p class="g">Hi {staff_name}, an appointment has been cancelled.</p>
+<div class="card">
+<div class="section-label">Customer</div>
+<div class="row"><span class="lbl">Name</span><span class="val">{client_name}</span></div>
+<div class="row"><span class="lbl">Phone</span><span class="val">{client_phone}</span></div>
+{"<div class='row'><span class='lbl'>Email</span><span class='val'>" + client_email + "</span></div>" if client_email else ""}
+</div>
+<div class="card">
+<div class="section-label">Cancelled Appointment</div>
+<div class="row"><span class="lbl">Service</span><span class="val">{service}</span></div>
+<div class="row"><span class="lbl">Location</span><span class="val">{location}</span></div>
+<div class="row"><span class="lbl">Date</span><span class="val">{date}</span></div>
+<div class="row"><span class="lbl">Time</span><span class="val">{time_12h}</span></div>
+<div class="row"><span class="lbl">Ref</span><span class="val">{confirmation_ref}</span></div>
+</div>
+</div>
+<div class="foot">&copy; {business_name} &bull; Staff notification</div>
+</div></body></html>"""
+
+    msg = MIMEMultipart("alternative")
+    msg["From"] = f"{business_name} <{sender_email}>"
+    msg["To"] = staff_email
+    msg["Subject"] = subject
+    msg.attach(MIMEText(plain, "plain"))
+    msg.attach(MIMEText(html, "html"))
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+
+    try:
+        async with httpx.AsyncClient() as http:
+            resp = await http.post(
+                GMAIL_SEND_URL,
+                headers={"Authorization": f"Bearer {access_token}"},
+                json={"raw": raw},
+            )
+            if resp.status_code in (200, 201):
+                logger.info("Staff cancellation notification sent to %s", staff_email)
+            else:
+                logger.warning("Staff cancel notify failed %s: %s", resp.status_code, resp.text[:200])
+    except Exception as e:
+        logger.warning("Failed to send staff cancellation notification: %s", e)
+
+
 # ── Supabase helpers ──────────────────────────────────────────────────────────
 
 def _get_supabase():
@@ -682,9 +1087,10 @@ def _fetch_appointments_on_date(supabase, user_id: str, target_date: str) -> lis
     try:
         r = (
             supabase.table("appointments")
-            .select("appointment_time, duration")
+            .select("id, appointment_time, duration")
             .eq("assigned_user_id", user_id)
             .eq("appointment_date", target_date)
+            .neq("status", "cancelled")
             .execute()
         )
         return getattr(r, "data", None) or []
@@ -1319,18 +1725,18 @@ class Assistant(Agent):
         context: RunContext,
         client_name: str,
         client_phone: str,
+        client_email: str,
         service_name: str,
         staff_name: str,
         location_name: str,
         date: str,
         time: str,
         notes: str = "",
-        client_email: str = "",
     ) -> str:
         """
         Book an appointment after confirming all details with the customer.
         date: YYYY-MM-DD  |  time: HH:MM (24h, e.g. 14:30)
-        If the customer provides an email address, pass it as client_email to send a confirmation email.
+        Always collect client_email — it is required to send a confirmation email.
         Always repeat details back to the customer and get verbal confirmation before calling this.
         """
         if not self._supabase or not self._business_id:
@@ -1347,12 +1753,9 @@ class Assistant(Agent):
         service_label = svc["name"] if svc else service_name
         location_label = loc["name"] if loc else location_name
 
-        # Store phone in notes since appointments table has no client_phone column yet
-        combined_notes = f"Phone: {client_phone}"
-        if notes:
-            combined_notes += f" | {notes}"
+        combined_notes = notes or ""
         if self._call_id:
-            combined_notes += f" | call_id: {self._call_id}"
+            combined_notes = (combined_notes + f" | call_id: {self._call_id}").lstrip(" | ")
 
         try:
             row = {
@@ -1360,6 +1763,8 @@ class Assistant(Agent):
                 "location_id": loc["id"] if loc else None,
                 "assigned_user_id": staff["user_id"],
                 "client_name": client_name,
+                "client_phone": client_phone,
+                "client_email": client_email,
                 "service": service_label,
                 "appointment_date": date,
                 "appointment_time": time,
@@ -1466,7 +1871,8 @@ class Assistant(Agent):
     ) -> str:
         """
         Look up upcoming appointments for a customer by their name.
-        Use this before rescheduling or cancelling to find the appointment ID.
+        Use this before rescheduling or cancelling to find the appointment ref.
+        Do NOT read the ref ID out loud — use service, date, and time when confirming with the customer.
         """
         if not self._supabase or not self._business_id:
             return "Appointment lookup is unavailable right now."
@@ -1477,6 +1883,7 @@ class Assistant(Agent):
                 .select("id, client_name, service, appointment_date, appointment_time, location_id, assigned_user_id")
                 .eq("business_id", self._business_id)
                 .gte("appointment_date", today)
+                .neq("status", "cancelled")
                 .ilike("client_name", f"%{client_name}%")
                 .order("appointment_date")
                 .limit(5)
@@ -1514,6 +1921,7 @@ class Assistant(Agent):
         self,
         context: RunContext,
         appointment_ref: str,
+        client_name: str,
         new_date: str = "",
         new_time: str = "",
         notes: str = "",
@@ -1521,6 +1929,7 @@ class Assistant(Agent):
         """
         Reschedule an existing appointment.
         appointment_ref: the 8-character reference from find_appointments.
+        client_name: the customer's name (used to narrow the search).
         new_date: YYYY-MM-DD  |  new_time: HH:MM (24h)
         """
         if not self._supabase or not self._business_id:
@@ -1536,45 +1945,109 @@ class Assistant(Agent):
             if not updates:
                 return "No changes were specified."
 
-            # Find full UUID by prefix
-            r_all = (
+            # Find appointment: filter by client name first, then match ref prefix in Python
+            q = (
                 self._supabase.table("appointments")
-                .select("id")
+                .select("id, client_name, client_email, client_phone, service, appointment_date, appointment_time, duration, assigned_user_id, location_id, google_event_id, google_event_id_admin")
                 .eq("business_id", self._business_id)
                 .gte("appointment_date", datetime.now().strftime("%Y-%m-%d"))
-                .execute()
+                .neq("status", "cancelled")
             )
-            full_id = next(
-                (row["id"] for row in (getattr(r_all, "data", None) or [])
-                 if row.get("id", "").upper().startswith(appointment_ref.upper())),
-                None,
-            )
-            if not full_id:
+            if client_name:
+                q = q.ilike("client_name", f"%{client_name}%")
+            r_find = q.limit(50).execute()
+            all_rows = getattr(r_find, "data", None) or []
+            rows = [r for r in all_rows if r.get("id", "").upper().startswith(appointment_ref.upper())]
+            if not rows:
                 return f"Could not find appointment with reference '{appointment_ref}'. Please use find_appointments first."
+
+            appt_row = rows[0]
+            full_id = appt_row["id"]
+
+            # Availability check before rescheduling
+            if new_date or new_time:
+                check_date = new_date or appt_row.get("appointment_date", "")
+                check_time = new_time or appt_row.get("appointment_time", "")
+                assigned_uid = appt_row.get("assigned_user_id")
+                if assigned_uid and check_date and check_time:
+                    booked = _fetch_appointments_on_date(self._supabase, assigned_uid, check_date)
+                    # Exclude the appointment being rescheduled from conflict check
+                    booked_excluding_self = [b for b in booked if b.get("id") != full_id]
+                    duration_min = int(str(appt_row.get("duration", "60")).split()[0])
+                    # Simple overlap: check if check_time is already taken
+                    slot_taken = any(b.get("appointment_time") == check_time for b in booked_excluding_self)
+                    if slot_taken:
+                        return (
+                            f"Sorry, {check_time} on {check_date} is already booked. "
+                            f"Please use get_available_slots to find an open time and try again."
+                        )
 
             self._supabase.table("appointments").update(updates).eq("id", full_id).execute()
 
             # ── Google Calendar: update event on staff + admin calendars ──────
-            appt_row_r = (
-                self._supabase.table("appointments")
-                .select("google_event_id, google_event_id_admin, assigned_user_id, appointment_date, appointment_time, duration, service, client_name, notes")
-                .eq("id", full_id)
-                .limit(1)
-                .execute()
-            )
-            appt_rows = getattr(appt_row_r, "data", None) or []
-            if appt_rows:
-                appt_row = appt_rows[0]
-                assigned_uid = appt_row.get("assigned_user_id")
+            updated_row = {**appt_row, **updates}
+            assigned_uid = appt_row.get("assigned_user_id")
 
-                # Staff calendar
-                if appt_row.get("google_event_id") and assigned_uid:
-                    await _gcal_update_event(self._supabase, assigned_uid, appt_row["google_event_id"], appt_row)
+            if appt_row.get("google_event_id") and assigned_uid:
+                await _gcal_update_event(self._supabase, assigned_uid, appt_row["google_event_id"], updated_row)
 
-                # Admin calendar
-                admin_id = _gcal_get_superadmin_id(self._supabase, self._business_id)
-                if appt_row.get("google_event_id_admin") and admin_id:
-                    await _gcal_update_event(self._supabase, admin_id, appt_row["google_event_id_admin"], appt_row)
+            admin_id = _gcal_get_superadmin_id(self._supabase, self._business_id)
+            if appt_row.get("google_event_id_admin") and admin_id:
+                await _gcal_update_event(self._supabase, admin_id, appt_row["google_event_id_admin"], updated_row)
+
+            # ── Gmail: reschedule notification to customer + staff ────────────
+            client_email_addr = appt_row.get("client_email", "")
+            client_name = appt_row.get("client_name", "")
+            service_label = appt_row.get("service", "appointment")
+            new_d = new_date or appt_row.get("appointment_date", "")
+            new_t = new_time or appt_row.get("appointment_time", "")
+            duration_min = int(str(appt_row.get("duration", "60")).split()[0])
+            biz_name = self._business_name or "Your Business"
+            biz_phone = self._business_phone or ""
+            location_label = self._location_id_to_name.get(appt_row.get("location_id", ""), "")
+            staff_name_label = self._staff_id_to_name.get(assigned_uid or "", "")
+            short_id = full_id[:8].upper()
+
+            if client_email_addr:
+                try:
+                    await _gmail_send_reschedule_confirmation(
+                        supabase=self._supabase,
+                        business_id=self._business_id,
+                        business_name=biz_name,
+                        business_phone=biz_phone,
+                        client_name=client_name,
+                        client_email=client_email_addr,
+                        service=service_label,
+                        staff_name=staff_name_label,
+                        location=location_label,
+                        new_date=new_d,
+                        new_time=new_t,
+                        duration_minutes=duration_min,
+                        confirmation_ref=short_id,
+                    )
+                except Exception:
+                    pass
+
+            if assigned_uid:
+                try:
+                    await _gmail_send_staff_reschedule_notification(
+                        supabase=self._supabase,
+                        business_id=self._business_id,
+                        business_name=biz_name,
+                        staff_user_id=assigned_uid,
+                        staff_name=staff_name_label,
+                        client_name=client_name,
+                        client_phone=appt_row.get("client_phone", ""),
+                        client_email=client_email_addr,
+                        service=service_label,
+                        location=location_label,
+                        new_date=new_d,
+                        new_time=new_t,
+                        duration_minutes=duration_min,
+                        confirmation_ref=short_id,
+                    )
+                except Exception:
+                    pass
 
             change_parts = []
             if new_date:
@@ -1591,28 +2064,32 @@ class Assistant(Agent):
         self,
         context: RunContext,
         appointment_ref: str,
+        client_name: str,
     ) -> str:
         """
         Cancel an existing appointment by its reference ID.
+        client_name: the customer's name (used to narrow the search).
         Always confirm verbally with the customer before calling this.
         """
         if not self._supabase or not self._business_id:
             return "Cancellation is unavailable right now."
         try:
-            r_all = (
+            q = (
                 self._supabase.table("appointments")
-                .select("id, client_name, service, appointment_date, appointment_time, assigned_user_id, google_event_id, google_event_id_admin")
+                .select("id, client_name, client_email, client_phone, service, appointment_date, appointment_time, duration, assigned_user_id, location_id, google_event_id, google_event_id_admin")
                 .eq("business_id", self._business_id)
                 .gte("appointment_date", datetime.now().strftime("%Y-%m-%d"))
-                .execute()
+                .neq("status", "cancelled")
             )
-            match = next(
-                (row for row in (getattr(r_all, "data", None) or [])
-                 if row.get("id", "").upper().startswith(appointment_ref.upper())),
-                None,
-            )
-            if not match:
+            if client_name:
+                q = q.ilike("client_name", f"%{client_name}%")
+            r_find = q.limit(50).execute()
+            all_rows = getattr(r_find, "data", None) or []
+            rows = [r for r in all_rows if r.get("id", "").upper().startswith(appointment_ref.upper())]
+            if not rows:
                 return f"Could not find appointment with reference '{appointment_ref}'. Please use find_appointments first."
+
+            match = rows[0]
 
             # ── Google Calendar: delete events on staff + admin calendars ─
             assigned_uid = match.get("assigned_user_id")
@@ -1623,12 +2100,62 @@ class Assistant(Agent):
             if match.get("google_event_id_admin") and admin_id:
                 await _gcal_delete_event(self._supabase, admin_id, match["google_event_id_admin"])
 
-            self._supabase.table("appointments").delete().eq("id", match["id"]).execute()
+            self._supabase.table("appointments").update({"status": "cancelled"}).eq("id", match["id"]).execute()
 
             cname = match.get("client_name", "")
             svc = match.get("service") or "appointment"
             adate = match.get("appointment_date", "")
             atime = _fmt_time_12h(match.get("appointment_time", ""))
+            duration_min = int(str(match.get("duration", "60")).split()[0])
+            client_email_addr = match.get("client_email", "")
+            biz_name = self._business_name or "Your Business"
+            biz_phone = self._business_phone or ""
+            location_label = self._location_id_to_name.get(match.get("location_id", ""), "")
+            staff_name_label = self._staff_id_to_name.get(assigned_uid or "", "")
+            short_id = match["id"][:8].upper()
+
+            # ── Gmail: cancellation email to customer + staff ─────────────────
+            if client_email_addr:
+                try:
+                    await _gmail_send_cancellation_confirmation(
+                        supabase=self._supabase,
+                        business_id=self._business_id,
+                        business_name=biz_name,
+                        business_phone=biz_phone,
+                        client_name=cname,
+                        client_email=client_email_addr,
+                        service=svc,
+                        staff_name=staff_name_label,
+                        location=location_label,
+                        date=adate,
+                        time=match.get("appointment_time", ""),
+                        duration_minutes=duration_min,
+                        confirmation_ref=short_id,
+                    )
+                except Exception:
+                    pass
+
+            if assigned_uid:
+                try:
+                    await _gmail_send_staff_cancellation_notification(
+                        supabase=self._supabase,
+                        business_id=self._business_id,
+                        business_name=biz_name,
+                        staff_user_id=assigned_uid,
+                        staff_name=staff_name_label,
+                        client_name=cname,
+                        client_phone=match.get("client_phone", ""),
+                        client_email=client_email_addr,
+                        service=svc,
+                        location=location_label,
+                        date=adate,
+                        time=match.get("appointment_time", ""),
+                        duration_minutes=duration_min,
+                        confirmation_ref=short_id,
+                    )
+                except Exception:
+                    pass
+
             return f"Cancelled: {cname}'s {svc} on {adate} at {atime} has been removed. Is there anything else I can help with?"
         except Exception as e:
             logger.error("Failed to cancel appointment: %s", e)

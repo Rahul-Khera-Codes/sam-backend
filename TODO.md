@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-03-25 (session 5 — Gmail integration)
+Last updated: 2026-03-27 (session 8)
 
 ---
 
@@ -31,10 +31,10 @@ Last updated: 2026-03-25 (session 5 — Gmail integration)
 - [x] **`get_services`** tool — lists active services with duration + price
 - [x] **`get_staff_for_service`** tool — staff at a location who can perform a service (reads `user_services`, `user_locations`, `profiles`)
 - [x] **`get_available_slots`** tool — computes free slots from `user_availability`, `user_availability_overrides`, existing `appointments`
-- [x] **`book_appointment`** tool — inserts into `appointments` table, links `call_id` in notes, stores phone in notes
+- [x] **`book_appointment`** tool — inserts into `appointments` table, links `call_id` in notes, stores `client_phone` + `client_email` in dedicated columns
 - [x] **`find_appointments`** tool — finds upcoming appointments by client name (ilike search)
-- [x] **`update_appointment`** tool — reschedules by appointment ref ID
-- [x] **`cancel_appointment`** tool — deletes appointment by ref ID
+- [x] **`update_appointment`** tool — reschedules by ref + client_name; availability check; sends reschedule emails to customer + staff
+- [x] **`cancel_appointment`** tool — cancels by ref + client_name; sends cancellation emails to customer + staff
 - [x] Preloads locations, services, staff + user_service_ids at call start (no per-tool DB round trips for lookups)
 - [x] Post-call: `conversation_item_added` event captures all transcript turns in memory
 - [x] Post-call: bulk-saves transcript utterances to `transcripts` table on call end
@@ -89,6 +89,39 @@ _(nothing currently in progress)_
 ---
 
 ## 📋 TODO
+
+### Agent — Appointment Update/Cancel Fixes ✅ DONE (session 7-8)
+
+#### Step 1 — DB Schema
+- [x] Migration `20260327000000_appointments_client_contact.sql`: add `client_email TEXT DEFAULT ''` column to `appointments`
+- [x] Migration `20260327000000_appointments_client_contact.sql`: add `client_phone TEXT DEFAULT ''` column to `appointments`
+
+#### Step 2 — book_appointment improvements
+- [x] Store `client_email` in its own column when inserting appointment row
+- [x] Store `client_phone` in its own column (removed from `notes`)
+- [x] Made email collection required in agent instructions and as required `book_appointment` param
+
+#### Step 3 — update_appointment fixes
+- [x] Added `client_name` param — DB filters by name first (ilike), then Python prefix-matches ref on ≤50 rows
+- [x] Added availability check: if rescheduling to an already-booked slot, returns error asking agent to check availability first
+- [x] Send reschedule confirmation email to customer (reads `client_email` from DB row)
+- [x] Send reschedule notification email to assigned staff member
+- [x] Fixed UUID ILIKE bug — PostgREST doesn't support `id::text` cast in filter; reverted to Python-side prefix match with DB-level name filter
+
+#### Step 4 — cancel_appointment fixes
+- [x] Added `client_name` param — same efficient lookup as update_appointment
+- [x] Send cancellation confirmation email to customer (reads `client_email` from DB row)
+- [x] Send cancellation notification email to assigned staff member
+- [x] **Soft delete** — cancel sets `status = 'cancelled'` instead of hard DELETE; row kept for analytics
+- [x] Migration `20260327000001_appointments_status.sql`: add `status TEXT DEFAULT 'confirmed'` column
+- [x] `find_appointments`, `update_appointment`, `cancel_appointment` lookups all filter `.neq("status", "cancelled")`
+- [x] `_fetch_appointments_on_date` (availability check) also excludes cancelled rows
+- [x] Frontend `useAppointments.ts` — added `.neq("status", "cancelled")` filter so cancelled appointments no longer show in Calendar
+
+#### Note on existing appointments
+- Old appointments (booked before migration) have `client_email = ''` so reschedule/cancel emails won't fire for them — expected. All new bookings will have it stored.
+
+---
 
 ### Backend — Appointment & Service API Endpoints
 These don't exist yet on the backend (frontend queries Supabase directly — backend is unaware):
@@ -150,7 +183,7 @@ These don't exist yet on the backend (frontend queries Supabase directly — bac
 - [x] `backend/app/core/config.py` — added `gmail_redirect_uri`
 - [x] `agent/agent.py` — `_gmail_send_confirmation` helper; fires after `book_appointment` if client_email provided
 - [x] `agent/agent.py` — `_gmail_send_staff_notification` helper; fires on every booking to assigned staff member (fetches staff email via `supabase.auth.admin.get_user_by_id`)
-- [x] Agent collects optional `client_email` in `book_appointment` tool
+- [x] Agent collects required `client_email` in `book_appointment` tool (now a required parameter)
 - [x] Frontend `voiceAgentApi.ts` — `getGmailAuthUrl`, `completeGmailOAuth`, `getGmailStatus`, `disconnectGmail`
 - [x] Frontend `Integrations.tsx` — Gmail card fully wired (connect/disconnect/status badge)
 - [x] `App.tsx` — `/integrations/gmail/callback` route added
