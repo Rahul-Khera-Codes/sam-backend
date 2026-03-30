@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from app.core.auth import get_current_user
-from app.core.supabase import supabase
+from app.core.supabase import supabase_admin as supabase
 from datetime import datetime, timezone, timedelta
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])

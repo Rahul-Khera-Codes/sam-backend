@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-03-30 (session 9)
+Last updated: 2026-03-30 (session 9 — SIP calls fully working, logs showing in UI)
 
 ---
 
@@ -41,6 +41,12 @@ Last updated: 2026-03-30 (session 9)
 - [x] Post-call: updates call record — `status=completed`, `ended_at`, `duration_seconds`
 - [x] Post-call: GPT-4o chat generates JSON summary → saved to `call_summaries` with `key_topics`, `insights`
 - [x] Post-call: updates `calls.sentiment` from summary result
+
+### Bugs Fixed (session 9)
+- [x] SIP dispatch rule had `inbound_numbers=[phone_number]` causing calls to ring forever without agent pickup — removed, trunk `numbers` filter is sufficient
+- [x] SIP calls created no `calls` DB row — agent now auto-creates the record at session start (status=`active`, caller_phone from SIP attrs)
+- [x] `GET /calls` and analytics returned 0 rows — `supabase` anon client has no user JWT set, RLS blocks all reads; switched to `supabase_admin` (auth still enforced via `Depends(get_current_user)` + `business_id` filter)
+- [x] Call transcript showed all bubbles as "Customer" — frontend used `msg.role`/`msg.content` but backend sends `msg.speaker`/`msg.text`; fixed type + rendering in `CallRecordings.tsx`
 
 ### Bugs Fixed
 - [x] `ai-employees-app/.env` — stray backtick on `VITE_VOICE_AGENT_API_URL` caused 404 on `/calls/initiate`
@@ -179,13 +185,14 @@ These don't exist yet on the backend (frontend queries Supabase directly — bac
 - [x] `DELETE /phone-numbers/{id}` — release number
 - [x] Router registered in `main.py`; Twilio vars added to `config.py`
 
-#### Step 4 — Agent: SIP Inbound Context Reading
+#### Step 4 — Agent: SIP Inbound Context Reading + Call Record Creation
 - [x] Source 1: `ctx.job.metadata` (dispatch rule attributes — primary for SIP)
 - [x] Source 2: `participant.metadata` (backend token — web call path, unchanged)
 - [x] Source 3: `participant.attributes` (SIP participant attrs from dispatch rule)
 - [x] Source 4: DB lookup by `sip.trunkPhoneNumber` (last resort)
 - [x] Detect `sip.callDirection` — `"inbound"` or `"outbound"`
 - [x] Outbound calls use different `generate_reply()` opener (introduce self + purpose)
+- [x] SIP call record auto-created at session start (so calls appear in website logs with transcript + summary)
 
 #### Step 5 — Frontend: Phone Number Picker in Onboarding
 - [x] `voiceAgentApi.ts` — added `searchPhoneNumbers`, `provisionPhoneNumber`, `getPhoneNumbers`, `releasePhoneNumber`

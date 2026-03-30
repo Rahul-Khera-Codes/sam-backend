@@ -43,7 +43,7 @@ async def list_calls(
     current_user: dict = Depends(get_current_user),
 ):
     query = (
-        supabase.table("calls")
+        supabase_admin.table("calls")
         .select("*")
         .eq("business_id", business_id)
         .order("created_at", desc=True)
@@ -75,7 +75,7 @@ async def recent_activity(
     current_user: dict = Depends(get_current_user),
 ):
     result = (
-        supabase.table("calls")
+        supabase_admin.table("calls")
         .select("id, caller_name, caller_phone, status, sentiment, direction, created_at, duration_seconds")
         .eq("business_id", business_id)
         .order("created_at", desc=True)
@@ -131,7 +131,7 @@ async def get_call(
     current_user: dict = Depends(get_current_user),
 ):
     result = (
-        supabase.table("calls")
+        supabase_admin.table("calls")
         .select("*")
         .eq("id", call_id)
         .limit(1)
@@ -152,7 +152,7 @@ async def get_transcript(
     current_user: dict = Depends(get_current_user),
 ):
     result = (
-        supabase.table("transcripts")
+        supabase_admin.table("transcripts")
         .select("*")
         .eq("call_id", call_id)
         .order("sequence_order", desc=False)
@@ -173,7 +173,7 @@ async def get_summary(
     current_user: dict = Depends(get_current_user),
 ):
     result = (
-        supabase.table("call_summaries")
+        supabase_admin.table("call_summaries")
         .select("*")
         .eq("call_id", call_id)
         .limit(1)
@@ -196,7 +196,7 @@ async def get_recording(
 ):
     # Get the recording reference
     result = (
-        supabase.table("recordings")
+        supabase_admin.table("recordings")
         .select("*")
         .eq("call_id", call_id)
         .limit(1)

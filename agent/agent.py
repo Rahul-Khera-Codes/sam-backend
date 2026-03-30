@@ -844,7 +844,11 @@ async def voice_agent(ctx: agents.JobContext):
     locations: list[dict] = []
     services: list[dict] = []
     staff: list[dict] = []
-    is_sip_call = participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+    is_sip_call = (
+        participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+        or participant.identity.startswith("sip_")
+        or participant.identity.startswith("sip-")
+    )
     call_direction: str = "inbound"  # default; "outbound" for agent-initiated calls
 
     # ── Source 1: ctx.job.metadata (set by LiveKit dispatch rule for SIP inbound) ──
@@ -914,6 +918,31 @@ async def voice_agent(ctx: agents.JobContext):
         "Call resolved — business_id=%s location_id=%s call_id=%s sip=%s direction=%s",
         business_id, location_id, call_id, is_sip_call, call_direction,
     )
+
+    # ── Create call record for SIP calls (no backend /calls/initiate was called) ─
+    if is_sip_call and not call_id and business_id:
+        if supabase is None:
+            supabase = _get_supabase()
+        if supabase:
+            try:
+                sip_attrs = getattr(participant, "attributes", {}) or {}
+                caller_phone = sip_attrs.get("sip.phoneNumber") or sip_attrs.get("sip.callerId", "")
+                caller_name = sip_attrs.get("sip.callerId") or caller_phone or "Unknown"
+                call_row = supabase.table("calls").insert({
+                    "business_id": business_id,
+                    "location_id": location_id,
+                    "direction": call_direction,
+                    "status": "active",
+                    "livekit_room_id": ctx.room.name,
+                    "caller_phone": caller_phone,
+                    "caller_name": caller_name,
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                }).execute()
+                if call_row.data:
+                    call_id = call_row.data[0]["id"]
+                    logger.info("Created call record for SIP call: %s", call_id)
+            except Exception as e:
+                logger.warning("Failed to create call record for SIP call: %s", e)
 
     business_name = ""
     business_phone = ""
