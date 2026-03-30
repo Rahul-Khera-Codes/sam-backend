@@ -11,6 +11,8 @@ from app.core.supabase import supabase, supabase_admin
 from app.schemas.calls import (
     InitiateCallRequest,
     InitiateCallResponse,
+    OutboundCallRequest,
+    OutboundCallResponse,
     CallResponse,
     TranscriptResponse,
     CallSummaryResponse,
@@ -296,6 +298,87 @@ async def initiate_call(
         "livekit_ws_url": settings.livekit_url,
         "status": "active",
     }
+
+
+# ── POST /calls/outbound ──────────────────────
+# Dials a customer via PSTN and puts agent in the room.
+# Flow: create room → dispatch agent → SIP INVITE customer → DB record
+
+@router.post("/outbound", response_model=OutboundCallResponse, status_code=201)
+async def initiate_outbound_call(
+    body: OutboundCallRequest,
+    user_id: str = Depends(get_user_id),
+):
+    # Look up the business's active phone number (used as caller ID)
+    phone_row = (
+        supabase_admin.table("business_phone_numbers")
+        .select("phone_number")
+        .eq("business_id", body.business_id)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+    if not phone_row.data:
+        raise HTTPException(
+            status_code=422,
+            detail="No active phone number provisioned for this business. Provision one first.",
+        )
+    from_number = phone_row.data[0]["phone_number"]
+
+    if not settings.livekit_sip_outbound_trunk_id:
+        raise HTTPException(
+            status_code=503,
+            detail="Outbound SIP trunk not configured. Provision a phone number first.",
+        )
+
+    # 1. Create LiveKit room
+    room_id = livekit_service.generate_room_id()
+    await livekit_service.create_room(room_id)
+
+    # 2. Create call record
+    call_data = {
+        "business_id": body.business_id,
+        "location_id": body.location_id,
+        "caller_phone": body.to_phone_number,
+        "caller_name": body.call_purpose or None,
+        "direction": "outbound",
+        "status": "initiating",
+        "livekit_room_id": room_id,
+        "handled_by": user_id,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    result = supabase_admin.table("calls").insert(call_data).execute()
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to create call record")
+    call_id = result.data[0]["id"]
+
+    # 3. Dispatch voice agent with outbound context
+    await livekit_service.create_agent_dispatch(
+        room_id,
+        metadata={
+            "call_id": call_id,
+            "business_id": body.business_id,
+            "location_id": body.location_id or "",
+            "call_direction": "outbound",
+            "call_purpose": body.call_purpose or "",
+        },
+    )
+
+    # 4. Dial the customer via SIP
+    try:
+        await livekit_service.create_sip_participant(
+            room_id,
+            to_number=body.to_phone_number,
+            from_number=from_number,
+        )
+    except Exception as e:
+        logger.error("SIP dial failed: %s", e)
+        supabase_admin.table("calls").update({"status": "failed"}).eq("id", call_id).execute()
+        raise HTTPException(status_code=502, detail=f"SIP dial failed: {e}")
+
+    supabase_admin.table("calls").update({"status": "active"}).eq("id", call_id).execute()
+
+    return {"call_id": call_id, "livekit_room_id": room_id, "status": "active"}
 
 
 # ── PUT /calls/{id}/status ────────────────────

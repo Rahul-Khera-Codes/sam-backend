@@ -15,7 +15,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 from livekit import agents, rtc
@@ -25,1513 +25,44 @@ from livekit.plugins import (
     noise_cancellation,
 )
 
+from gcal_helpers import (
+    _gcal_create_event,
+    _gcal_update_event,
+    _gcal_delete_event,
+    _gcal_get_superadmin_id,
+)
+from gmail_helpers import (
+    _gmail_send_confirmation,
+    _gmail_send_staff_notification,
+    _gmail_send_reschedule_confirmation,
+    _gmail_send_staff_reschedule_notification,
+    _gmail_send_cancellation_confirmation,
+    _gmail_send_staff_cancellation_notification,
+)
+from supabase_helpers import (
+    _get_supabase,
+    _fetch_business,
+    _fetch_locations,
+    _fetch_services,
+    _fetch_staff_with_ids,
+    _fetch_user_service_ids,
+    _fetch_user_availability,
+    _fetch_user_overrides,
+    _fetch_appointments_on_date,
+    _compute_available_slots,
+    _fmt_time_12h,
+    _is_feature_enabled,
+)
+from sms_helpers import (
+    send_appointment_confirmation_sms,
+    send_missed_call_sms,
+)
+from prompt_builder import DEFAULT_INSTRUCTIONS, build_instructions
+
 
 load_dotenv(".env.local")
 
 logger = logging.getLogger("voice-agent")
-
-GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-GOOGLE_CALENDAR_BASE = "https://www.googleapis.com/calendar/v3"
-
-DEFAULT_INSTRUCTIONS = """
-You are a helpful AI customer service assistant.
-Be friendly, professional, and concise in all responses.
-If you cannot help with something, offer to transfer the caller to a human agent.
-
-Booking a new appointment:
-1. Ask which location they prefer (if the business has multiple).
-2. Ask what service they need, then use get_services if you don't already have the list.
-3. Ask if they have a preferred staff member; otherwise offer the next available using get_staff_for_service.
-4. Use get_available_slots to find open times and offer a few options.
-5. Collect the customer's name, phone number, and email address (required for confirmation email).
-6. Repeat all details back clearly before calling book_appointment.
-7. Confirm the booking ID once done.
-
-Rescheduling or cancelling:
-1. Ask for the customer's name to look up their appointment using find_appointments.
-2. Read back the appointment details (service, date, time) — do NOT read out the ref ID to the customer, it is for internal use only.
-3. If multiple appointments are found, ask which one they mean by service and date — not by ref.
-4. For reschedule: check new availability with get_available_slots, then call update_appointment passing appointment_ref and client_name internally.
-5. For cancel: confirm once more verbally using service + date + time (e.g. "Just to confirm, you'd like to cancel your Haircut on April 2nd at 4 PM?"), then call cancel_appointment passing appointment_ref and client_name internally.
-
-General rules:
-- Never invent availability — always use the tools to check.
-- Confirm details clearly before any write action (book, update, cancel).
-- If a tool returns an error, apologise and offer to transfer to a human.
-"""
-
-
-# ── Google Calendar helpers (agent-side, async HTTP) ─────────────────────────
-
-async def _gcal_refresh_token(refresh_token: str) -> dict | None:
-    """Refresh a Google access token. Returns token dict or None."""
-    try:
-        import httpx
-        client_id = os.getenv("GOOGLE_CLIENT_ID", "")
-        client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
-        if not client_id or not client_secret:
-            return None
-        async with httpx.AsyncClient() as http:
-            r = await http.post(GOOGLE_TOKEN_URL, data={
-                "refresh_token": refresh_token,
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "grant_type": "refresh_token",
-            })
-            if r.status_code == 200:
-                return r.json()
-    except Exception as e:
-        logger.warning("Google token refresh failed: %s", e)
-    return None
-
-
-async def _gcal_get_valid_token(supabase, staff_id: str) -> str | None:
-    """
-    Fetch the Google Calendar token for a staff member and refresh if expired.
-    Returns a valid access token or None if not connected / refresh failed.
-    """
-    try:
-        r = supabase.table("google_calendar_tokens").select("*").eq("staff_id", staff_id).limit(1).execute()
-        data = getattr(r, "data", None) or []
-        if not data:
-            return None
-        row = data[0]
-
-        expiry_raw = row.get("token_expiry")
-        if expiry_raw:
-            try:
-                expiry = datetime.fromisoformat(str(expiry_raw).replace("Z", "+00:00"))
-            except ValueError:
-                expiry = datetime.now(timezone.utc)
-            if expiry.tzinfo is None:
-                expiry = expiry.replace(tzinfo=timezone.utc)
-            if datetime.now(timezone.utc) >= expiry:
-                refreshed = await _gcal_refresh_token(row["refresh_token"])
-                if not refreshed:
-                    return None
-                new_expiry = datetime.now(timezone.utc) + timedelta(seconds=refreshed.get("expires_in", 3600) - 60)
-                supabase.table("google_calendar_tokens").update({
-                    "access_token": refreshed["access_token"],
-                    "token_expiry": new_expiry.isoformat(),
-                }).eq("id", row["id"]).execute()
-                return refreshed["access_token"]
-
-        return row["access_token"]
-    except Exception as e:
-        logger.warning("Failed to get Google token for staff %s: %s", staff_id, e)
-        return None
-
-
-def _gcal_build_event(appointment: dict) -> dict:
-    """Build a Google Calendar event body from an appointment dict."""
-    date = appointment.get("appointment_date", "")
-    time_str = appointment.get("appointment_time", "00:00")
-    duration_raw = appointment.get("duration", "60")
-    try:
-        duration_minutes = int(str(duration_raw).split()[0])
-    except (ValueError, IndexError):
-        duration_minutes = 60
-
-    hour, minute = map(int, time_str.split(":"))
-    end_total = hour * 60 + minute + duration_minutes
-    end_hour, end_minute = divmod(end_total, 60)
-
-    description_parts = []
-    if appointment.get("service"):
-        description_parts.append(f"Service: {appointment['service']}")
-    if appointment.get("notes"):
-        description_parts.append(f"Notes: {appointment['notes']}")
-
-    return {
-        "summary": f"{appointment.get('client_name', 'Client')} — {appointment.get('service', 'Appointment')}",
-        "description": "\n".join(description_parts),
-        "start": {"dateTime": f"{date}T{time_str}:00", "timeZone": "UTC"},
-        "end": {"dateTime": f"{date}T{end_hour:02d}:{end_minute:02d}:00", "timeZone": "UTC"},
-    }
-
-
-async def _gcal_create_event(supabase, staff_id: str, appointment: dict) -> str | None:
-    """Create a Google Calendar event. Returns google_event_id or None."""
-    access_token = await _gcal_get_valid_token(supabase, staff_id)
-    if not access_token:
-        return None
-    try:
-        import httpx
-        async with httpx.AsyncClient() as http:
-            r = await http.post(
-                f"{GOOGLE_CALENDAR_BASE}/calendars/primary/events",
-                headers={"Authorization": f"Bearer {access_token}"},
-                json=_gcal_build_event(appointment),
-            )
-            if r.status_code == 200:
-                return r.json().get("id")
-    except Exception as e:
-        logger.warning("Failed to create Google Calendar event: %s", e)
-    return None
-
-
-async def _gcal_update_event(supabase, staff_id: str, google_event_id: str, appointment: dict) -> bool:
-    """Update an existing Google Calendar event."""
-    access_token = await _gcal_get_valid_token(supabase, staff_id)
-    if not access_token:
-        return False
-    try:
-        import httpx
-        async with httpx.AsyncClient() as http:
-            r = await http.patch(
-                f"{GOOGLE_CALENDAR_BASE}/calendars/primary/events/{google_event_id}",
-                headers={"Authorization": f"Bearer {access_token}"},
-                json=_gcal_build_event(appointment),
-            )
-            return r.status_code == 200
-    except Exception as e:
-        logger.warning("Failed to update Google Calendar event %s: %s", google_event_id, e)
-    return False
-
-
-async def _gcal_delete_event(supabase, staff_id: str, google_event_id: str) -> bool:
-    """Delete a Google Calendar event."""
-    access_token = await _gcal_get_valid_token(supabase, staff_id)
-    if not access_token:
-        return False
-    try:
-        import httpx
-        async with httpx.AsyncClient() as http:
-            r = await http.delete(
-                f"{GOOGLE_CALENDAR_BASE}/calendars/primary/events/{google_event_id}",
-                headers={"Authorization": f"Bearer {access_token}"},
-            )
-            return r.status_code in (204, 410)
-    except Exception as e:
-        logger.warning("Failed to delete Google Calendar event %s: %s", google_event_id, e)
-    return False
-
-
-def _gcal_get_superadmin_id(supabase, business_id: str) -> str | None:
-    """Return the user_id of the first super_admin for a business, or None."""
-    try:
-        r = (
-            supabase.table("user_roles")
-            .select("user_id")
-            .eq("business_id", business_id)
-            .eq("role", "super_admin")
-            .limit(1)
-            .execute()
-        )
-        data = getattr(r, "data", None) or []
-        return data[0]["user_id"] if data else None
-    except Exception as e:
-        logger.warning("Failed to fetch superadmin for business %s: %s", business_id, e)
-        return None
-
-
-# ── Gmail helpers (agent-side, async HTTP) ───────────────────────────────────
-
-GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
-
-
-async def _gmail_get_valid_token(supabase, business_id: str) -> tuple[str | None, str]:
-    """
-    Return (access_token, sender_email) for the business Gmail account.
-    Refreshes the token if expired.
-    """
-    try:
-        r = supabase.table("gmail_tokens").select("*").eq("business_id", business_id).limit(1).execute()
-        data = getattr(r, "data", None) or []
-        if not data:
-            return None, ""
-        row = data[0]
-
-        expiry_raw = row.get("token_expiry")
-        if expiry_raw:
-            try:
-                expiry = datetime.fromisoformat(str(expiry_raw).replace("Z", "+00:00"))
-            except ValueError:
-                expiry = datetime.now(timezone.utc)
-            if expiry.tzinfo is None:
-                expiry = expiry.replace(tzinfo=timezone.utc)
-            if datetime.now(timezone.utc) >= expiry:
-                import httpx
-                client_id = os.getenv("GOOGLE_CLIENT_ID", "")
-                client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
-                if not client_id or not client_secret:
-                    return None, ""
-                async with httpx.AsyncClient() as http:
-                    resp = await http.post(GOOGLE_TOKEN_URL, data={
-                        "refresh_token": row["refresh_token"],
-                        "client_id": client_id,
-                        "client_secret": client_secret,
-                        "grant_type": "refresh_token",
-                    })
-                    if resp.status_code != 200:
-                        return None, ""
-                    refreshed = resp.json()
-                new_expiry = datetime.now(timezone.utc) + timedelta(seconds=refreshed.get("expires_in", 3600) - 60)
-                supabase.table("gmail_tokens").update({
-                    "access_token": refreshed["access_token"],
-                    "token_expiry": new_expiry.isoformat(),
-                }).eq("business_id", business_id).execute()
-                return refreshed["access_token"], row.get("google_email", "")
-
-        return row["access_token"], row.get("google_email", "")
-    except Exception as e:
-        logger.warning("Failed to get Gmail token for business %s: %s", business_id, e)
-        return None, ""
-
-
-async def _gmail_send_confirmation(
-    supabase,
-    business_id: str,
-    business_name: str,
-    business_phone: str,
-    client_name: str,
-    client_email: str,
-    service: str,
-    staff_name: str,
-    location: str,
-    date: str,
-    time: str,
-    duration_minutes: int,
-    confirmation_ref: str,
-) -> None:
-    """Send appointment confirmation email via the business Gmail account (best-effort)."""
-    import base64
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
-    import httpx
-
-    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id)
-    if not access_token:
-        logger.info("Gmail not connected for business %s — skipping email", business_id)
-        return
-
-    time_12h = _fmt_time_12h(time)
-    subject = f"Appointment Confirmed — {service} on {date}"
-
-    plain = (
-        f"Hi {client_name},\n\nYour appointment is confirmed!\n\n"
-        f"Service:   {service}\nWith:      {staff_name}\nLocation:  {location}\n"
-        f"Date:      {date}\nTime:      {time_12h}\nDuration:  {duration_minutes} min\n"
-        f"Ref:       {confirmation_ref}\n\n"
-        + (f"To reschedule, call us at {business_phone}.\n\n" if business_phone else "")
-        + f"Thank you,\n{business_name}"
-    )
-
-    html = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"/>
-<style>
-body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}}
-.w{{max-width:560px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);}}
-.h{{background:#18181b;padding:28px 32px;}}.h h1{{margin:0;color:#fff;font-size:20px;}}.h p{{margin:4px 0 0;color:#a1a1aa;font-size:13px;}}
-.badge{{display:inline-block;background:#22c55e;color:#fff;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;margin-top:12px;}}
-.b{{padding:28px 32px;}}.g{{font-size:16px;color:#18181b;margin:0 0 20px;}}
-.card{{background:#f9f9f9;border:1px solid #e4e4e7;border-radius:8px;padding:20px 24px;margin-bottom:24px;}}
-.row{{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #e4e4e7;}}
-.row:last-child{{border-bottom:none;}}.lbl{{color:#71717a;font-size:13px;}}.val{{color:#18181b;font-size:13px;font-weight:500;}}
-.ref{{background:#18181b;color:#fff;text-align:center;border-radius:8px;padding:14px;font-size:18px;letter-spacing:2px;font-weight:700;margin-bottom:24px;}}
-.ref-lbl{{font-size:11px;color:#a1a1aa;margin-bottom:4px;}}
-.foot{{padding:20px 32px;background:#f4f4f5;font-size:12px;color:#71717a;text-align:center;}}
-</style></head>
-<body><div class="w">
-<div class="h"><h1>{business_name}</h1><p>Appointment Confirmation</p><span class="badge">CONFIRMED</span></div>
-<div class="b">
-<p class="g">Hi {client_name}, your appointment is confirmed!</p>
-<div class="card">
-<div class="row"><span class="lbl">Service</span><span class="val">{service}</span></div>
-<div class="row"><span class="lbl">With</span><span class="val">{staff_name}</span></div>
-<div class="row"><span class="lbl">Location</span><span class="val">{location}</span></div>
-<div class="row"><span class="lbl">Date</span><span class="val">{date}</span></div>
-<div class="row"><span class="lbl">Time</span><span class="val">{time_12h}</span></div>
-<div class="row"><span class="lbl">Duration</span><span class="val">{duration_minutes} min</span></div>
-</div>
-<div class="ref"><div class="ref-lbl">CONFIRMATION REFERENCE</div>{confirmation_ref}</div>
-{"<p style='color:#71717a;font-size:13px;margin:0'>Need to reschedule? Call us at " + business_phone + "</p>" if business_phone else ""}
-</div>
-<div class="foot">&copy; {business_name} &bull; Automated confirmation</div>
-</div></body></html>"""
-
-    msg = MIMEMultipart("alternative")
-    msg["From"] = f"{business_name} <{sender_email}>"
-    msg["To"] = client_email
-    msg["Subject"] = subject
-    msg.attach(MIMEText(plain, "plain"))
-    msg.attach(MIMEText(html, "html"))
-    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
-
-    try:
-        async with httpx.AsyncClient() as http:
-            resp = await http.post(
-                GMAIL_SEND_URL,
-                headers={"Authorization": f"Bearer {access_token}"},
-                json={"raw": raw},
-            )
-            if resp.status_code in (200, 201):
-                logger.info("Confirmation email sent to %s", client_email)
-            else:
-                logger.warning("Gmail send failed %s: %s", resp.status_code, resp.text[:200])
-    except Exception as e:
-        logger.warning("Failed to send Gmail confirmation: %s", e)
-
-
-async def _gmail_send_staff_notification(
-    supabase,
-    business_id: str,
-    business_name: str,
-    staff_user_id: str,
-    staff_name: str,
-    client_name: str,
-    client_phone: str,
-    client_email: str,
-    service: str,
-    location: str,
-    date: str,
-    time: str,
-    duration_minutes: int,
-    confirmation_ref: str,
-) -> None:
-    """Send a new-booking notification to the assigned staff member (best-effort)."""
-    import base64
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
-    import httpx
-
-    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id)
-    if not access_token:
-        return
-
-    # Fetch staff email from Supabase auth
-    staff_email = ""
-    try:
-        resp = supabase.auth.admin.get_user_by_id(staff_user_id)
-        user = getattr(resp, "user", None)
-        if user:
-            staff_email = getattr(user, "email", "") or ""
-    except Exception as e:
-        logger.warning("Could not fetch staff email for %s: %s", staff_user_id, e)
-
-    if not staff_email:
-        logger.info("No email found for staff %s — skipping staff notification", staff_user_id)
-        return
-
-    time_12h = _fmt_time_12h(time)
-    subject = f"New Booking: {client_name} — {service} on {date}"
-
-    plain = (
-        f"Hi {staff_name},\n\nYou have a new appointment!\n\n"
-        f"Customer:  {client_name}\n"
-        f"Phone:     {client_phone}\n"
-        + (f"Email:     {client_email}\n" if client_email else "")
-        + f"Service:   {service}\n"
-        f"Location:  {location}\n"
-        f"Date:      {date}\n"
-        f"Time:      {time_12h}\n"
-        f"Duration:  {duration_minutes} min\n"
-        f"Ref:       {confirmation_ref}\n\n"
-        f"— {business_name}"
-    )
-
-    html = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"/>
-<style>
-body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}}
-.w{{max-width:560px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);}}
-.h{{background:#18181b;padding:28px 32px;}}.h h1{{margin:0;color:#fff;font-size:20px;}}.h p{{margin:4px 0 0;color:#a1a1aa;font-size:13px;}}
-.badge{{display:inline-block;background:#3b82f6;color:#fff;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;margin-top:12px;}}
-.b{{padding:28px 32px;}}.g{{font-size:16px;color:#18181b;margin:0 0 20px;}}
-.card{{background:#f9f9f9;border:1px solid #e4e4e7;border-radius:8px;padding:20px 24px;margin-bottom:24px;}}
-.section-label{{font-size:11px;font-weight:600;color:#71717a;text-transform:uppercase;letter-spacing:.8px;margin-bottom:12px;}}
-.row{{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #e4e4e7;}}
-.row:last-child{{border-bottom:none;}}.lbl{{color:#71717a;font-size:13px;}}.val{{color:#18181b;font-size:13px;font-weight:500;}}
-.ref{{background:#18181b;color:#fff;text-align:center;border-radius:8px;padding:14px;font-size:18px;letter-spacing:2px;font-weight:700;margin-bottom:0;}}
-.ref-lbl{{font-size:11px;color:#a1a1aa;margin-bottom:4px;}}
-.foot{{padding:20px 32px;background:#f4f4f5;font-size:12px;color:#71717a;text-align:center;}}
-</style></head>
-<body><div class="w">
-<div class="h"><h1>{business_name}</h1><p>New Appointment Notification</p><span class="badge">NEW BOOKING</span></div>
-<div class="b">
-<p class="g">Hi {staff_name}, you have a new appointment!</p>
-<div class="card">
-<div class="section-label">Customer</div>
-<div class="row"><span class="lbl">Name</span><span class="val">{client_name}</span></div>
-<div class="row"><span class="lbl">Phone</span><span class="val">{client_phone}</span></div>
-{"<div class='row'><span class='lbl'>Email</span><span class='val'>" + client_email + "</span></div>" if client_email else ""}
-</div>
-<div class="card">
-<div class="section-label">Appointment</div>
-<div class="row"><span class="lbl">Service</span><span class="val">{service}</span></div>
-<div class="row"><span class="lbl">Location</span><span class="val">{location}</span></div>
-<div class="row"><span class="lbl">Date</span><span class="val">{date}</span></div>
-<div class="row"><span class="lbl">Time</span><span class="val">{time_12h}</span></div>
-<div class="row"><span class="lbl">Duration</span><span class="val">{duration_minutes} min</span></div>
-</div>
-<div class="ref"><div class="ref-lbl">CONFIRMATION REFERENCE</div>{confirmation_ref}</div>
-</div>
-<div class="foot">&copy; {business_name} &bull; Staff notification</div>
-</div></body></html>"""
-
-    msg = MIMEMultipart("alternative")
-    msg["From"] = f"{business_name} <{sender_email}>"
-    msg["To"] = staff_email
-    msg["Subject"] = subject
-    msg.attach(MIMEText(plain, "plain"))
-    msg.attach(MIMEText(html, "html"))
-    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
-
-    try:
-        async with httpx.AsyncClient() as http:
-            resp = await http.post(
-                GMAIL_SEND_URL,
-                headers={"Authorization": f"Bearer {access_token}"},
-                json={"raw": raw},
-            )
-            if resp.status_code in (200, 201):
-                logger.info("Staff notification sent to %s", staff_email)
-            else:
-                logger.warning("Staff Gmail notify failed %s: %s", resp.status_code, resp.text[:200])
-    except Exception as e:
-        logger.warning("Failed to send staff notification email: %s", e)
-
-
-
-async def _gmail_send_reschedule_confirmation(
-    supabase,
-    business_id: str,
-    business_name: str,
-    business_phone: str,
-    client_name: str,
-    client_email: str,
-    service: str,
-    staff_name: str,
-    location: str,
-    new_date: str,
-    new_time: str,
-    duration_minutes: int,
-    confirmation_ref: str,
-) -> None:
-    """Send reschedule confirmation email to the customer (best-effort)."""
-    import base64
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
-    import httpx
-
-    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id)
-    if not access_token:
-        return
-
-    time_12h = _fmt_time_12h(new_time)
-    subject = f"Appointment Rescheduled — {service} on {new_date}"
-
-    plain = (
-        f"Hi {client_name},\n\nYour appointment has been rescheduled.\n\n"
-        f"Service:   {service}\nWith:      {staff_name}\nLocation:  {location}\n"
-        f"New Date:  {new_date}\nNew Time:  {time_12h}\nDuration:  {duration_minutes} min\n"
-        f"Ref:       {confirmation_ref}\n\n"
-        + (f"Need further changes? Call us at {business_phone}.\n\n" if business_phone else "")
-        + f"Thank you,\n{business_name}"
-    )
-
-    html = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"/>
-<style>
-body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}}
-.w{{max-width:560px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);}}
-.h{{background:#18181b;padding:28px 32px;}}.h h1{{margin:0;color:#fff;font-size:20px;}}.h p{{margin:4px 0 0;color:#a1a1aa;font-size:13px;}}
-.badge{{display:inline-block;background:#f59e0b;color:#fff;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;margin-top:12px;}}
-.b{{padding:28px 32px;}}.g{{font-size:16px;color:#18181b;margin:0 0 20px;}}
-.card{{background:#f9f9f9;border:1px solid #e4e4e7;border-radius:8px;padding:20px 24px;margin-bottom:24px;}}
-.row{{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #e4e4e7;}}
-.row:last-child{{border-bottom:none;}}.lbl{{color:#71717a;font-size:13px;}}.val{{color:#18181b;font-size:13px;font-weight:500;}}
-.ref{{background:#18181b;color:#fff;text-align:center;border-radius:8px;padding:14px;font-size:18px;letter-spacing:2px;font-weight:700;margin-bottom:24px;}}
-.ref-lbl{{font-size:11px;color:#a1a1aa;margin-bottom:4px;}}
-.foot{{padding:20px 32px;background:#f4f4f5;font-size:12px;color:#71717a;text-align:center;}}
-</style></head>
-<body><div class="w">
-<div class="h"><h1>{business_name}</h1><p>Appointment Rescheduled</p><span class="badge">RESCHEDULED</span></div>
-<div class="b">
-<p class="g">Hi {client_name}, your appointment has been rescheduled.</p>
-<div class="card">
-<div class="row"><span class="lbl">Service</span><span class="val">{service}</span></div>
-<div class="row"><span class="lbl">With</span><span class="val">{staff_name}</span></div>
-<div class="row"><span class="lbl">Location</span><span class="val">{location}</span></div>
-<div class="row"><span class="lbl">New Date</span><span class="val">{new_date}</span></div>
-<div class="row"><span class="lbl">New Time</span><span class="val">{time_12h}</span></div>
-<div class="row"><span class="lbl">Duration</span><span class="val">{duration_minutes} min</span></div>
-</div>
-<div class="ref"><div class="ref-lbl">CONFIRMATION REFERENCE</div>{confirmation_ref}</div>
-{"<p style='color:#71717a;font-size:13px;margin:0'>Need further changes? Call us at " + business_phone + "</p>" if business_phone else ""}
-</div>
-<div class="foot">&copy; {business_name} &bull; Automated notification</div>
-</div></body></html>"""
-
-    msg = MIMEMultipart("alternative")
-    msg["From"] = f"{business_name} <{sender_email}>"
-    msg["To"] = client_email
-    msg["Subject"] = subject
-    msg.attach(MIMEText(plain, "plain"))
-    msg.attach(MIMEText(html, "html"))
-    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
-
-    try:
-        async with httpx.AsyncClient() as http:
-            resp = await http.post(
-                GMAIL_SEND_URL,
-                headers={"Authorization": f"Bearer {access_token}"},
-                json={"raw": raw},
-            )
-            if resp.status_code in (200, 201):
-                logger.info("Reschedule confirmation sent to %s", client_email)
-            else:
-                logger.warning("Gmail reschedule send failed %s: %s", resp.status_code, resp.text[:200])
-    except Exception as e:
-        logger.warning("Failed to send reschedule confirmation: %s", e)
-
-
-async def _gmail_send_staff_reschedule_notification(
-    supabase,
-    business_id: str,
-    business_name: str,
-    staff_user_id: str,
-    staff_name: str,
-    client_name: str,
-    client_phone: str,
-    client_email: str,
-    service: str,
-    location: str,
-    new_date: str,
-    new_time: str,
-    duration_minutes: int,
-    confirmation_ref: str,
-) -> None:
-    """Notify assigned staff of a rescheduled appointment (best-effort)."""
-    import base64
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
-    import httpx
-
-    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id)
-    if not access_token:
-        return
-
-    staff_email = ""
-    try:
-        resp = supabase.auth.admin.get_user_by_id(staff_user_id)
-        user = getattr(resp, "user", None)
-        if user:
-            staff_email = getattr(user, "email", "") or ""
-    except Exception as e:
-        logger.warning("Could not fetch staff email for %s: %s", staff_user_id, e)
-
-    if not staff_email:
-        return
-
-    time_12h = _fmt_time_12h(new_time)
-    subject = f"Appointment Rescheduled: {client_name} — {service} on {new_date}"
-
-    plain = (
-        f"Hi {staff_name},\n\nAn appointment has been rescheduled.\n\n"
-        f"Customer:  {client_name}\nPhone:     {client_phone}\n"
-        + (f"Email:     {client_email}\n" if client_email else "")
-        + f"Service:   {service}\nLocation:  {location}\n"
-        f"New Date:  {new_date}\nNew Time:  {time_12h}\nDuration:  {duration_minutes} min\n"
-        f"Ref:       {confirmation_ref}\n\n— {business_name}"
-    )
-
-    html = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"/>
-<style>
-body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}}
-.w{{max-width:560px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);}}
-.h{{background:#18181b;padding:28px 32px;}}.h h1{{margin:0;color:#fff;font-size:20px;}}.h p{{margin:4px 0 0;color:#a1a1aa;font-size:13px;}}
-.badge{{display:inline-block;background:#f59e0b;color:#fff;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;margin-top:12px;}}
-.b{{padding:28px 32px;}}.g{{font-size:16px;color:#18181b;margin:0 0 20px;}}
-.card{{background:#f9f9f9;border:1px solid #e4e4e7;border-radius:8px;padding:20px 24px;margin-bottom:24px;}}
-.section-label{{font-size:11px;font-weight:600;color:#71717a;text-transform:uppercase;letter-spacing:.8px;margin-bottom:12px;}}
-.row{{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #e4e4e7;}}
-.row:last-child{{border-bottom:none;}}.lbl{{color:#71717a;font-size:13px;}}.val{{color:#18181b;font-size:13px;font-weight:500;}}
-.foot{{padding:20px 32px;background:#f4f4f5;font-size:12px;color:#71717a;text-align:center;}}
-</style></head>
-<body><div class="w">
-<div class="h"><h1>{business_name}</h1><p>Appointment Rescheduled</p><span class="badge">RESCHEDULED</span></div>
-<div class="b">
-<p class="g">Hi {staff_name}, an appointment has been rescheduled.</p>
-<div class="card">
-<div class="section-label">Customer</div>
-<div class="row"><span class="lbl">Name</span><span class="val">{client_name}</span></div>
-<div class="row"><span class="lbl">Phone</span><span class="val">{client_phone}</span></div>
-{"<div class='row'><span class='lbl'>Email</span><span class='val'>" + client_email + "</span></div>" if client_email else ""}
-</div>
-<div class="card">
-<div class="section-label">New Schedule</div>
-<div class="row"><span class="lbl">Service</span><span class="val">{service}</span></div>
-<div class="row"><span class="lbl">Location</span><span class="val">{location}</span></div>
-<div class="row"><span class="lbl">New Date</span><span class="val">{new_date}</span></div>
-<div class="row"><span class="lbl">New Time</span><span class="val">{time_12h}</span></div>
-<div class="row"><span class="lbl">Duration</span><span class="val">{duration_minutes} min</span></div>
-<div class="row"><span class="lbl">Ref</span><span class="val">{confirmation_ref}</span></div>
-</div>
-</div>
-<div class="foot">&copy; {business_name} &bull; Staff notification</div>
-</div></body></html>"""
-
-    msg = MIMEMultipart("alternative")
-    msg["From"] = f"{business_name} <{sender_email}>"
-    msg["To"] = staff_email
-    msg["Subject"] = subject
-    msg.attach(MIMEText(plain, "plain"))
-    msg.attach(MIMEText(html, "html"))
-    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
-
-    try:
-        async with httpx.AsyncClient() as http:
-            resp = await http.post(
-                GMAIL_SEND_URL,
-                headers={"Authorization": f"Bearer {access_token}"},
-                json={"raw": raw},
-            )
-            if resp.status_code in (200, 201):
-                logger.info("Staff reschedule notification sent to %s", staff_email)
-            else:
-                logger.warning("Staff reschedule notify failed %s: %s", resp.status_code, resp.text[:200])
-    except Exception as e:
-        logger.warning("Failed to send staff reschedule notification: %s", e)
-
-
-async def _gmail_send_cancellation_confirmation(
-    supabase,
-    business_id: str,
-    business_name: str,
-    business_phone: str,
-    client_name: str,
-    client_email: str,
-    service: str,
-    staff_name: str,
-    location: str,
-    date: str,
-    time: str,
-    duration_minutes: int,
-    confirmation_ref: str,
-) -> None:
-    """Send cancellation confirmation email to the customer (best-effort)."""
-    import base64
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
-    import httpx
-
-    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id)
-    if not access_token:
-        return
-
-    time_12h = _fmt_time_12h(time)
-    subject = f"Appointment Cancelled — {service} on {date}"
-
-    plain = (
-        f"Hi {client_name},\n\nYour appointment has been cancelled.\n\n"
-        f"Service:   {service}\nWith:      {staff_name}\nLocation:  {location}\n"
-        f"Date:      {date}\nTime:      {time_12h}\nRef:       {confirmation_ref}\n\n"
-        + (f"To book a new appointment, call us at {business_phone}.\n\n" if business_phone else "")
-        + f"Thank you,\n{business_name}"
-    )
-
-    html = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"/>
-<style>
-body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}}
-.w{{max-width:560px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);}}
-.h{{background:#18181b;padding:28px 32px;}}.h h1{{margin:0;color:#fff;font-size:20px;}}.h p{{margin:4px 0 0;color:#a1a1aa;font-size:13px;}}
-.badge{{display:inline-block;background:#ef4444;color:#fff;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;margin-top:12px;}}
-.b{{padding:28px 32px;}}.g{{font-size:16px;color:#18181b;margin:0 0 20px;}}
-.card{{background:#f9f9f9;border:1px solid #e4e4e7;border-radius:8px;padding:20px 24px;margin-bottom:24px;}}
-.row{{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #e4e4e7;}}
-.row:last-child{{border-bottom:none;}}.lbl{{color:#71717a;font-size:13px;}}.val{{color:#18181b;font-size:13px;font-weight:500;}}
-.ref{{background:#18181b;color:#fff;text-align:center;border-radius:8px;padding:14px;font-size:18px;letter-spacing:2px;font-weight:700;margin-bottom:24px;}}
-.ref-lbl{{font-size:11px;color:#a1a1aa;margin-bottom:4px;}}
-.foot{{padding:20px 32px;background:#f4f4f5;font-size:12px;color:#71717a;text-align:center;}}
-</style></head>
-<body><div class="w">
-<div class="h"><h1>{business_name}</h1><p>Appointment Cancelled</p><span class="badge">CANCELLED</span></div>
-<div class="b">
-<p class="g">Hi {client_name}, your appointment has been cancelled.</p>
-<div class="card">
-<div class="row"><span class="lbl">Service</span><span class="val">{service}</span></div>
-<div class="row"><span class="lbl">With</span><span class="val">{staff_name}</span></div>
-<div class="row"><span class="lbl">Location</span><span class="val">{location}</span></div>
-<div class="row"><span class="lbl">Date</span><span class="val">{date}</span></div>
-<div class="row"><span class="lbl">Time</span><span class="val">{time_12h}</span></div>
-</div>
-<div class="ref"><div class="ref-lbl">CANCELLED REFERENCE</div>{confirmation_ref}</div>
-{"<p style='color:#71717a;font-size:13px;margin:0'>To rebook, call us at " + business_phone + "</p>" if business_phone else ""}
-</div>
-<div class="foot">&copy; {business_name} &bull; Automated notification</div>
-</div></body></html>"""
-
-    msg = MIMEMultipart("alternative")
-    msg["From"] = f"{business_name} <{sender_email}>"
-    msg["To"] = client_email
-    msg["Subject"] = subject
-    msg.attach(MIMEText(plain, "plain"))
-    msg.attach(MIMEText(html, "html"))
-    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
-
-    try:
-        async with httpx.AsyncClient() as http:
-            resp = await http.post(
-                GMAIL_SEND_URL,
-                headers={"Authorization": f"Bearer {access_token}"},
-                json={"raw": raw},
-            )
-            if resp.status_code in (200, 201):
-                logger.info("Cancellation email sent to %s", client_email)
-            else:
-                logger.warning("Gmail cancel send failed %s: %s", resp.status_code, resp.text[:200])
-    except Exception as e:
-        logger.warning("Failed to send cancellation email: %s", e)
-
-
-async def _gmail_send_staff_cancellation_notification(
-    supabase,
-    business_id: str,
-    business_name: str,
-    staff_user_id: str,
-    staff_name: str,
-    client_name: str,
-    client_phone: str,
-    client_email: str,
-    service: str,
-    location: str,
-    date: str,
-    time: str,
-    duration_minutes: int,
-    confirmation_ref: str,
-) -> None:
-    """Notify assigned staff of a cancelled appointment (best-effort)."""
-    import base64
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
-    import httpx
-
-    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id)
-    if not access_token:
-        return
-
-    staff_email = ""
-    try:
-        resp = supabase.auth.admin.get_user_by_id(staff_user_id)
-        user = getattr(resp, "user", None)
-        if user:
-            staff_email = getattr(user, "email", "") or ""
-    except Exception as e:
-        logger.warning("Could not fetch staff email for %s: %s", staff_user_id, e)
-
-    if not staff_email:
-        return
-
-    time_12h = _fmt_time_12h(time)
-    subject = f"Appointment Cancelled: {client_name} — {service} on {date}"
-
-    plain = (
-        f"Hi {staff_name},\n\nAn appointment has been cancelled.\n\n"
-        f"Customer:  {client_name}\nPhone:     {client_phone}\n"
-        + (f"Email:     {client_email}\n" if client_email else "")
-        + f"Service:   {service}\nLocation:  {location}\n"
-        f"Date:      {date}\nTime:      {time_12h}\n"
-        f"Ref:       {confirmation_ref}\n\n— {business_name}"
-    )
-
-    html = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"/>
-<style>
-body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}}
-.w{{max-width:560px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);}}
-.h{{background:#18181b;padding:28px 32px;}}.h h1{{margin:0;color:#fff;font-size:20px;}}.h p{{margin:4px 0 0;color:#a1a1aa;font-size:13px;}}
-.badge{{display:inline-block;background:#ef4444;color:#fff;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;margin-top:12px;}}
-.b{{padding:28px 32px;}}.g{{font-size:16px;color:#18181b;margin:0 0 20px;}}
-.card{{background:#f9f9f9;border:1px solid #e4e4e7;border-radius:8px;padding:20px 24px;margin-bottom:24px;}}
-.section-label{{font-size:11px;font-weight:600;color:#71717a;text-transform:uppercase;letter-spacing:.8px;margin-bottom:12px;}}
-.row{{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #e4e4e7;}}
-.row:last-child{{border-bottom:none;}}.lbl{{color:#71717a;font-size:13px;}}.val{{color:#18181b;font-size:13px;font-weight:500;}}
-.foot{{padding:20px 32px;background:#f4f4f5;font-size:12px;color:#71717a;text-align:center;}}
-</style></head>
-<body><div class="w">
-<div class="h"><h1>{business_name}</h1><p>Appointment Cancelled</p><span class="badge">CANCELLED</span></div>
-<div class="b">
-<p class="g">Hi {staff_name}, an appointment has been cancelled.</p>
-<div class="card">
-<div class="section-label">Customer</div>
-<div class="row"><span class="lbl">Name</span><span class="val">{client_name}</span></div>
-<div class="row"><span class="lbl">Phone</span><span class="val">{client_phone}</span></div>
-{"<div class='row'><span class='lbl'>Email</span><span class='val'>" + client_email + "</span></div>" if client_email else ""}
-</div>
-<div class="card">
-<div class="section-label">Cancelled Appointment</div>
-<div class="row"><span class="lbl">Service</span><span class="val">{service}</span></div>
-<div class="row"><span class="lbl">Location</span><span class="val">{location}</span></div>
-<div class="row"><span class="lbl">Date</span><span class="val">{date}</span></div>
-<div class="row"><span class="lbl">Time</span><span class="val">{time_12h}</span></div>
-<div class="row"><span class="lbl">Ref</span><span class="val">{confirmation_ref}</span></div>
-</div>
-</div>
-<div class="foot">&copy; {business_name} &bull; Staff notification</div>
-</div></body></html>"""
-
-    msg = MIMEMultipart("alternative")
-    msg["From"] = f"{business_name} <{sender_email}>"
-    msg["To"] = staff_email
-    msg["Subject"] = subject
-    msg.attach(MIMEText(plain, "plain"))
-    msg.attach(MIMEText(html, "html"))
-    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
-
-    try:
-        async with httpx.AsyncClient() as http:
-            resp = await http.post(
-                GMAIL_SEND_URL,
-                headers={"Authorization": f"Bearer {access_token}"},
-                json={"raw": raw},
-            )
-            if resp.status_code in (200, 201):
-                logger.info("Staff cancellation notification sent to %s", staff_email)
-            else:
-                logger.warning("Staff cancel notify failed %s: %s", resp.status_code, resp.text[:200])
-    except Exception as e:
-        logger.warning("Failed to send staff cancellation notification: %s", e)
-
-
-# ── Supabase helpers ──────────────────────────────────────────────────────────
-
-def _get_supabase():
-    try:
-        from supabase import create_client
-        url = os.getenv("SUPABASE_URL")
-        key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-        if url and key:
-            return create_client(url, key)
-    except Exception as e:
-        logger.warning("Supabase not available: %s", e)
-    return None
-
-
-def _fetch_business(supabase, business_id: str) -> dict | None:
-    if not supabase or not business_id:
-        return None
-    try:
-        r = supabase.table("businesses").select("*").eq("id", business_id).limit(1).execute()
-        data = getattr(r, "data", None) or []
-        return data[0] if data and isinstance(data[0], dict) else None
-    except Exception as e:
-        logger.warning("Failed to fetch business: %s", e)
-        return None
-
-
-def _fetch_location(supabase, location_id: str) -> dict | None:
-    if not supabase or not location_id:
-        return None
-    try:
-        r = supabase.table("locations").select("*").eq("id", location_id).limit(1).execute()
-        data = getattr(r, "data", None) or []
-        return data[0] if data and isinstance(data[0], dict) else None
-    except Exception as e:
-        logger.warning("Failed to fetch location: %s", e)
-        return None
-
-
-def _fetch_locations(supabase, business_id: str) -> list[dict]:
-    if not supabase or not business_id:
-        return []
-    try:
-        r = (
-            supabase.table("locations")
-            .select("id, name, address, phone")
-            .eq("business_id", business_id)
-            .execute()
-        )
-        return getattr(r, "data", None) or []
-    except Exception as e:
-        logger.warning("Failed to fetch locations: %s", e)
-        return []
-
-
-def _fetch_services(supabase, business_id: str) -> list[dict]:
-    """Fetch active services for the business."""
-    if not supabase or not business_id:
-        return []
-    try:
-        r = (
-            supabase.table("services")
-            .select("id, name, description, duration_minutes, price")
-            .eq("business_id", business_id)
-            .eq("is_active", True)
-            .execute()
-        )
-        return getattr(r, "data", None) or []
-    except Exception as e:
-        logger.warning("Failed to fetch services: %s", e)
-        return []
-
-
-def _fetch_staff_with_ids(supabase, business_id: str) -> list[dict]:
-    """
-    Fetch all staff for the business.
-    Returns list of {user_id, name, location_ids}.
-    """
-    if not supabase or not business_id:
-        return []
-    try:
-        ur = supabase.table("user_roles").select("user_id").eq("business_id", business_id).execute()
-        user_ids = [r["user_id"] for r in (getattr(ur, "data", None) or []) if r.get("user_id")]
-        if not user_ids:
-            return []
-
-        ul = (
-            supabase.table("user_locations")
-            .select("user_id, location_id")
-            .in_("user_id", user_ids)
-            .execute()
-        )
-        pf = (
-            supabase.table("profiles")
-            .select("id, first_name, last_name")
-            .in_("id", user_ids)
-            .execute()
-        )
-
-        name_map: dict[str, str] = {}
-        for row in getattr(pf, "data", None) or []:
-            uid = row.get("id")
-            if uid:
-                first = (row.get("first_name") or "").strip()
-                last = (row.get("last_name") or "").strip()
-                name_map[uid] = f"{first} {last}".strip() or "Staff"
-
-        loc_map: dict[str, list[str]] = {}
-        for row in getattr(ul, "data", None) or []:
-            uid = row.get("user_id")
-            lid = row.get("location_id")
-            if uid and lid:
-                loc_map.setdefault(uid, []).append(lid)
-
-        return [
-            {
-                "user_id": uid,
-                "name": name_map.get(uid, "Staff"),
-                "location_ids": loc_map.get(uid, []),
-            }
-            for uid in user_ids
-        ]
-    except Exception as e:
-        logger.warning("Failed to fetch staff: %s", e)
-        return []
-
-
-def _fetch_user_service_ids(supabase, user_ids: list[str]) -> dict[str, list[str]]:
-    """Returns {user_id: [service_id, ...]}."""
-    if not supabase or not user_ids:
-        return {}
-    try:
-        r = (
-            supabase.table("user_services")
-            .select("user_id, service_id")
-            .in_("user_id", user_ids)
-            .execute()
-        )
-        result: dict[str, list[str]] = {}
-        for row in getattr(r, "data", None) or []:
-            uid = row.get("user_id")
-            sid = row.get("service_id")
-            if uid and sid:
-                result.setdefault(uid, []).append(sid)
-        return result
-    except Exception as e:
-        logger.warning("Failed to fetch user services: %s", e)
-        return {}
-
-
-def _fetch_user_availability(supabase, user_id: str) -> list[dict]:
-    """Fetch weekly recurring availability for a staff member."""
-    if not supabase or not user_id:
-        return []
-    try:
-        r = (
-            supabase.table("user_availability")
-            .select("day_of_week, start_time, end_time, is_available")
-            .eq("user_id", user_id)
-            .execute()
-        )
-        return getattr(r, "data", None) or []
-    except Exception as e:
-        logger.warning("Failed to fetch user availability: %s", e)
-        return []
-
-
-def _fetch_user_overrides(supabase, user_id: str, target_date: str) -> list[dict]:
-    """Fetch date-specific availability overrides (time off) for a staff member."""
-    if not supabase or not user_id:
-        return []
-    try:
-        r = (
-            supabase.table("user_availability_overrides")
-            .select("is_unavailable, start_time, end_time")
-            .eq("user_id", user_id)
-            .eq("override_date", target_date)
-            .execute()
-        )
-        return getattr(r, "data", None) or []
-    except Exception as e:
-        logger.warning("Failed to fetch user overrides: %s", e)
-        return []
-
-
-def _fetch_appointments_on_date(supabase, user_id: str, target_date: str) -> list[dict]:
-    """Fetch existing booked appointments for a staff member on a date."""
-    if not supabase or not user_id:
-        return []
-    try:
-        r = (
-            supabase.table("appointments")
-            .select("id, appointment_time, duration")
-            .eq("assigned_user_id", user_id)
-            .eq("appointment_date", target_date)
-            .neq("status", "cancelled")
-            .execute()
-        )
-        return getattr(r, "data", None) or []
-    except Exception as e:
-        logger.warning("Failed to fetch appointments on date: %s", e)
-        return []
-
-
-def _compute_available_slots(
-    availability: list[dict],
-    overrides: list[dict],
-    booked: list[dict],
-    target_date: str,
-    slot_minutes: int = 60,
-) -> list[str]:
-    """
-    Compute free time slots for a given date.
-    Returns list of "HH:MM" strings (24h).
-    """
-    try:
-        d = datetime.strptime(target_date, "%Y-%m-%d")
-    except ValueError:
-        return []
-
-    # day_of_week enum matches Python weekday: Mon=0 … Sun=6
-    day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-    day_name = day_names[d.weekday()]
-
-    # Find working window for this day
-    work_start = work_end = None
-    for row in availability:
-        if row.get("day_of_week") == day_name and row.get("is_available"):
-            st, et = row.get("start_time"), row.get("end_time")
-            if st and et:
-                work_start = datetime.strptime(st[:5], "%H:%M")
-                work_end = datetime.strptime(et[:5], "%H:%M")
-            break
-
-    if not work_start or not work_end:
-        return []
-
-    # Full-day unavailability override
-    for ov in overrides:
-        if ov.get("is_unavailable") and not ov.get("start_time"):
-            return []
-
-    # Build busy intervals
-    busy: list[tuple[datetime, datetime]] = []
-
-    for appt in booked:
-        at = appt.get("appointment_time")
-        dur_raw = str(appt.get("duration") or slot_minutes)
-        if at:
-            try:
-                dur_digits = "".join(c for c in dur_raw.split()[0] if c.isdigit())
-                dur_min = int(dur_digits) if dur_digits else slot_minutes
-            except (ValueError, AttributeError):
-                dur_min = slot_minutes
-            try:
-                s = datetime.strptime(at[:5], "%H:%M")
-                busy.append((s, s + timedelta(minutes=dur_min)))
-            except ValueError:
-                pass
-
-    for ov in overrides:
-        if ov.get("is_unavailable") and ov.get("start_time") and ov.get("end_time"):
-            try:
-                s = datetime.strptime(ov["start_time"][:5], "%H:%M")
-                e = datetime.strptime(ov["end_time"][:5], "%H:%M")
-                busy.append((s, e))
-            except ValueError:
-                pass
-
-    # Generate slots
-    slots: list[str] = []
-    current = work_start
-    while current + timedelta(minutes=slot_minutes) <= work_end:
-        slot_end = current + timedelta(minutes=slot_minutes)
-        if not any(current < b_end and slot_end > b_start for b_start, b_end in busy):
-            slots.append(current.strftime("%H:%M"))
-        current += timedelta(minutes=slot_minutes)
-
-    return slots
-
-
-def _fmt_time_12h(t: str) -> str:
-    """Convert HH:MM (24h) to 12h AM/PM string."""
-    try:
-        h, m = map(int, t.split(":"))
-        suffix = "AM" if h < 12 else "PM"
-        h12 = h % 12 or 12
-        return f"{h12}:{m:02d} {suffix}"
-    except Exception:
-        return t
-
-
-# ── Instruction builders ──────────────────────────────────────────────────────
-
-def _format_global_settings(business: dict) -> str:
-    parts = []
-    lang = business.get("language")
-    country = business.get("country")
-    date_fmt = business.get("date_format")
-    time_fmt = business.get("time_format")
-    if lang or country:
-        locale = " and ".join(p for p in [lang, country] if p)
-        if locale:
-            parts.append(f"Use the business language and region: {locale}. Speak in that language unless the caller uses another.")
-    if date_fmt:
-        parts.append(f"When stating dates use this format: {date_fmt}.")
-    if time_fmt:
-        parts.append(f"When stating times use {time_fmt} format.")
-    if not parts:
-        return ""
-    return "Global settings: " + " ".join(parts) + "\n\n"
-
-
-def _format_brand_voice(profile: dict) -> str:
-    parts = []
-    tone = profile.get("tone")
-    style = profile.get("style")
-    if tone:
-        parts.append(f"Tone: {tone}.")
-    if style:
-        parts.append(f"Style: {style}.")
-
-    vocabulary = profile.get("vocabulary")
-    if vocabulary is not None:
-        if isinstance(vocabulary, str):
-            try:
-                vocabulary = json.loads(vocabulary)
-            except json.JSONDecodeError:
-                vocabulary = None
-        if isinstance(vocabulary, list) and vocabulary:
-            preferred, avoid = [], []
-            for item in vocabulary:
-                if isinstance(item, dict):
-                    if item.get("preferred"):
-                        preferred.append(str(item["preferred"]))
-                    if item.get("avoid"):
-                        avoid.append(str(item["avoid"]))
-            if preferred:
-                parts.append(f"Prefer saying: {', '.join(preferred)}.")
-            if avoid:
-                parts.append(f"Avoid saying: {', '.join(avoid)}.")
-
-    do_not_say = profile.get("do_not_say")
-    if do_not_say and isinstance(do_not_say, list):
-        phrases = [str(p) for p in do_not_say if p]
-        if phrases:
-            parts.append(f"Never say these words or phrases: {', '.join(phrases)}.")
-
-    sample_responses = profile.get("sample_responses")
-    if sample_responses is not None:
-        if isinstance(sample_responses, str):
-            try:
-                sample_responses = json.loads(sample_responses)
-            except json.JSONDecodeError:
-                sample_responses = None
-        if isinstance(sample_responses, list) and sample_responses:
-            examples = []
-            for item in sample_responses[:3]:
-                if isinstance(item, dict) and item.get("scenario") and item.get("response"):
-                    examples.append(f"Example ({item['scenario']}): \"{item['response']}\"")
-            if examples:
-                parts.append("Follow the style of these example responses: " + "; ".join(examples) + ".")
-
-    if not parts:
-        return ""
-    return "Brand voice: " + " ".join(parts) + "\n\n"
-
-
-def _format_locations_and_employees(
-    locations: list[dict],
-    employees_by_location: dict[str, list[str]],
-) -> str:
-    if not locations:
-        return ""
-    lines = []
-    for loc in locations:
-        loc_id = loc.get("id")
-        name = loc.get("name") or "Unknown"
-        address = loc.get("address") or ""
-        phone = loc.get("phone") or ""
-        parts = [f"Location: {name}"]
-        if address:
-            parts.append(f"address: {address}")
-        if phone:
-            parts.append(f"phone: {phone}")
-        staff = (employees_by_location.get(loc_id) if loc_id else []) or []
-        if staff:
-            parts.append(f"staff: {', '.join(staff)}")
-        lines.append("; ".join(parts))
-    return "Locations and staff: " + " | ".join(lines) + "\n\n"
-
-
-def _fetch_business_hours(supabase, business_id: str) -> list[dict]:
-    """Fetch weekly business hours from business_hours table."""
-    if not supabase or not business_id:
-        return []
-    try:
-        r = (
-            supabase.table("business_hours")
-            .select("day_of_week, open_time, close_time, is_open")
-            .eq("business_id", business_id)
-            .execute()
-        )
-        return getattr(r, "data", None) or []
-    except Exception as e:
-        logger.warning("Failed to fetch business hours: %s", e)
-        return []
-
-
-def _fetch_knowledge_base(supabase, business_id: str) -> list[dict]:
-    """Fetch text entries from knowledge_base table (excludes unprocessed files)."""
-    if not supabase or not business_id:
-        return []
-    try:
-        r = (
-            supabase.table("knowledge_base")
-            .select("title, text_content")
-            .eq("business_id", business_id)
-            .eq("content_type", "text")
-            .execute()
-        )
-        return getattr(r, "data", None) or []
-    except Exception as e:
-        logger.warning("Failed to fetch knowledge base: %s", e)
-        return []
-
-
-def _format_business_details(business: dict) -> str:
-    """Format full business info block for the prompt."""
-    parts = []
-    if business.get("type"):
-        parts.append(f"Business type: {business['type']}.")
-    if business.get("phone"):
-        parts.append(f"Phone: {business['phone']}.")
-    if business.get("email"):
-        parts.append(f"Email: {business['email']}.")
-    if business.get("address"):
-        parts.append(f"Address: {business['address']}.")
-    if business.get("website"):
-        parts.append(f"Website: {business['website']}.")
-    if business.get("service_area"):
-        parts.append(f"Service area: {business['service_area']}.")
-    if business.get("payment_methods"):
-        parts.append(f"Payment methods accepted: {business['payment_methods']}.")
-    if business.get("extra_fees"):
-        parts.append(f"Extra fees: {business['extra_fees']}.")
-    if business.get("return_policy"):
-        parts.append(f"Return/refund policy: {business['return_policy']}.")
-    if business.get("warranty_info"):
-        parts.append(f"Warranty: {business['warranty_info']}.")
-    if business.get("terms_conditions"):
-        parts.append(f"Terms & conditions: {business['terms_conditions']}.")
-    if business.get("privacy_policy"):
-        parts.append(f"Privacy policy: {business['privacy_policy']}.")
-    if not parts:
-        return ""
-    return "Business details: " + " ".join(parts) + "\n\n"
-
-
-def _format_business_hours(hours: list[dict]) -> str:
-    """Format business hours into a readable prompt block."""
-    if not hours:
-        return ""
-    day_order = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-    day_label = {
-        "monday": "Mon", "tuesday": "Tue", "wednesday": "Wed",
-        "thursday": "Thu", "friday": "Fri", "saturday": "Sat", "sunday": "Sun",
-    }
-    hours_map = {row["day_of_week"]: row for row in hours if row.get("day_of_week")}
-
-    def fmt_time(t: str | None) -> str:
-        if not t:
-            return ""
-        try:
-            h, m = map(int, t[:5].split(":"))
-            suffix = "AM" if h < 12 else "PM"
-            h12 = h % 12 or 12
-            return f"{h12}:{m:02d} {suffix}"
-        except Exception:
-            return t[:5]
-
-    parts = []
-    for day in day_order:
-        row = hours_map.get(day)
-        if not row:
-            continue
-        label = day_label.get(day, day.capitalize())
-        if row.get("is_open"):
-            open_t = fmt_time(row.get("open_time"))
-            close_t = fmt_time(row.get("close_time"))
-            parts.append(f"{label} {open_t}–{close_t}")
-        else:
-            parts.append(f"{label} Closed")
-
-    if not parts:
-        return ""
-    return "Business hours: " + ", ".join(parts) + ".\n\n"
-
-
-def _format_services_for_prompt(services: list[dict]) -> str:
-    """Format services list for the system prompt (upfront knowledge)."""
-    if not services:
-        return ""
-    lines = []
-    for svc in services:
-        name = svc.get("name", "")
-        dur = svc.get("duration_minutes")
-        price = svc.get("price")
-        desc = svc.get("description") or ""
-        parts = [f"- {name}"]
-        details = []
-        if dur:
-            details.append(f"{dur} min")
-        if price and price > 0:
-            details.append(f"${price:.2f}")
-        elif price == -1:
-            details.append("price varies")
-        if desc:
-            details.append(desc)
-        if details:
-            parts.append(f"({', '.join(details)})")
-        lines.append(" ".join(parts))
-    return "Services offered:\n" + "\n".join(lines) + "\n\n"
-
-
-def _format_knowledge_base(entries: list[dict]) -> str:
-    """Format knowledge base text entries for the prompt."""
-    if not entries:
-        return ""
-    blocks = []
-    for entry in entries:
-        text = (entry.get("text_content") or "").strip()
-        if text:
-            blocks.append(text)
-    if not blocks:
-        return ""
-    return "Additional business information:\n" + "\n\n".join(blocks) + "\n\n"
-
-
-def _fetch_brand_voice(supabase, business_id: str) -> dict | None:
-    if not supabase or not business_id:
-        return None
-    try:
-        r = (
-            supabase.table("brand_voice_profiles")
-            .select("*")
-            .eq("business_id", business_id)
-            .eq("is_active", True)
-            .limit(1)
-            .execute()
-        )
-        data = getattr(r, "data", None) or []
-        return data[0] if data and isinstance(data[0], dict) else None
-    except Exception as e:
-        logger.warning("Failed to fetch brand voice: %s", e)
-        return None
-
-
-def build_instructions(business_id: str | None, location_id: str | None) -> str:
-    """
-    Build the full agent system prompt from all business data in Supabase:
-    welcome · global settings · business details · hours · services ·
-    brand voice · locations + staff · knowledge base · default instructions
-    """
-    company_name = "your company"
-    location_phrase = ""
-
-    supabase = _get_supabase()
-
-    # ── Core business row ─────────────────────────────────────────────────────
-    business = _fetch_business(supabase, business_id) if business_id else None
-    if business and business.get("name"):
-        company_name = business["name"]
-
-    global_block   = _format_global_settings(business)   if business    else ""
-    details_block  = _format_business_details(business)  if business    else ""
-
-    # ── Hours ─────────────────────────────────────────────────────────────────
-    biz_hours    = _fetch_business_hours(supabase, business_id) if business_id else []
-    hours_block  = _format_business_hours(biz_hours)
-
-    # ── Services (upfront knowledge so agent doesn't need to call the tool) ───
-    services       = _fetch_services(supabase, business_id) if business_id else []
-    services_block = _format_services_for_prompt(services)
-
-    # ── Brand voice ───────────────────────────────────────────────────────────
-    brand       = _fetch_brand_voice(supabase, business_id) if business_id else None
-    brand_block = _format_brand_voice(brand) if brand else ""
-
-    # ── Locations + staff ─────────────────────────────────────────────────────
-    locations_block = ""
-    if business_id:
-        locations = _fetch_locations(supabase, business_id)
-        employees_by_location: dict[str, list[str]] = {}
-        staff_list = _fetch_staff_with_ids(supabase, business_id)
-        for s in staff_list:
-            for lid in s.get("location_ids", []):
-                employees_by_location.setdefault(lid, []).append(s["name"])
-        locations_block = _format_locations_and_employees(locations, employees_by_location)
-
-    # ── Knowledge base (free-text entries only; files not yet processed) ──────
-    kb_entries = _fetch_knowledge_base(supabase, business_id) if business_id else []
-    kb_block   = _format_knowledge_base(kb_entries)
-
-    # ── Spoken location context for greeting ──────────────────────────────────
-    if supabase and location_id:
-        loc = _fetch_location(supabase, location_id)
-        if loc:
-            parts = [loc.get("name"), loc.get("city"), loc.get("state"), loc.get("country")]
-            spoken = ", ".join(p for p in parts if p)
-            if spoken:
-                location_phrase = f" in {spoken}"
-
-    # ── Assemble ──────────────────────────────────────────────────────────────
-    welcome = (
-        f"You are the AI phone receptionist for {company_name}{location_phrase}. "
-        "Always start the call with a short, friendly welcome that includes the business name"
-    )
-    if location_phrase:
-        welcome += " and the location"
-    welcome += (
-        ". Example: \"Thank you for calling "
-        f"{company_name}{location_phrase}, how can I help you today?\" "
-        "Then continue the conversation following these rules:\n\n"
-    )
-
-    return (
-        welcome
-        + global_block
-        + details_block
-        + hours_block
-        + services_block
-        + brand_block
-        + locations_block
-        + kb_block
-        + DEFAULT_INSTRUCTIONS.strip()
-    )
 
 
 # ── Agent with booking tools ──────────────────────────────────────────────────
@@ -1658,13 +189,11 @@ class Assistant(Agent):
 
         svc = self._resolve_service(service_name)
 
-        # Staff at this location
         loc_id = loc["id"]
         staff_at_loc = [s for s in self._staff if loc_id in s.get("location_ids", [])]
         if not staff_at_loc:
             return f"No staff found at {loc['name']}."
 
-        # Filter by service capability if we found the service
         if svc:
             svc_id = svc["id"]
             capable = [
@@ -1675,7 +204,6 @@ class Assistant(Agent):
                 names = ", ".join(s["name"] for s in capable)
                 return f"Staff at {loc['name']} who offer {svc['name']}: {names}."
 
-        # Fallback: return all staff at location
         names = ", ".join(s["name"] for s in staff_at_loc)
         return f"Staff available at {loc['name']}: {names}."
 
@@ -1782,14 +310,12 @@ class Assistant(Agent):
                 appt_data = {**row, "client_name": client_name}
                 gcal_updates: dict = {}
 
-                # Staff calendar
                 staff_event_id = await _gcal_create_event(
                     self._supabase, staff["user_id"], appt_data,
                 )
                 if staff_event_id:
                     gcal_updates["google_event_id"] = staff_event_id
 
-                # Superadmin calendar (skip if staff IS the superadmin)
                 admin_id = _gcal_get_superadmin_id(self._supabase, self._business_id)
                 if admin_id and admin_id != staff["user_id"]:
                     admin_event_id = await _gcal_create_event(
@@ -1806,7 +332,7 @@ class Assistant(Agent):
                     except Exception:
                         pass  # Non-fatal — booking already saved
 
-                # ── Gmail: confirmation email to customer + notification to staff ──
+                # ── Gmail: confirmation to customer + notification to staff ──
                 duration_min = int(str(svc["duration_minutes"]).split()[0]) if svc and svc.get("duration_minutes") else 60
                 biz_name = self._business_name or "Your Business"
                 biz_phone = self._business_phone or ""
@@ -1829,7 +355,7 @@ class Assistant(Agent):
                             confirmation_ref=short_id,
                         )
                     except Exception:
-                        pass  # Non-fatal
+                        pass
 
                 try:
                     await _gmail_send_staff_notification(
@@ -1849,7 +375,26 @@ class Assistant(Agent):
                         confirmation_ref=short_id,
                     )
                 except Exception:
-                    pass  # Non-fatal
+                    pass
+
+                # ── SMS confirmation ───────────────────────────────────
+                if client_phone and _is_feature_enabled(
+                    self._supabase, self._business_id, "send_texts_during_after_calls"
+                ):
+                    try:
+                        send_appointment_confirmation_sms(
+                            supabase=self._supabase,
+                            business_id=self._business_id,
+                            business_name=biz_name,
+                            client_phone=client_phone,
+                            client_name=client_name,
+                            service=service_label,
+                            date=date,
+                            time_str=_fmt_time_12h(time),
+                            confirmation_ref=short_id,
+                        )
+                    except Exception:
+                        pass
 
                 return (
                     f"Appointment confirmed! "
@@ -1945,7 +490,6 @@ class Assistant(Agent):
             if not updates:
                 return "No changes were specified."
 
-            # Find appointment: filter by client name first, then match ref prefix in Python
             q = (
                 self._supabase.table("appointments")
                 .select("id, client_name, client_email, client_phone, service, appointment_date, appointment_time, duration, assigned_user_id, location_id, google_event_id, google_event_id_admin")
@@ -1971,10 +515,7 @@ class Assistant(Agent):
                 assigned_uid = appt_row.get("assigned_user_id")
                 if assigned_uid and check_date and check_time:
                     booked = _fetch_appointments_on_date(self._supabase, assigned_uid, check_date)
-                    # Exclude the appointment being rescheduled from conflict check
                     booked_excluding_self = [b for b in booked if b.get("id") != full_id]
-                    duration_min = int(str(appt_row.get("duration", "60")).split()[0])
-                    # Simple overlap: check if check_time is already taken
                     slot_taken = any(b.get("appointment_time") == check_time for b in booked_excluding_self)
                     if slot_taken:
                         return (
@@ -1984,7 +525,7 @@ class Assistant(Agent):
 
             self._supabase.table("appointments").update(updates).eq("id", full_id).execute()
 
-            # ── Google Calendar: update event on staff + admin calendars ──────
+            # ── Google Calendar: update events ────────────────────────────────
             updated_row = {**appt_row, **updates}
             assigned_uid = appt_row.get("assigned_user_id")
 
@@ -1995,7 +536,7 @@ class Assistant(Agent):
             if appt_row.get("google_event_id_admin") and admin_id:
                 await _gcal_update_event(self._supabase, admin_id, appt_row["google_event_id_admin"], updated_row)
 
-            # ── Gmail: reschedule notification to customer + staff ────────────
+            # ── Gmail: reschedule notifications ───────────────────────────────
             client_email_addr = appt_row.get("client_email", "")
             client_name = appt_row.get("client_name", "")
             service_label = appt_row.get("service", "appointment")
@@ -2091,7 +632,7 @@ class Assistant(Agent):
 
             match = rows[0]
 
-            # ── Google Calendar: delete events on staff + admin calendars ─
+            # ── Google Calendar: delete events ────────────────────────────────
             assigned_uid = match.get("assigned_user_id")
             if match.get("google_event_id") and assigned_uid:
                 await _gcal_delete_event(self._supabase, assigned_uid, match["google_event_id"])
@@ -2114,7 +655,7 @@ class Assistant(Agent):
             staff_name_label = self._staff_id_to_name.get(assigned_uid or "", "")
             short_id = match["id"][:8].upper()
 
-            # ── Gmail: cancellation email to customer + staff ─────────────────
+            # ── Gmail: cancellation notifications ─────────────────────────────
             if client_email_addr:
                 try:
                     await _gmail_send_cancellation_confirmation(
@@ -2226,13 +767,16 @@ async def _finalize_call(
     business_id: str | None,
     duration_s: int,
     transcript_log: list[dict],
+    *,
+    call_direction: str = "inbound",
+    caller_phone: str | None = None,
+    business_name: str = "",
 ) -> None:
-    """Save transcripts, mark call completed, generate summary."""
+    """Save transcripts, mark call completed/missed, generate summary, send SMS if needed."""
     if not supabase or not call_id:
         logger.warning("Cannot finalize call — supabase or call_id missing")
         return
 
-    # 1. Bulk-save all transcript utterances
     if transcript_log:
         try:
             supabase.table("transcripts").insert(transcript_log).execute()
@@ -2243,35 +787,50 @@ async def _finalize_call(
         except Exception as e:
             logger.error("Failed to save transcripts: %s", e)
 
-    # 2. Mark call completed
+    # A call with no transcript utterances on an inbound call = missed
+    is_missed = (call_direction == "inbound" and not transcript_log)
+    final_status = "missed" if is_missed else "completed"
+
     try:
         supabase.table("calls").update({
-            "status": "completed",
+            "status": final_status,
             "ended_at": datetime.now(timezone.utc).isoformat(),
             "duration_seconds": duration_s,
         }).eq("id", call_id).execute()
     except Exception as e:
         logger.error("Failed to update call status: %s", e)
 
-    # 3. Generate and save summary
     if transcript_log and business_id:
         try:
             await _generate_summary(supabase, call_id, business_id, transcript_log)
         except Exception as e:
             logger.error("Failed to generate summary: %s", e)
 
+    # Missed call text-back
+    if is_missed and business_id and caller_phone:
+        if _is_feature_enabled(supabase, business_id, "missed_call_text_back"):
+            try:
+                send_missed_call_sms(
+                    supabase=supabase,
+                    business_id=business_id,
+                    business_name=business_name or "us",
+                    caller_phone=caller_phone,
+                )
+            except Exception as e:
+                logger.warning("Missed-call SMS failed: %s", e)
+
     logger.info(
-        "Call %s finalized — duration=%ds utterances=%d",
-        call_id, duration_s, len(transcript_log),
+        "Call %s finalized status=%s duration=%ds utterances=%d",
+        call_id, final_status, duration_s, len(transcript_log),
     )
 
 
 # ── LiveKit entry point ───────────────────────────────────────────────────────
 
 server = AgentServer()
+AGENT_NAME=os.getenv("AGENT_NAME")
 
-
-@server.rtc_session()
+@server.rtc_session(agent_name=AGENT_NAME)
 async def voice_agent(ctx: agents.JobContext):
     await ctx.connect(auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY)
     participant = await ctx.wait_for_participant()
@@ -2285,24 +844,85 @@ async def voice_agent(ctx: agents.JobContext):
     locations: list[dict] = []
     services: list[dict] = []
     staff: list[dict] = []
+    is_sip_call = participant.kind == rtc.ParticipantKind.PARTICIPANT_KIND_SIP
+    call_direction: str = "inbound"  # default; "outbound" for agent-initiated calls
 
-    raw_meta = participant.metadata
-    if isinstance(raw_meta, str) and raw_meta:
+    # ── Source 1: ctx.job.metadata (set by LiveKit dispatch rule for SIP inbound) ──
+    raw_job_meta = getattr(ctx.job, "metadata", None)
+    if isinstance(raw_job_meta, str) and raw_job_meta:
         try:
-            meta = json.loads(raw_meta)
-            business_id = meta.get("business_id")
-            location_id = meta.get("location_id")
-            call_id = meta.get("call_id")
+            job_meta = json.loads(raw_job_meta)
+            business_id = job_meta.get("business_id")
+            location_id = job_meta.get("location_id")
+            call_id = job_meta.get("call_id")
+            logger.info("Context from job metadata: business_id=%s location_id=%s", business_id, location_id)
         except json.JSONDecodeError:
-            logger.warning("Invalid participant metadata: %s", raw_meta)
+            logger.warning("Invalid job metadata: %s", raw_job_meta)
+
+    # ── Source 2: participant.metadata (set by backend token for web calls) ──────
+    if not business_id:
+        raw_meta = participant.metadata
+        if isinstance(raw_meta, str) and raw_meta:
+            try:
+                meta = json.loads(raw_meta)
+                business_id = meta.get("business_id")
+                location_id = meta.get("location_id")
+                call_id = meta.get("call_id")
+                logger.info("Context from participant metadata: business_id=%s", business_id)
+            except json.JSONDecodeError:
+                logger.warning("Invalid participant metadata: %s", raw_meta)
+
+    # ── Source 3: participant.attributes (SIP participant attributes from dispatch rule) ──
+    if not business_id and is_sip_call:
+        attrs = getattr(participant, "attributes", {}) or {}
+        business_id = attrs.get("business_id") or attrs.get("sip.businessId")
+        location_id = attrs.get("location_id") or attrs.get("sip.locationId")
+        call_direction = attrs.get("sip.callDirection", "inbound")
+        if business_id:
+            logger.info("Context from SIP participant attributes: business_id=%s direction=%s", business_id, call_direction)
+
+    # ── Source 4: DB lookup by dialled number (last resort for SIP) ──────────────
+    if not business_id and is_sip_call:
+        attrs = getattr(participant, "attributes", {}) or {}
+        trunk_phone = attrs.get("sip.trunkPhoneNumber") or attrs.get("sip.phoneNumber")
+        call_direction = attrs.get("sip.callDirection", "inbound")
+        if trunk_phone:
+            supabase = _get_supabase()
+            if supabase:
+                try:
+                    row = (
+                        supabase.table("business_phone_numbers")
+                        .select("business_id, location_id")
+                        .eq("phone_number", trunk_phone)
+                        .eq("is_active", True)
+                        .limit(1)
+                        .execute()
+                    )
+                    if row.data:
+                        business_id = row.data[0]["business_id"]
+                        location_id = row.data[0].get("location_id")
+                        logger.info("Context from DB lookup by %s: business_id=%s", trunk_phone, business_id)
+                except Exception as e:
+                    logger.warning("DB lookup by phone number failed: %s", e)
+
+    # ── Detect call direction from SIP attributes if not yet set ─────────────────
+    if is_sip_call and call_direction == "inbound":
+        attrs = getattr(participant, "attributes", {}) or {}
+        call_direction = attrs.get("sip.callDirection", "inbound")
+
+    logger.info(
+        "Call resolved — business_id=%s location_id=%s call_id=%s sip=%s direction=%s",
+        business_id, location_id, call_id, is_sip_call, call_direction,
+    )
 
     business_name = ""
     business_phone = ""
 
-    if business_id or location_id:
-        supabase = _get_supabase()
+    if business_id:
+        if supabase is None:
+            supabase = _get_supabase()
         instructions = build_instructions(business_id, location_id)
-        if supabase and business_id:
+        if supabase:
             locations = _fetch_locations(supabase, business_id)
             services = _fetch_services(supabase, business_id)
             staff = _fetch_staff_with_ids(supabase, business_id)
@@ -2336,8 +956,6 @@ async def voice_agent(ctx: agents.JobContext):
     )
 
     # ── Transcript capture ────────────────────────────────────────────────────
-    # Fired by AgentSession each time a full conversation turn is committed
-    # (both user speech and agent response).
     @session.on("conversation_item_added")
     def _on_item_added(ev) -> None:
         nonlocal seq_counter
@@ -2347,7 +965,6 @@ async def voice_agent(ctx: agents.JobContext):
             if role not in ("user", "assistant"):
                 return
 
-            # Extract text — try text_content property first, then iterate content blocks
             text: str = ""
             if hasattr(item, "text_content"):
                 text = item.text_content or ""
@@ -2385,7 +1002,17 @@ async def voice_agent(ctx: agents.JobContext):
             ),
         ),
     )
-    await session.generate_reply()
+    # For outbound calls the agent initiates the conversation with purpose/intro.
+    # For inbound calls (web or SIP) the agent greets normally.
+    if call_direction == "outbound":
+        await session.generate_reply(
+            instructions=(
+                "You are calling on behalf of the business. Introduce yourself briefly, "
+                "state the purpose of the call, and ask how you can help."
+            )
+        )
+    else:
+        await session.generate_reply()
 
     # ── Wait for caller to disconnect ─────────────────────────────────────────
     caller_left = asyncio.Event()
@@ -2403,7 +1030,29 @@ async def voice_agent(ctx: agents.JobContext):
         "Finalizing call %s — duration=%ds utterances=%d",
         call_id, duration_s, len(transcript_log),
     )
-    await _finalize_call(supabase, call_id, business_id, duration_s, transcript_log)
+    # Caller phone — try SIP participant attributes first, fall back to call record
+    _caller_phone: str | None = None
+    if is_sip_call:
+        attrs = getattr(participant, "attributes", {}) or {}
+        _caller_phone = attrs.get("sip.phoneNumber") or attrs.get("sip.callFrom")
+    if not _caller_phone:
+        try:
+            _row = supabase.table("calls").select("caller_phone").eq("id", call_id).limit(1).execute() if supabase and call_id else None
+            if _row and _row.data:
+                _caller_phone = _row.data[0].get("caller_phone")
+        except Exception:
+            pass
+
+    await _finalize_call(
+        supabase,
+        call_id,
+        business_id,
+        duration_s,
+        transcript_log,
+        call_direction=call_direction,
+        caller_phone=_caller_phone,
+        business_name=business_name,
+    )
 
 
 if __name__ == "__main__":

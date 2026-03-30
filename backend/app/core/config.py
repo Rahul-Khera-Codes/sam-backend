@@ -30,6 +30,20 @@ class Settings(BaseSettings):
     google_redirect_uri: str = "http://localhost:5173/integrations/google/callback"
     gmail_redirect_uri: str = "http://localhost:5173/integrations/gmail/callback"
 
+    # Twilio / SIP
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_trunk_sid: str = ""
+    livekit_sip_inbound_trunk_id: str = ""
+    livekit_sip_outbound_trunk_id: str = ""
+    livekit_sip_host: str = ""  # from LiveKit Cloud dashboard → Project Settings → SIP URI
+    agent_name: str = "ai-employee-agent"
+    sip_auth_username: str = ""
+    sip_auth_password: str = ""
+    twilio_term_sip_username: str = ""
+    twilio_term_sip_password: str = ""
+    twilio_term_domain: str = ""
+
     # App
     environment: str = "development"
     cors_origins: str = "http://localhost:5173,http://localhost:8081"

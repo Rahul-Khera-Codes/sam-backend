@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-03-27 (session 8)
+Last updated: 2026-03-30 (session 9)
 
 ---
 
@@ -137,13 +137,88 @@ These don't exist yet on the backend (frontend queries Supabase directly — bac
 ### Communication Settings — Fix Frontend Save
 - [ ] `CustomerServiceSettings.tsx` — "Save All Settings" button currently does nothing; wire up to `PUT /settings/communication` backend endpoint
 
-### Phone / Twilio Integration (when Twilio access available)
-- [ ] `business_phone_numbers` table — `(id, business_id, location_id, phone_number E.164, twilio_sid, is_active)`
-- [ ] Phone number management UI (assign Twilio number per business)
-- [ ] `POST /calls/inbound/twilio` webhook — look up `business_id` from Twilio `To` number, create LiveKit room, bridge call via LiveKit SIP, dispatch agent
-- [ ] LiveKit SIP configuration — register LiveKit as SIP endpoint with Twilio
-- [ ] Outbound call initiation — backend calls Twilio API to dial out, bridges into LiveKit room
-- [ ] Update agent to handle `direction: inbound` vs `outbound` differently (inbound: wait and greet; outbound: initiate opener)
+### Phone / Twilio + LiveKit SIP Integration
+
+**Architecture decision:** Twilio Elastic SIP Trunking (not TwiML webhooks).
+- One shared Twilio SIP trunk for all businesses
+- One LiveKit inbound SIP trunk (matches Twilio)
+- One LiveKit dispatch rule **per phone number** → carries `{business_id, location_id}` in attributes
+- Business context flows: dispatch rule metadata → agent `ctx.job.metadata` → same context loading as web calls
+- Outbound: `CreateSIPParticipant` API (agent in room first, then dial customer in)
+
+#### Step 0 — One-time Infrastructure Setup (done once by dev, not per business)
+- [x] `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` added to `backend/.env` (fixed typo from TWILLIO → TWILIO)
+- [x] `scripts/setup_sip_trunks.py` written — fully automated setup script:
+  - Creates LiveKit inbound SIP trunk (Twilio → LiveKit, with IP allowlist + digest auth)
+  - Creates LiveKit outbound SIP trunk (LiveKit → Twilio termination domain)
+  - Creates Twilio Elastic SIP Trunk
+  - Adds LiveKit SIP endpoint as origination URI on Twilio trunk
+  - Creates Twilio credential list for outbound auth (LiveKit → Twilio)
+  - Assigns credential list to Twilio trunk
+  - Outputs all IDs + secrets ready to paste into `.env`
+- [x] `backend/.env.example` updated with all new Twilio/SIP env var placeholders
+- [x] **RUN `python scripts/setup_sip_trunks.py`** — all IDs filled in `backend/.env`
+
+#### Step 1 — Database Migration
+- [x] Migration file: `supabase/migrations/20260328000000_business_phone_numbers.sql`
+  - `business_phone_numbers` table with all columns + indexes
+  - RLS: members can SELECT their own business's numbers; only service role can write
+- [x] **RUN migration in Supabase** — applied
+
+#### Step 2 — Backend: Phone Number Service (`backend/app/services/phone_number_service.py`)
+- [x] `search_available_numbers(area_code, country, limit)` — Twilio available numbers API
+- [x] `provision_phone_number(business_id, location_id, phone_number)` — purchase Twilio number, create LiveKit dispatch rule, create/update outbound trunk, insert DB row
+  - Bug fixed: removed `inbound_numbers=[phone_number]` from dispatch rule — trunk's `numbers` filter is sufficient; the extra filter caused calls to keep ringing without agent pickup
+- [x] `release_phone_number(phone_number_id)` — delete dispatch rule, release Twilio number, soft-delete DB row
+- [x] `get_phone_numbers_for_business(business_id)` — returns active numbers for a business
+
+#### Step 3 — Backend: Phone Number API Routes (`backend/app/routers/phone_numbers.py`)
+- [x] `GET /phone-numbers/search?area_code=415&country=US`
+- [x] `POST /phone-numbers/provision` — body: `{phone_number, location_id?}`
+- [x] `GET /phone-numbers` — list active numbers for authenticated business
+- [x] `DELETE /phone-numbers/{id}` — release number
+- [x] Router registered in `main.py`; Twilio vars added to `config.py`
+
+#### Step 4 — Agent: SIP Inbound Context Reading
+- [x] Source 1: `ctx.job.metadata` (dispatch rule attributes — primary for SIP)
+- [x] Source 2: `participant.metadata` (backend token — web call path, unchanged)
+- [x] Source 3: `participant.attributes` (SIP participant attrs from dispatch rule)
+- [x] Source 4: DB lookup by `sip.trunkPhoneNumber` (last resort)
+- [x] Detect `sip.callDirection` — `"inbound"` or `"outbound"`
+- [x] Outbound calls use different `generate_reply()` opener (introduce self + purpose)
+
+#### Step 5 — Frontend: Phone Number Picker in Onboarding
+- [x] `voiceAgentApi.ts` — added `searchPhoneNumbers`, `provisionPhoneNumber`, `getPhoneNumbers`, `releasePhoneNumber`
+- [x] `PhoneNumberStep.tsx` — area code search, selectable results list, provision + "Skip for now"
+- [x] `Onboarding.tsx` — 3-step flow: business → location → phone number
+- [x] `useOnboarding.ts` — `createBusinessWithLocation` now returns `{business_id, location_id}`; added `finishOnboarding()` for navigation
+
+#### Step 6 — Frontend: Phone Number Management Page
+- [x] `PhoneNumbers.tsx` — `/dashboard/settings/phone-numbers`
+  - Lists active numbers with Active badge + formatted display
+  - Empty state with "Get a phone number" CTA
+  - Inline number picker (area code search → select → provision)
+  - Release button with AlertDialog confirmation
+- [x] Route registered in `App.tsx`
+- [x] "Phone Numbers" added to Sidebar under Settings (admin + super_admin)
+
+#### Step 7 — Outbound Calls (follow-up / reminder calls)
+- [x] `livekit_service.create_sip_participant()` — dials PSTN number into a LiveKit room via outbound SIP trunk
+- [x] `POST /calls/outbound` — looks up business's from_number → create room → dispatch agent (outbound metadata) → SIP dial → DB record
+- [x] `OutboundCallRequest` / `OutboundCallResponse` schemas added
+- [x] `initiateOutboundCall()` added to `voiceAgentApi.ts`
+- [x] Agent already handles `call_direction == "outbound"` opener (Step 4)
+- [ ] Wire up `missed_call_text_back` feature flag: on call end with `status=missed`, trigger outbound callback (future)
+
+#### Step 8 — SMS via Twilio
+- [x] `agent/sms_helpers.py` — `send_appointment_confirmation_sms`, `send_appointment_reminder_sms`, `send_missed_call_sms`
+  - Reads `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` from env
+  - Looks up business's provisioned `from` number from `business_phone_numbers` table
+  - All functions are fire-and-forget (callers wrap in try/except)
+- [x] `supabase_helpers._is_feature_enabled(supabase, business_id, feature_key)` — reads `agent_settings` table
+- [x] `book_appointment` — sends confirmation SMS when `send_texts_during_after_calls` is enabled
+- [x] `_finalize_call` — detects missed calls (inbound + empty transcript), marks status `missed`, sends text-back when `missed_call_text_back` is enabled
+- [x] `agent/.env.local` — Twilio credentials added
 
 ### Google Calendar Integration
 - [x] `google_calendar_tokens` table — `(staff_id, business_id, google_email, access_token, refresh_token, token_expiry)` with RLS

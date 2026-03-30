@@ -7,8 +7,8 @@ from livekit.protocol.agent_dispatch import CreateAgentDispatchRequest
 
 from app.core.config import settings
 
-# Agent name must match @server.rtc_session(agent_name="...") in the LiveKit Agents app
-VOICE_AGENT_NAME = "voice-agent"
+# Agent name — read from settings (must match AGENT_NAME in agent/.env.local)
+VOICE_AGENT_NAME = settings.agent_name
 
 
 def generate_room_id() -> str:
@@ -124,6 +124,43 @@ def generate_agent_token(room_id: str) -> str:
         )
     )
     return token.to_jwt()
+
+
+async def create_sip_participant(
+    room_id: str,
+    to_number: str,
+    from_number: str,
+    *,
+    participant_identity: str | None = None,
+) -> dict:
+    """
+    Dials a PSTN number into an existing LiveKit room via the outbound SIP trunk.
+    Returns the SIP participant info dict.
+    """
+    from livekit.protocol.sip import CreateSIPParticipantRequest
+
+    api = LiveKitAPI(
+        url=settings.livekit_url,
+        api_key=settings.livekit_api_key,
+        api_secret=settings.livekit_api_secret,
+    )
+    try:
+        req = CreateSIPParticipantRequest(
+            sip_trunk_id=settings.livekit_sip_outbound_trunk_id,
+            sip_call_to=to_number,
+            sip_number=from_number,
+            room_name=room_id,
+            participant_identity=participant_identity or f"sip-{to_number.replace('+', '')}",
+            participant_name="Customer",
+        )
+        participant = await api.sip.create_sip_participant(req)
+        print(f"[LiveKit] SIP participant dialled to={to_number} room={room_id}", flush=True)
+        return {
+            "participant_identity": participant.participant_identity,
+            "sip_call_id": getattr(participant, "sip_call_id", ""),
+        }
+    finally:
+        await api.aclose()
 
 
 async def end_room(room_id: str) -> None:
