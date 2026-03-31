@@ -65,6 +65,23 @@ load_dotenv(".env.local")
 logger = logging.getLogger("voice-agent")
 
 
+def _normalize_phone_e164(phone: str) -> str:
+    """
+    Normalize a phone number to E.164 format (+1XXXXXXXXXX for North America).
+    Strips all non-digit characters, then prepends +1 if 10 digits, or + if 11+.
+    """
+    if not phone:
+        return phone
+    digits = "".join(c for c in phone if c.isdigit())
+    if len(digits) == 10:
+        return f"+1{digits}"
+    elif len(digits) == 11 and digits.startswith("1"):
+        return f"+{digits}"
+    elif len(digits) > 7:
+        return f"+{digits}"
+    return phone
+
+
 # ── Agent with booking tools ──────────────────────────────────────────────────
 
 class Assistant(Agent):
@@ -880,7 +897,6 @@ async def voice_agent(ctx: agents.JobContext):
     if not business_id and is_sip_call:
         attrs = getattr(participant, "attributes", {}) or {}
         business_id = attrs.get("business_id") or attrs.get("sip.businessId")
-        location_id = attrs.get("location_id") or attrs.get("sip.locationId")
         call_direction = attrs.get("sip.callDirection", "inbound")
         if business_id:
             logger.info("Context from SIP participant attributes: business_id=%s direction=%s", business_id, call_direction)
@@ -926,7 +942,9 @@ async def voice_agent(ctx: agents.JobContext):
         if supabase:
             try:
                 sip_attrs = getattr(participant, "attributes", {}) or {}
-                caller_phone = sip_attrs.get("sip.phoneNumber") or sip_attrs.get("sip.callerId", "")
+                caller_phone = _normalize_phone_e164(
+                    sip_attrs.get("sip.phoneNumber") or sip_attrs.get("sip.callerId", "")
+                )
                 caller_name = sip_attrs.get("sip.callerId") or caller_phone or "Unknown"
                 call_row = supabase.table("calls").insert({
                     "business_id": business_id,
@@ -941,8 +959,13 @@ async def voice_agent(ctx: agents.JobContext):
                 if call_row.data:
                     call_id = call_row.data[0]["id"]
                     logger.info("Created call record for SIP call: %s", call_id)
+                else:
+                    logger.warning("SIP call INSERT returned no data — will retry at finalization")
             except Exception as e:
-                logger.warning("Failed to create call record for SIP call: %s", e)
+                import traceback
+                logger.warning("Failed to create call record for SIP call: %s\n%s", e, traceback.format_exc())
+        else:
+            logger.warning("SIP call record creation skipped — supabase client unavailable")
 
     business_name = ""
     business_phone = ""
@@ -1055,15 +1078,48 @@ async def voice_agent(ctx: agents.JobContext):
 
     # ── Post-call finalization ────────────────────────────────────────────────
     duration_s = int((datetime.now(timezone.utc) - call_start_time).total_seconds())
+
+    # Caller phone — resolve now so it's available for fallback record creation
+    _caller_phone: str | None = None
+    if is_sip_call:
+        attrs = getattr(participant, "attributes", {}) or {}
+        _caller_phone = _normalize_phone_e164(
+            attrs.get("sip.phoneNumber") or attrs.get("sip.callFrom") or ""
+        ) or None
+
+    # ── Fallback: create call record if SIP call creation failed at session start ──
+    if is_sip_call and not call_id and business_id:
+        if supabase is None:
+            supabase = _get_supabase()
+        if supabase:
+            try:
+                sip_attrs = getattr(participant, "attributes", {}) or {}
+                _cp = _caller_phone or _normalize_phone_e164(
+                    sip_attrs.get("sip.phoneNumber") or sip_attrs.get("sip.callerId", "")
+                )
+                _cn = sip_attrs.get("sip.callerId") or _cp or "Unknown"
+                # location_id was already validated (or cleared) earlier — safe to use
+                row = supabase.table("calls").insert({
+                    "business_id": business_id,
+                    "location_id": location_id,
+                    "direction": call_direction,
+                    "status": "active",
+                    "livekit_room_id": ctx.room.name,
+                    "caller_phone": _cp,
+                    "caller_name": _cn,
+                    "started_at": call_start_time.isoformat(),
+                }).execute()
+                if row.data:
+                    call_id = row.data[0]["id"]
+                    logger.info("Fallback: created call record at finalization: %s", call_id)
+            except Exception as e:
+                logger.warning("Fallback call record creation also failed: %s", e)
+
     logger.info(
         "Finalizing call %s — duration=%ds utterances=%d",
         call_id, duration_s, len(transcript_log),
     )
-    # Caller phone — try SIP participant attributes first, fall back to call record
-    _caller_phone: str | None = None
-    if is_sip_call:
-        attrs = getattr(participant, "attributes", {}) or {}
-        _caller_phone = attrs.get("sip.phoneNumber") or attrs.get("sip.callFrom")
+
     if not _caller_phone:
         try:
             _row = supabase.table("calls").select("caller_phone").eq("id", call_id).limit(1).execute() if supabase and call_id else None

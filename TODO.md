@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-03-30 (session 9 — SIP calls fully working, logs showing in UI)
+Last updated: 2026-03-31 (session 10 — FK bug fixed, location in greeting fixed, call records saving reliably)
 
 ---
 
@@ -47,6 +47,13 @@ Last updated: 2026-03-30 (session 9 — SIP calls fully working, logs showing in
 - [x] SIP calls created no `calls` DB row — agent now auto-creates the record at session start (status=`active`, caller_phone from SIP attrs)
 - [x] `GET /calls` and analytics returned 0 rows — `supabase` anon client has no user JWT set, RLS blocks all reads; switched to `supabase_admin` (auth still enforced via `Depends(get_current_user)` + `business_id` filter)
 - [x] Call transcript showed all bubbles as "Customer" — frontend used `msg.role`/`msg.content` but backend sends `msg.speaker`/`msg.text`; fixed type + rendering in `CallRecordings.tsx`
+
+### Bugs Fixed (session 10)
+- [x] `calls` INSERT failed with FK violation on `location_id` — dispatch rules had stale `location_id` (`9174e86b...`) deleted from `locations` table; `_create_dispatch_rule` now only stores `business_id` in attributes; agent Source 3 no longer reads `location_id` from SIP attributes
+- [x] Location missing from agent greeting — `prompt_builder.py` now falls back to `locations[0]` when `location_id` is None
+- [x] Fallback call record creation at finalization — if initial INSERT fails (transient error), retried just before saving transcript
+- [x] SIP phone number not E.164 — `_normalize_phone_e164()` strips non-digits and prepends `+1` for North American numbers
+- [x] `gmail_tokens.google_email` was empty — manually fixed in DB; emails now send correctly
 
 ### Bugs Fixed
 - [x] `ai-employees-app/.env` — stray backtick on `VITE_VOICE_AGENT_API_URL` caused 404 on `/calls/initiate`
@@ -148,7 +155,7 @@ These don't exist yet on the backend (frontend queries Supabase directly — bac
 **Architecture decision:** Twilio Elastic SIP Trunking (not TwiML webhooks).
 - One shared Twilio SIP trunk for all businesses
 - One LiveKit inbound SIP trunk (matches Twilio)
-- One LiveKit dispatch rule **per phone number** → carries `{business_id, location_id}` in attributes
+- One LiveKit dispatch rule **per phone number** → carries only `{business_id}` in attributes (location_id removed to avoid stale FK issues)
 - Business context flows: dispatch rule metadata → agent `ctx.job.metadata` → same context loading as web calls
 - Outbound: `CreateSIPParticipant` API (agent in room first, then dial customer in)
 

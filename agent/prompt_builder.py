@@ -349,13 +349,17 @@ def build_instructions(business_id: str | None, location_id: str | None) -> str:
     kb_entries = _fetch_knowledge_base(supabase, business_id) if business_id else []
     kb_block   = _format_knowledge_base(kb_entries)
 
+    # Use explicit location_id if given, otherwise fall back to first location for the business
+    _loc_to_use = None
     if supabase and location_id:
-        loc = _fetch_location(supabase, location_id)
-        if loc:
-            parts = [loc.get("name"), loc.get("city"), loc.get("state"), loc.get("country")]
-            spoken = ", ".join(p for p in parts if p)
-            if spoken:
-                location_phrase = f" in {spoken}"
+        _loc_to_use = _fetch_location(supabase, location_id)
+    if _loc_to_use is None and locations:
+        _loc_to_use = locations[0]
+    if _loc_to_use:
+        parts = [_loc_to_use.get("name"), _loc_to_use.get("city"), _loc_to_use.get("state"), _loc_to_use.get("country")]
+        spoken = ", ".join(p for p in parts if p)
+        if spoken:
+            location_phrase = f" in {spoken}"
 
     welcome = (
         f"You are the AI phone receptionist for {company_name}{location_phrase}. "

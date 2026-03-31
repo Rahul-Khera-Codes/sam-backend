@@ -113,7 +113,7 @@ async def provision_phone_number(
         logger.info(f"[provision] Inbound trunk created: {inbound_trunk_id}")
 
         # Create dispatch rule for this number
-        dispatch_rule_id = await _create_dispatch_rule(lk, phone_number, business_id, location_id, inbound_trunk_id)
+        dispatch_rule_id = await _create_dispatch_rule(lk, phone_number, business_id, inbound_trunk_id)
         logger.info(f"[provision] Dispatch rule created: {dispatch_rule_id}")
 
         # Create or update outbound SIP trunk
@@ -154,14 +154,9 @@ async def _create_dispatch_rule(
     lk: api.LiveKitAPI,
     phone_number: str,
     business_id: str,
-    location_id: Optional[str],
     inbound_trunk_id: str,
 ) -> str:
     """Creates a LiveKit SIP dispatch rule for the given phone number. Returns the rule ID."""
-    metadata_attrs = {"business_id": business_id}
-    if location_id:
-        metadata_attrs["location_id"] = location_id
-
     resp = await lk.sip.create_sip_dispatch_rule(
         CreateSIPDispatchRuleRequest(
             name=f"SAM — {phone_number}",
@@ -169,7 +164,7 @@ async def _create_dispatch_rule(
                 dispatch_rule_individual=SIPDispatchRuleIndividual(room_prefix="call-", pin="")
             ),
             trunk_ids=[inbound_trunk_id],
-            attributes=metadata_attrs,
+            attributes={"business_id": business_id},
             room_config=RoomConfiguration(
                 agents=[RoomAgentDispatch(agent_name=settings.agent_name)],
             ),
