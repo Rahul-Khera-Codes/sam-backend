@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app.core.auth import get_current_user, get_user_id
-from app.core.supabase import supabase, supabase_admin
+from app.core.supabase import supabase_admin
 from app.schemas.settings import (
     AgentSettingsResponse,
     UpdateAgentSettingsRequest,
@@ -23,7 +23,7 @@ async def get_agent_settings(
     current_user: dict = Depends(get_current_user),
 ):
     result = (
-        supabase.table("agent_settings")
+        supabase_admin.table("agent_settings")
         .select("*")
         .eq("business_id", business_id)
         .order("feature_key")
@@ -169,7 +169,7 @@ async def get_audit_log(
     current_user: dict = Depends(get_current_user),
 ):
     result = (
-        supabase.table("settings_audit_log")
+        supabase_admin.table("settings_audit_log")
         .select("*")
         .eq("business_id", business_id)
         .order("changed_at", desc=True)
@@ -189,7 +189,7 @@ async def get_communication_settings(
     current_user: dict = Depends(get_current_user),
 ):
     result = (
-        supabase.table("communication_settings")
+        supabase_admin.table("communication_settings")
         .select("*")
         .eq("business_id", business_id)
         .execute()
