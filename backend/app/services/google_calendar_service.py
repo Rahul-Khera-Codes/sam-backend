@@ -22,7 +22,7 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 GOOGLE_CALENDAR_BASE = "https://www.googleapis.com/calendar/v3"
 GOOGLE_AUTH_BASE = "https://accounts.google.com/o/oauth2/v2/auth"
-SCOPES = "https://www.googleapis.com/auth/calendar.events"
+SCOPES = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email openid"
 
 
 # ── OAuth URL ─────────────────────────────────────────────────────────────────

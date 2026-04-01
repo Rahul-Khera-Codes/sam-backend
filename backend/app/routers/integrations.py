@@ -142,10 +142,25 @@ async def get_status(
     """Returns whether the current user has connected Google Calendar for this business."""
     token_row = gcal.get_token_row(supabase_admin, user_id)
     if token_row and token_row.get("business_id") == business_id:
-        return {
-            "connected": True,
-            "google_email": token_row.get("google_email", ""),
-        }
+        google_email = token_row.get("google_email", "")
+        # Backfill email if missing — fetch from Google userinfo and persist
+        if not google_email and token_row.get("access_token"):
+            try:
+                import httpx
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(
+                        "https://www.googleapis.com/oauth2/v2/userinfo",
+                        headers={"Authorization": f"Bearer {token_row['access_token']}"},
+                    )
+                    if resp.status_code == 200:
+                        google_email = resp.json().get("email", "")
+                        if google_email:
+                            supabase_admin.table("google_calendar_tokens").update(
+                                {"google_email": google_email}
+                            ).eq("staff_id", user_id).execute()
+            except Exception:
+                pass
+        return {"connected": True, "google_email": google_email}
     return {"connected": False, "google_email": ""}
 
 

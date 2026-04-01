@@ -24,7 +24,7 @@ GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 GOOGLE_AUTH_BASE = "https://accounts.google.com/o/oauth2/v2/auth"
-GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.send"
+GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/userinfo.email openid"
 
 
 # ── OAuth URL ─────────────────────────────────────────────────────────────────

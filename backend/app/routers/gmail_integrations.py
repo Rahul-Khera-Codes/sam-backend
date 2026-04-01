@@ -133,7 +133,25 @@ async def get_status(
 ):
     row = gmail.get_token_row(supabase_admin, business_id)
     if row:
-        return {"connected": True, "google_email": row.get("google_email", "")}
+        google_email = row.get("google_email", "")
+        # Backfill email if missing — fetch from Google userinfo and persist
+        if not google_email and row.get("access_token"):
+            try:
+                import httpx
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(
+                        "https://www.googleapis.com/oauth2/v2/userinfo",
+                        headers={"Authorization": f"Bearer {row['access_token']}"},
+                    )
+                    if resp.status_code == 200:
+                        google_email = resp.json().get("email", "")
+                        if google_email:
+                            supabase_admin.table("gmail_tokens").update(
+                                {"google_email": google_email}
+                            ).eq("business_id", business_id).execute()
+            except Exception:
+                pass
+        return {"connected": True, "google_email": google_email}
     return {"connected": False, "google_email": ""}
 
 
