@@ -107,6 +107,7 @@ async def provision_phone_number(
     )
     inbound_trunk_id: str = ""
     dispatch_rule_id: str = ""
+    outbound_trunk_id: str = ""
     try:
         # Create per-number inbound trunk (numbers=[phone_number] satisfies LiveKit security)
         inbound_trunk_id = await _create_inbound_trunk(lk, phone_number)
@@ -116,8 +117,9 @@ async def provision_phone_number(
         dispatch_rule_id = await _create_dispatch_rule(lk, phone_number, business_id, inbound_trunk_id)
         logger.info(f"[provision] Dispatch rule created: {dispatch_rule_id}")
 
-        # Create or update outbound SIP trunk
-        await _ensure_outbound_trunk(lk, phone_number)
+        # Create outbound SIP trunk for this number — returns the trunk ID
+        outbound_trunk_id = await _ensure_outbound_trunk(lk, phone_number)
+        logger.info(f"[provision] Outbound trunk: {outbound_trunk_id}")
     finally:
         await lk.aclose()
 
@@ -130,6 +132,7 @@ async def provision_phone_number(
         "twilio_trunk_sid": settings.twilio_trunk_sid,
         "livekit_inbound_trunk_id": inbound_trunk_id,
         "livekit_dispatch_rule_id": dispatch_rule_id,
+        "livekit_outbound_trunk_id": outbound_trunk_id,
         "is_active": True,
     }
     result = supabase_admin.table("business_phone_numbers").insert(row).execute()
@@ -173,55 +176,33 @@ async def _create_dispatch_rule(
     return resp.sip_dispatch_rule_id
 
 
-async def _ensure_outbound_trunk(lk: api.LiveKitAPI, phone_number: str) -> None:
+async def _ensure_outbound_trunk(lk: api.LiveKitAPI, phone_number: str) -> str:
     """
-    Creates the LiveKit outbound SIP trunk if it doesn't exist yet (first number provision),
-    or adds the new number to the existing outbound trunk.
+    Creates a per-number LiveKit outbound SIP trunk.
+    Each provisioned number gets its own outbound trunk so trunk IDs are
+    stored per-row in business_phone_numbers (not in env vars).
+    Returns the new outbound trunk ID.
     """
     from livekit.protocol.sip import (
         SIPOutboundTrunkInfo,
         CreateSIPOutboundTrunkRequest,
-        GetSIPOutboundTrunkRequest,
-        UpdateSIPOutboundTrunkRequest,
     )
 
-    outbound_trunk_id = settings.livekit_sip_outbound_trunk_id
-
-    if not outbound_trunk_id:
-        # First number — create the outbound trunk
-        logger.info("[provision] Creating LiveKit outbound SIP trunk (first number)...")
-        trunk = await lk.sip.create_sip_outbound_trunk(
-            CreateSIPOutboundTrunkRequest(
-                trunk=SIPOutboundTrunkInfo(
-                    name="SAM Outbound",
-                    address=settings.twilio_term_domain,
-                    numbers=[phone_number],
-                    auth_username=settings.twilio_term_sip_username,
-                    auth_password=settings.twilio_term_sip_password,
-                )
+    logger.info(f"[provision] Creating LiveKit outbound SIP trunk for {phone_number}...")
+    trunk = await lk.sip.create_sip_outbound_trunk(
+        CreateSIPOutboundTrunkRequest(
+            trunk=SIPOutboundTrunkInfo(
+                name=f"SAM Outbound — {phone_number}",
+                address=settings.twilio_term_domain,
+                numbers=[phone_number],
+                auth_username=settings.twilio_term_sip_username,
+                auth_password=settings.twilio_term_sip_password,
             )
         )
-        new_id = trunk.sip_trunk_id
-        logger.info(f"[provision] Outbound trunk created: {new_id}")
-        logger.warning(
-            f"[provision] IMPORTANT: Set LIVEKIT_SIP_OUTBOUND_TRUNK_ID={new_id} in backend/.env"
-        )
-    else:
-        # Add number to existing outbound trunk
-        logger.info(f"[provision] Adding {phone_number} to existing outbound trunk {outbound_trunk_id}")
-        existing = await lk.sip.get_sip_outbound_trunk(
-            GetSIPOutboundTrunkRequest(sip_trunk_id=outbound_trunk_id)
-        )
-        updated_numbers = list(existing.trunk.numbers) + [phone_number]
-        await lk.sip.update_sip_outbound_trunk(
-            UpdateSIPOutboundTrunkRequest(
-                trunk=SIPOutboundTrunkInfo(
-                    sip_trunk_id=outbound_trunk_id,
-                    numbers=updated_numbers,
-                )
-            )
-        )
-        logger.info(f"[provision] Outbound trunk updated with {phone_number}")
+    )
+    trunk_id = trunk.sip_trunk_id
+    logger.info(f"[provision] Outbound trunk created: {trunk_id}")
+    return trunk_id
 
 
 # ── Release ───────────────────────────────────────────────────────────────────
@@ -249,24 +230,34 @@ async def release_phone_number(phone_number_id: str) -> dict:
         raise ValueError(f"Phone number {phone_number_id} not found or already released")
     row = result.data
 
-    # Delete LiveKit dispatch rule + inbound trunk
-    if row.get("livekit_dispatch_rule_id") or row.get("livekit_inbound_trunk_id"):
+    # Delete LiveKit dispatch rule + inbound trunk + outbound trunk
+    lk_ids = {
+        "dispatch_rule": row.get("livekit_dispatch_rule_id"),
+        "inbound_trunk": row.get("livekit_inbound_trunk_id"),
+        "outbound_trunk": row.get("livekit_outbound_trunk_id"),
+    }
+    if any(lk_ids.values()):
         lk = api.LiveKitAPI(
             url=settings.livekit_url,
             api_key=settings.livekit_api_key,
             api_secret=settings.livekit_api_secret,
         )
         try:
-            if row.get("livekit_dispatch_rule_id"):
+            if lk_ids["dispatch_rule"]:
                 await lk.sip.delete_sip_dispatch_rule(
-                    DeleteSIPDispatchRuleRequest(sip_dispatch_rule_id=row["livekit_dispatch_rule_id"])
+                    DeleteSIPDispatchRuleRequest(sip_dispatch_rule_id=lk_ids["dispatch_rule"])
                 )
-                logger.info(f"[release] Dispatch rule deleted: {row['livekit_dispatch_rule_id']}")
-            if row.get("livekit_inbound_trunk_id"):
+                logger.info(f"[release] Dispatch rule deleted: {lk_ids['dispatch_rule']}")
+            if lk_ids["inbound_trunk"]:
                 await lk.sip.delete_sip_trunk(
-                    DeleteSIPTrunkRequest(sip_trunk_id=row["livekit_inbound_trunk_id"])
+                    DeleteSIPTrunkRequest(sip_trunk_id=lk_ids["inbound_trunk"])
                 )
-                logger.info(f"[release] Inbound trunk deleted: {row['livekit_inbound_trunk_id']}")
+                logger.info(f"[release] Inbound trunk deleted: {lk_ids['inbound_trunk']}")
+            if lk_ids["outbound_trunk"]:
+                await lk.sip.delete_sip_trunk(
+                    DeleteSIPTrunkRequest(sip_trunk_id=lk_ids["outbound_trunk"])
+                )
+                logger.info(f"[release] Outbound trunk deleted: {lk_ids['outbound_trunk']}")
         except Exception as e:
             logger.warning(f"[release] Could not delete LiveKit SIP resources: {e}")
         finally:

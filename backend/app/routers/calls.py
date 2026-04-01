@@ -312,24 +312,20 @@ async def initiate_outbound_call(
     # Look up the business's active phone number (used as caller ID)
     phone_row = (
         supabase_admin.table("business_phone_numbers")
-        .select("phone_number")
+        .select("phone_number, livekit_outbound_trunk_id")
         .eq("business_id", body.business_id)
         .eq("is_active", True)
+        .neq("livekit_outbound_trunk_id", "")
         .limit(1)
         .execute()
     )
     if not phone_row.data:
         raise HTTPException(
             status_code=422,
-            detail="No active phone number provisioned for this business. Provision one first.",
+            detail="No active phone number with an outbound trunk found for this business. Provision a number first.",
         )
     from_number = phone_row.data[0]["phone_number"]
-
-    if not settings.livekit_sip_outbound_trunk_id:
-        raise HTTPException(
-            status_code=503,
-            detail="Outbound SIP trunk not configured. Provision a phone number first.",
-        )
+    outbound_trunk_id = phone_row.data[0]["livekit_outbound_trunk_id"]
 
     # 1. Create LiveKit room
     room_id = livekit_service.generate_room_id()
@@ -370,6 +366,7 @@ async def initiate_outbound_call(
             room_id,
             to_number=body.to_phone_number,
             from_number=from_number,
+            outbound_trunk_id=outbound_trunk_id,
         )
     except Exception as e:
         logger.error("SIP dial failed: %s", e)

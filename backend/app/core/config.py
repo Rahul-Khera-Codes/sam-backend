@@ -35,7 +35,6 @@ class Settings(BaseSettings):
     twilio_auth_token: str = ""
     twilio_trunk_sid: str = ""
     livekit_sip_inbound_trunk_id: str = ""
-    livekit_sip_outbound_trunk_id: str = ""
     livekit_sip_host: str = ""  # from LiveKit Cloud dashboard → Project Settings → SIP URI
     agent_name: str = "ai-employee-agent"
     sip_auth_username: str = ""

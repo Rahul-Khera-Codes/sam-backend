@@ -130,11 +130,13 @@ async def create_sip_participant(
     room_id: str,
     to_number: str,
     from_number: str,
+    outbound_trunk_id: str,
     *,
     participant_identity: str | None = None,
 ) -> dict:
     """
-    Dials a PSTN number into an existing LiveKit room via the outbound SIP trunk.
+    Dials a PSTN number into an existing LiveKit room via the business's outbound SIP trunk.
+    outbound_trunk_id: the LiveKit outbound trunk ID stored in business_phone_numbers.
     Returns the SIP participant info dict.
     """
     from livekit.protocol.sip import CreateSIPParticipantRequest
@@ -146,7 +148,7 @@ async def create_sip_participant(
     )
     try:
         req = CreateSIPParticipantRequest(
-            sip_trunk_id=settings.livekit_sip_outbound_trunk_id,
+            sip_trunk_id=outbound_trunk_id,
             sip_call_to=to_number,
             sip_number=from_number,
             room_name=room_id,
@@ -154,7 +156,7 @@ async def create_sip_participant(
             participant_name="Customer",
         )
         participant = await api.sip.create_sip_participant(req)
-        print(f"[LiveKit] SIP participant dialled to={to_number} room={room_id}", flush=True)
+        print(f"[LiveKit] SIP participant dialled to={to_number} from={from_number} trunk={outbound_trunk_id} room={room_id}", flush=True)
         return {
             "participant_identity": participant.participant_identity,
             "sip_call_id": getattr(participant, "sip_call_id", ""),

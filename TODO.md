@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-03-31 (session 10 — FK bug fixed, location in greeting fixed, call records saving reliably)
+Last updated: 2026-03-31 (session 11 — agent settings RLS fix, calendar phone/email fields, outbound call UI + trunk architecture fix)
 
 ---
 
@@ -54,6 +54,23 @@ Last updated: 2026-03-31 (session 10 — FK bug fixed, location in greeting fixe
 - [x] Fallback call record creation at finalization — if initial INSERT fails (transient error), retried just before saving transcript
 - [x] SIP phone number not E.164 — `_normalize_phone_e164()` strips non-digits and prepends `+1` for North American numbers
 - [x] `gmail_tokens.google_email` was empty — manually fixed in DB; emails now send correctly
+
+### Frontend — Outbound Calls (session 11)
+- [x] `OutboundCallDialog.tsx` — call type selector (Reminder / Feedback / Follow-up / General)
+- [x] Appointment list auto-filters by call type (upcoming vs past) using `useAppointments`
+- [x] Auto-fills client phone from appointment; falls back to manual entry if empty
+- [x] Agent purpose preview shown before dialing
+- [x] Wired to `POST /calls/outbound` via `initiateOutboundCall()`
+- [x] "New Call" button added to Call Recordings page header; reloads call list on success
+
+### Bugs Fixed (session 11)
+- [x] `GET /settings/agent` used anon `supabase` client → RLS blocked reads → page showed "0 of 0 features" on refresh; switched to `supabase_admin`
+- [x] `GET /settings/agent/audit-log` same RLS issue — switched to `supabase_admin`
+- [x] `GET /settings/communication` same RLS issue — switched to `supabase_admin`
+- [x] Calendar Appointment Details modal missing client phone + email display
+- [x] Calendar Edit Appointment modal missing client phone + email fields; not saved on update
+- [x] `release_phone_number()` did not delete outbound SIP trunk → orphaned `ST_htrEWVP2hm6P` in LiveKit after releasing +14159935287; fixed by adding outbound trunk cleanup to release flow
+- [x] `LIVEKIT_SIP_OUTBOUND_TRUNK_ID` was a single shared env var (wrong for multi-tenant); moved to per-number `livekit_outbound_trunk_id` column in `business_phone_numbers`
 
 ### Bugs Fixed
 - [x] `ai-employees-app/.env` — stray backtick on `VITE_VOICE_AGENT_API_URL` caused 404 on `/calls/initiate`
@@ -222,6 +239,18 @@ These don't exist yet on the backend (frontend queries Supabase directly — bac
 - [x] `OutboundCallRequest` / `OutboundCallResponse` schemas added
 - [x] `initiateOutboundCall()` added to `voiceAgentApi.ts`
 - [x] Agent already handles `call_direction == "outbound"` opener (Step 4)
+- [x] Frontend `OutboundCallDialog` — call type selection, filtered appointment list, auto-fill phone, purpose preview
+- [x] **Outbound trunk architecture fix** — each number has its own outbound trunk stored in DB (not shared env var)
+  - `livekit_outbound_trunk_id` column added to `business_phone_numbers` (migration `20260331000000_bpn_outbound_trunk.sql`)
+  - `livekit_service.create_sip_participant()` now accepts explicit `outbound_trunk_id` param
+  - `POST /calls/outbound` fetches trunk ID from DB alongside `from_number`
+  - `provision_phone_number()` creates per-number outbound trunk + stores ID in DB
+  - `release_phone_number()` now also deletes outbound trunk on release (fixes orphaned trunk bug)
+  - `LIVEKIT_SIP_OUTBOUND_TRUNK_ID` removed from `config.py` and `.env`
+- [x] **Manual steps needed for existing numbers:**
+  - Run migration `20260331000000_bpn_outbound_trunk.sql` in Supabase (backfills `ST_WZ95dtKEntty` for +14157077538)
+  - Delete orphaned trunk `ST_htrEWVP2hm6P` from LiveKit dashboard (from released +14159935287)
+  - +14152555624 has no outbound trunk yet — provision via app or create manually in LiveKit
 - [ ] Wire up `missed_call_text_back` feature flag: on call end with `status=missed`, trigger outbound callback (future)
 
 #### Step 8 — SMS via Twilio
