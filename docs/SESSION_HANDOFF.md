@@ -1,18 +1,25 @@
-# Session Handoff — 2026-03-31
+# Session Handoff — 2026-04-01 (Session 11)
 
-This document captures the full state of the system after sessions 9-10 so the next session can pick up immediately without re-investigation.
+This document captures the full state of the system after session 11 so the next session can pick up immediately without re-investigation.
 
 ---
 
-## System Status (as of 2026-03-31)
+## System Status (as of 2026-04-01)
 
-**Everything is working end-to-end for inbound SIP calls:**
+**Working end-to-end:**
 - Inbound SIP call → agent answers → books appointment → transcript + summary saved → shows in UI ✅
 - Confirmation email → customer ✅
 - Staff notification email → assigned staff ✅
 - Call records appear in website Call Recordings & Transcripts page ✅
 - Analytics dashboard shows real data ✅
-- Frontend hot reload via Docker volume mounts ✅
+- Agent Settings page loads feature flags on refresh (RLS fix) ✅
+- Calendar Appointment Details modal shows client phone + email ✅
+- Calendar Edit Appointment modal has phone + email fields ✅
+- Outbound call UI (OutboundCallDialog) — frontend complete ✅
+- Outbound trunk architecture — per-number in DB (not shared env var) ✅
+
+**NOT yet tested end-to-end:**
+- Outbound call flow (`POST /calls/outbound`) — backend code complete but requires manual DB migration first
 
 ---
 
@@ -51,37 +58,73 @@ This document captures the full state of the system after sessions 9-10 so the n
 - `7d504795-5825-4d7a-a60b-6b5e4940843d` — "banquet hall space", 60 min, active
 
 ### Phone Numbers
-| Number | Dispatch Rule | location_id in DB | Status |
+| Number | Outbound Trunk | Dispatch Rule | Status |
 |---|---|---|---|
-| +14152555624 | SDR_YX8xQkwDQUMb | null | active |
-| +14157077538 | SDR_s6FZouinFiun | fd7d1823 | active |
-
-**ACTION NEEDED:** Both dispatch rules still have stale `location_id` in LiveKit attributes. User needs to edit them in LiveKit dashboard to remove `location_id` (leave only `business_id`). The agent code no longer reads `location_id` from dispatch rule attributes so this is cosmetic cleanup only.
+| +14152555624 | ❌ none | SDR_YX8xQkwDQUMb | active |
+| +14157077538 | ST_WZ95dtKEntty | SDR_s6FZouinFiun | active |
 
 ### Gmail Integration
 - Connected: `rahul.excel2011@gmail.com`
 - Token auto-refreshes on each send — working fine
-- `google_email` field was empty (fixed manually to `rahul.excel2011@gmail.com` in `gmail_tokens` table)
 
 ---
 
-## Key Bugs Fixed (Sessions 9-10)
+## MANUAL ACTIONS REQUIRED (blocking outbound calls)
 
-### Session 9
-1. **`inbound_numbers` in dispatch rule** — caused calls to ring forever. Removed from `phone_number_service.py`.
-2. **SIP calls not in DB** — agent now auto-creates `calls` row at session start.
-3. **RLS blocking reads** — `calls.py` and `analytics.py` switched to `supabase_admin`.
-4. **Transcript bubbles all "Customer"** — fixed `msg.role`/`msg.content` → `msg.speaker`/`msg.text` in frontend.
+These must be done by the user before outbound calls will work:
 
-### Session 10
-5. **FK violation on `calls.location_id`** — dispatch rules had stale `location_id` (`9174e86b...`) that no longer exists in `locations` table. Root cause: location was deleted but dispatch rule retained old attribute.
-   - **Fix:** `phone_number_service._create_dispatch_rule` now only puts `business_id` in attributes (no `location_id`).
-   - **Fix:** Agent Source 3 no longer reads `location_id` from participant attributes.
-   - `location_id` in agent now only comes from Source 4 (DB lookup) or job/participant metadata.
-6. **Location missing from greeting** — removing `location_id` from Source 3 meant `location_phrase` was empty in `build_instructions`. Fixed: `prompt_builder.py` now falls back to `locations[0]` when `location_id` is None.
-7. **Fallback call record creation** — if initial INSERT fails (e.g. transient error), a second attempt is made at finalization time.
-8. **Phone number normalization** — `sip.phoneNumber` from Twilio SIP returns `6987-321-540` (non-E.164). Added `_normalize_phone_e164()` in `agent.py`.
-9. **`gmail_tokens.google_email` was empty** — fixed manually in DB. Should be populated automatically during OAuth flow (bug in OAuth callback).
+1. **Run migration in Supabase SQL editor:**
+   ```sql
+   ALTER TABLE business_phone_numbers
+   ADD COLUMN IF NOT EXISTS livekit_outbound_trunk_id TEXT DEFAULT '';
+
+   -- Backfill for +14157077538
+   UPDATE business_phone_numbers
+   SET livekit_outbound_trunk_id = 'ST_WZ95dtKEntty'
+   WHERE phone_number = '+14157077538';
+   ```
+
+2. **Delete orphaned LiveKit trunk** `ST_htrEWVP2hm6P` from LiveKit dashboard
+   - This belonged to released number +14159935287 and was never cleaned up
+
+3. **+14152555624 has no outbound trunk** — either:
+   - Re-provision the number via app (will auto-create trunk), or
+   - Create a trunk manually in LiveKit and update the DB row
+
+---
+
+## Session 11 Changes Summary
+
+### Backend (committed as "outbound: code only not tested")
+- `backend/app/services/livekit_service.py` — `create_sip_participant()` accepts explicit `outbound_trunk_id` param
+- `backend/app/services/phone_number_service.py` — per-number outbound trunk creation + DB storage; release also deletes outbound trunk
+- `backend/app/routers/calls.py` — fetches `livekit_outbound_trunk_id` from DB for outbound calls
+- `backend/app/core/config.py` — removed `livekit_sip_outbound_trunk_id` field
+- `backend/.env` — removed `LIVEKIT_SIP_OUTBOUND_TRUNK_ID`, added comment
+
+### Backend (committed as "settings sync fix")
+- `backend/app/routers/settings.py` — `GET /settings/agent`, `GET /settings/agent/audit-log`, `GET /settings/communication` all switched to `supabase_admin`
+
+### Frontend (in `ai-employees-app/`)
+- `src/hooks/useAppointments.ts` — added `client_phone`, `client_email` to `Appointment` interface; fixed TS deep instantiation error
+- `src/pages/dashboard/Calendar.tsx` — phone/email in Details modal; editable phone/email in Edit modal
+- `src/components/OutboundCallDialog.tsx` — NEW: full outbound call dialog with type selector, filtered appointment list, phone auto-fill, purpose preview
+- `src/pages/dashboard/customer-service/CallRecordings.tsx` — "New Call" button added
+
+### Docs (uncommitted)
+- `docs/ARCHITECTURE.md` — NEW: comprehensive 12-section architecture documentation
+
+### Frontend migration (in `ai-employees-app/`)
+- `supabase/migrations/20260331000000_bpn_outbound_trunk.sql` — adds `livekit_outbound_trunk_id` column
+
+---
+
+## Key Bugs Fixed (Session 11)
+
+1. **Agent Settings RLS** — `GET /settings/agent` used anon `supabase` client → RLS blocked reads → page showed "0 of 0 features" on refresh
+2. **Calendar phone/email** — `Appointment` interface was missing `client_phone`/`client_email` columns
+3. **Orphaned outbound trunk** — `release_phone_number()` didn't clean up outbound trunk; now it does
+4. **Wrong outbound trunk architecture** — was a single shared env var; now per-number in DB
 
 ---
 
@@ -93,48 +136,32 @@ This document captures the full state of the system after sessions 9-10 so the n
 3. `participant.attributes` — SIP attrs: only reads `business_id` now (NOT `location_id` — removed to prevent stale FK)
 4. DB lookup by `sip.trunkPhoneNumber` in `business_phone_numbers` table (last resort)
 
-### Call Record Creation (SIP calls)
-- Created at session start if `is_sip_call and not call_id and business_id`
-- Fallback: if initial INSERT fails, retried at finalization before saving transcript
-- `location_id` validated against DB before INSERT (guards against stale FK)
-
-### Post-call Finalization
-`_finalize_call()`: saves transcripts → updates call status/duration → generates GPT-4o summary → sends missed-call SMS if applicable.
-
----
-
-## Files Changed This Session (uncommitted changes)
-
-| File | Change |
-|---|---|
-| `agent/agent.py` | Phone normalization, Source 3 no longer reads location_id, fallback call record creation, better error logging |
-| `agent/prompt_builder.py` | Falls back to `locations[0]` when `location_id` is None |
-| `backend/app/services/phone_number_service.py` | `_create_dispatch_rule` only puts `business_id` in attributes (removed location_id) |
-
-**These changes are NOT committed. Commit them before starting new work.**
+### Call Direction
+- Inbound: customer speaks first, agent waits and responds
+- Outbound: agent introduces itself and states purpose (reads `call_purpose` from room metadata)
 
 ---
 
 ## Known Issues / Next Tasks
 
 ### High Priority
-- [ ] **Commit uncommitted changes** — `agent/agent.py`, `agent/prompt_builder.py`, `backend/app/services/phone_number_service.py`
-- [ ] **Update LiveKit dispatch rules** — remove `location_id` from both SDR_YX8xQkwDQUMb and SDR_s6FZouinFiun in LiveKit dashboard (user said they'll do it manually)
-- [ ] **Location name is "Mirage"** → greeting says "Mirage Banquets in Mirage" (redundant). Rename location to "Edmonton" or full address in app settings.
-- [ ] **Sam Maisuria profile missing name** — `profiles.first_name`/`last_name` are NULL → agent calls them "Staff". Update via app or Supabase.
+- [ ] **Run migration + manual trunk setup** (see MANUAL ACTIONS REQUIRED above)
+- [ ] **Test outbound call end-to-end** after migration is run
 
 ### Medium Priority
-- [ ] **Call recording** — not implemented. Requires LiveKit Egress integration.
+- [ ] **CS3 Scheduler** — "Save Schedule" button is mock (fake delay, no API call); needs `GET/PUT /settings/agent/schedule` backend endpoint backed by `business_hours` table
+- [ ] **Communication Settings** — "Save All Settings" button not wired to `PUT /settings/communication`
+- [ ] **Call recording** — not implemented; requires LiveKit Egress integration
 - [ ] **`.ics` calendar attachment** in confirmation emails
 - [ ] **Reminder emails/SMS** — needs scheduler/cron
-- [ ] `Communication Settings` save button not wired up
 
 ### Lower Priority
 - [ ] Backend API endpoints for appointments/services (frontend queries Supabase directly now)
 - [ ] Business authorization check in backend (currently trusts frontend)
-- [ ] CS3 Scheduler — `GET/PUT /settings/agent/schedule` endpoint needed
 - [ ] Marketing / Sales / HR / Exec employee pages (stubs)
 - [ ] HTTPS setup for production mic access
+- [ ] Sam Maisuria profile missing name (NULL in DB)
+- [ ] Location named "Mirage" → greeting says "Mirage Banquets in Mirage" (redundant)
 
 ---
 
