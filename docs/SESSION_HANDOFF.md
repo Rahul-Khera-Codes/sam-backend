@@ -18,8 +18,8 @@ This document captures the full state of the system after session 11 so the next
 - Outbound call UI (OutboundCallDialog) — frontend complete ✅
 - Outbound trunk architecture — per-number in DB (not shared env var) ✅
 
-**NOT yet tested end-to-end:**
-- Outbound call flow (`POST /calls/outbound`) — backend code complete but requires manual DB migration first
+**Outbound calls — tested and working end-to-end ✅ (2026-04-02)**
+- `POST /calls/outbound` → LiveKit room → agent dispatch → SIP dials PSTN number → phone rings ✅
 
 ---
 
@@ -145,8 +145,7 @@ These must be done by the user before outbound calls will work:
 ## Known Issues / Next Tasks
 
 ### High Priority
-- [ ] **Run migration + manual trunk setup** (see MANUAL ACTIONS REQUIRED above)
-- [ ] **Test outbound call end-to-end** after migration is run
+- [x] **Outbound calls tested end-to-end** — working (2026-04-02)
 
 ### Medium Priority
 - [ ] **CS3 Scheduler** — "Save Schedule" button is mock (fake delay, no API call); needs `GET/PUT /settings/agent/schedule` backend endpoint backed by `business_hours` table

@@ -251,6 +251,7 @@ These don't exist yet on the backend (frontend queries Supabase directly — bac
   - Run migration `20260331000000_bpn_outbound_trunk.sql` in Supabase (backfills `ST_WZ95dtKEntty` for +14157077538)
   - Delete orphaned trunk `ST_htrEWVP2hm6P` from LiveKit dashboard (from released +14159935287)
   - +14152555624 has no outbound trunk yet — provision via app or create manually in LiveKit
+- [x] **Outbound calls tested end-to-end** — working (2026-04-02); fixed `livekit-api` upgrade 0.6→1.1 (`agent_dispatch` missing in 0.6)
 - [ ] Wire up `missed_call_text_back` feature flag: on call end with `status=missed`, trigger outbound callback (future)
 
 #### Step 8 — SMS via Twilio
@@ -308,6 +309,9 @@ These don't exist yet on the backend (frontend queries Supabase directly — bac
 - [ ] Add `.ics` calendar attachment to confirmation email
 - [ ] Send reminder email N days before appointment (needs scheduler/cron)
 - [ ] Wire up `confirmation_reminder_calls` feature flag to email trigger
+
+### Support Page — Form Submission
+- [ ] Wire "Submit Request" form on Support page to send to `support@aiemployeesinc.com` (set up email account first, then connect via Gmail API or SMTP)
 
 ### Frontend — Remaining Stubs
 - [ ] Marketing Employee page
