@@ -32,6 +32,24 @@ class ToggleAgentStateRequest(BaseModel):
     is_active: bool
 
 
+# ── Agent Schedule (weekly business hours) ─────
+
+class AgentScheduleDayItem(BaseModel):
+    day_of_week: str
+    is_open: bool
+    open_time: Optional[str] = None
+    close_time: Optional[str] = None
+
+
+class AgentScheduleResponse(BaseModel):
+    business_id: str
+    schedule: List[AgentScheduleDayItem]
+
+
+class UpdateAgentScheduleRequest(BaseModel):
+    schedule: List[AgentScheduleDayItem]
+
+
 # ── Forwarding Contacts ───────────────────────
 
 class ForwardingContactResponse(BaseModel):

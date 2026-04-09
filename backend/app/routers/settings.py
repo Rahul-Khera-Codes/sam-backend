@@ -6,12 +6,48 @@ from app.schemas.settings import (
     UpdateAgentSettingsRequest,
     AgentStateResponse,
     ToggleAgentStateRequest,
+    AgentScheduleResponse,
+    UpdateAgentScheduleRequest,
     CommunicationSettingsResponse,
     UpdateCommunicationSettingsRequest,
 )
 from datetime import datetime, timezone
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+DAY_ORDER = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+DEFAULT_SCHEDULE = {
+    "monday": {"is_open": True, "open_time": "09:00", "close_time": "17:00"},
+    "tuesday": {"is_open": True, "open_time": "09:00", "close_time": "17:00"},
+    "wednesday": {"is_open": True, "open_time": "09:00", "close_time": "17:00"},
+    "thursday": {"is_open": True, "open_time": "09:00", "close_time": "17:00"},
+    "friday": {"is_open": True, "open_time": "09:00", "close_time": "17:00"},
+    "saturday": {"is_open": False, "open_time": None, "close_time": None},
+    "sunday": {"is_open": False, "open_time": None, "close_time": None},
+}
+
+
+def _serialize_schedule_rows(rows: list[dict]) -> list[dict]:
+    rows_by_day = {row["day_of_week"]: row for row in rows if row.get("day_of_week")}
+    schedule = []
+    for day in DAY_ORDER:
+        row = rows_by_day.get(day)
+        if row:
+            schedule.append({
+                "day_of_week": day,
+                "is_open": bool(row.get("is_open")),
+                "open_time": row.get("open_time"),
+                "close_time": row.get("close_time"),
+            })
+        else:
+            default = DEFAULT_SCHEDULE[day]
+            schedule.append({
+                "day_of_week": day,
+                "is_open": default["is_open"],
+                "open_time": default["open_time"],
+                "close_time": default["close_time"],
+            })
+    return schedule
 
 
 # ── GET /settings/agent ───────────────────────
@@ -158,6 +194,69 @@ async def toggle_agent_state(
     }, on_conflict="business_id").execute()
 
     return result.data[0]
+
+
+# ── GET /settings/agent/schedule ──────────────
+
+@router.get("/agent/schedule", response_model=AgentScheduleResponse)
+async def get_agent_schedule(
+    business_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    result = (
+        supabase_admin.table("business_hours")
+        .select("day_of_week, is_open, open_time, close_time")
+        .eq("business_id", business_id)
+        .execute()
+    )
+
+    return {
+        "business_id": business_id,
+        "schedule": _serialize_schedule_rows(result.data or []),
+    }
+
+
+# ── PUT /settings/agent/schedule ──────────────
+
+@router.put("/agent/schedule", response_model=AgentScheduleResponse)
+async def update_agent_schedule(
+    business_id: str,
+    body: UpdateAgentScheduleRequest,
+    user_id: str = Depends(get_user_id),
+):
+    seen_days = set()
+    for item in body.schedule:
+        day = item.day_of_week.lower()
+        if day not in DAY_ORDER:
+            raise HTTPException(status_code=400, detail=f"Invalid day_of_week: {item.day_of_week}")
+        if day in seen_days:
+            raise HTTPException(status_code=400, detail=f"Duplicate day_of_week: {item.day_of_week}")
+        seen_days.add(day)
+        if item.is_open and (not item.open_time or not item.close_time):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Open days must include both open_time and close_time: {item.day_of_week}",
+            )
+
+        supabase_admin.table("business_hours").upsert({
+            "business_id": business_id,
+            "day_of_week": day,
+            "is_open": item.is_open,
+            "open_time": item.open_time if item.is_open else None,
+            "close_time": item.close_time if item.is_open else None,
+        }, on_conflict="business_id,day_of_week").execute()
+
+    result = (
+        supabase_admin.table("business_hours")
+        .select("day_of_week, is_open, open_time, close_time")
+        .eq("business_id", business_id)
+        .execute()
+    )
+
+    return {
+        "business_id": business_id,
+        "schedule": _serialize_schedule_rows(result.data or []),
+    }
 
 
 # ── GET /settings/agent/audit-log ────────────

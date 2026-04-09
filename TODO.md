@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-04-08 (session 18 — scheduler header cleanup)
+Last updated: 2026-04-08 (session 26 — agent settings side panel removed)
 
 ---
 
@@ -13,6 +13,7 @@ Last updated: 2026-04-08 (session 18 — scheduler header cleanup)
 - [x] `GET /calls`, `GET /calls/{id}`, `GET /calls/{id}/transcript`, `GET /calls/{id}/summary`, `GET /calls/{id}/recording`
 - [x] `PUT /calls/{id}/status`
 - [x] `POST /support/wishlist` — sends Wish List submissions through the business's connected Gmail account
+- [x] `GET/PUT /settings/agent/schedule` — persists weekly scheduler state in `business_hours`
 - [x] Settings router — 10 feature flag toggles, global on/off, audit log
 - [x] Communication settings CRUD (call/email/SMS scripts stored, not sent)
 - [x] Forwarding contacts + rules CRUD
@@ -109,11 +110,18 @@ Last updated: 2026-04-08 (session 18 — scheduler header cleanup)
 - [x] Help navigation — added `Wish List` item and wired wishlist submissions through the backend using the business's connected Gmail account
 - [x] Customer Service analytics page title renamed from "Agent Performance" to "Customer Service Agent Performance"
 - [x] Customer Service scheduler page title renamed from "AI Agent Scheduler" to "Customer Service Agent Scheduler"
+- [x] Customer Service settings page title renamed from "AI Agent Settings" to "Customer Service Agent Settings"
+- [x] Customer Service settings header no longer shows the temporary Reset to Default and Save Changes buttons
+- [x] Customer Service settings page no longer shows the Active Features / Configuration summary strip
+- [x] Customer Service settings page no longer shows the right-side Quick Actions, Configuration Presets, Recent Changes, and Help panels
 - [x] Customer Service scheduler header no longer shows the temporary `New Schedule` button
+- [x] Customer Service weekly scheduler now loads and saves real business hours; the summary cards reflect saved schedule data instead of a fake save toast
+- [x] Customer Service scheduler no longer shows the extra Quick Presets and This Week side panels
+- [x] Call Forwarding page no longer shows the extra right-side cards for rules, quick actions, statistics, and help
 - [x] Call Recordings page header no longer shows the temporary `New Call` button
 - [x] Call Recordings detail toolbar now keeps only the Download action; Share and more-actions buttons were removed
 - [x] **Calendar page** — fully implemented, month/week/day/list views, full CRUD (`Calendar.tsx`, 824 lines)
-- [x] **Calendar list view enhancements** — month/week/day/list switcher shown beside "Make Appointment", plus date-range filter and CSV export in list view
+- [x] **Calendar list view enhancements** — month/week/day/list switcher shown beside "Make Appointment" plus date-range filter in list view; CSV export button was later removed
 - [x] **Appointments** — `useAppointments.ts` full CRUD, saves to `appointments` table in Supabase
 - [x] **Services** — `useServices.ts` full CRUD + `ServicesTab.tsx` UI, saves to `services` table
 - [x] **Staff ↔ Services mapping** — `useUserServices.ts` full CRUD, saves to `user_services` table
@@ -346,7 +354,7 @@ These don't exist yet on the backend (frontend queries Supabase directly — bac
 - [x] **CS2 CallRecordings** — load summary + insights on call select via `GET /calls/{id}/summary`
 - [x] **CS2 CallRecordings** — wire audio player to `GET /calls/{id}/recording` signed URL (shows "no recording" for test calls)
 - [x] **CS3 Scheduler** — wire agent on/off toggle to `GET/PUT /settings/agent/state`
-- [ ] **CS3 Scheduler** — new backend endpoint `GET/PUT /settings/agent/schedule` (backed by `business_hours` table) + wire frontend
+- [x] **CS3 Scheduler** — new backend endpoint `GET/PUT /settings/agent/schedule` (backed by `business_hours` table) + wire frontend
 - [x] **CS4 CallForwarding** — replace mock contacts with `GET /forwarding/contacts`
 - [x] **CS4 CallForwarding** — wire toggle to `PUT /forwarding/contacts/{id}/toggle`
 - [x] **CS4 CallForwarding** — wire delete to `DELETE /forwarding/contacts/{id}`
