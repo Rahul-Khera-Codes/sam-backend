@@ -24,6 +24,8 @@ GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 GOOGLE_AUTH_BASE = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
+GMAIL_SEND_SCOPE_URI = "https://www.googleapis.com/auth/gmail.send"
 GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/userinfo.email openid"
 
 
@@ -95,6 +97,38 @@ def is_token_expired(expiry_str: str) -> bool:
         return datetime.now(timezone.utc) >= expiry
     except Exception:
         return True
+
+
+def _parse_scope_string(scope_string: str | None) -> set[str]:
+    if not scope_string:
+        return set()
+    return {scope.strip() for scope in scope_string.split() if scope.strip()}
+
+
+def has_required_scope(scope_string: str | None, required_scope: str) -> bool:
+    return required_scope in _parse_scope_string(scope_string)
+
+
+async def fetch_access_token_scopes(access_token: str) -> set[str]:
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            GOOGLE_TOKENINFO_URL,
+            params={"access_token": access_token},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return _parse_scope_string(data.get("scope"))
+
+
+async def has_gmail_send_scope(access_token: str, scope_string: str | None = None) -> bool:
+    if has_required_scope(scope_string, GMAIL_SEND_SCOPE_URI):
+        return True
+    try:
+        scopes = await fetch_access_token_scopes(access_token)
+    except Exception as e:
+        logger.warning("Failed to inspect Gmail token scopes: %s", e)
+        return False
+    return GMAIL_SEND_SCOPE_URI in scopes
 
 
 # ── Token row helpers ─────────────────────────────────────────────────────────

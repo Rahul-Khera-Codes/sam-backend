@@ -309,15 +309,13 @@ async def initiate_outbound_call(
     body: OutboundCallRequest,
     user_id: str = Depends(get_user_id),
 ):
-    # Look up the business's active phone number (used as caller ID)
-    phone_row = (
+    # Look up the outbound trunk — use specific number if provided, else pick first active trunk
+    query = (
         supabase_admin.table("business_phone_numbers")
         .select("phone_number, livekit_outbound_trunk_id")
         .eq("business_id", body.business_id)
         .eq("is_active", True)
         .neq("livekit_outbound_trunk_id", "")
-        .limit(1)
-        .execute()
     )
     if not phone_row.data:
         raise HTTPException(

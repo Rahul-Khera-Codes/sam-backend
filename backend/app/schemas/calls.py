@@ -37,7 +37,8 @@ class InitiateCallRequest(BaseModel):
 class OutboundCallRequest(BaseModel):
     business_id: str
     location_id: Optional[str] = None
-    to_phone_number: str        # E.164 number to dial
+    to_phone_number: str                  # E.164 number to dial
+    from_phone_number: Optional[str] = None  # specific business number to call from; if omitted, backend picks first active trunk
     call_purpose: Optional[str] = None   # brief note stored in call record
 
 

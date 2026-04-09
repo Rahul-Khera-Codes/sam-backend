@@ -89,6 +89,25 @@ async def oauth_callback(body: GmailCallbackRequest):
             detail="No refresh token returned. User may need to revoke access and reconnect.",
         )
 
+    granted_scopes = token_data.get("scope", "")
+    has_send_scope = await gmail.has_gmail_send_scope(
+        token_data["access_token"],
+        granted_scopes,
+    )
+    if not has_send_scope:
+        logger.warning(
+            "Gmail OAuth callback missing gmail.send scope for business %s. Granted scopes: %s",
+            business_id,
+            granted_scopes or "<not returned>",
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Gmail connected without mail-sending permission. Please disconnect Gmail, "
+                "then reconnect and approve send access."
+            ),
+        )
+
     google_email = token_data.get("email", "")
     if not google_email:
         try:

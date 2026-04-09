@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-03-31 (session 11 — agent settings RLS fix, calendar phone/email fields, outbound call UI + trunk architecture fix)
+Last updated: 2026-04-08 (session 18 — scheduler header cleanup)
 
 ---
 
@@ -12,6 +12,7 @@ Last updated: 2026-03-31 (session 11 — agent settings RLS fix, calendar phone/
 - [x] `POST /calls/initiate` — creates LiveKit room, call record, returns token
 - [x] `GET /calls`, `GET /calls/{id}`, `GET /calls/{id}/transcript`, `GET /calls/{id}/summary`, `GET /calls/{id}/recording`
 - [x] `PUT /calls/{id}/status`
+- [x] `POST /support/wishlist` — sends Wish List submissions through the business's connected Gmail account
 - [x] Settings router — 10 feature flag toggles, global on/off, audit log
 - [x] Communication settings CRUD (call/email/SMS scripts stored, not sent)
 - [x] Forwarding contacts + rules CRUD
@@ -61,7 +62,7 @@ Last updated: 2026-03-31 (session 11 — agent settings RLS fix, calendar phone/
 - [x] Auto-fills client phone from appointment; falls back to manual entry if empty
 - [x] Agent purpose preview shown before dialing
 - [x] Wired to `POST /calls/outbound` via `initiateOutboundCall()`
-- [x] "New Call" button added to Call Recordings page header; reloads call list on success
+- [x] Outbound call dialog implementation completed; temporary "New Call" header button on Call Recordings was later removed from the UI
 
 ### Bugs Fixed (session 11)
 - [x] `GET /settings/agent` used anon `supabase` client → RLS blocked reads → page showed "0 of 0 features" on refresh; switched to `supabase_admin`
@@ -79,6 +80,7 @@ Last updated: 2026-03-31 (session 11 — agent settings RLS fix, calendar phone/
 - [x] `calls.py` `.maybeSingle()` AttributeError — same fix in `get_call`, `get_summary`, `get_recording`
 - [x] `PUT /forwarding/contacts/bulk/toggle` 500 — FastAPI matched `"bulk"` as UUID param on `/{contact_id}/toggle`; fixed by moving `bulk/toggle` route above `/{contact_id}/toggle` in `forwarding.py`
 - [x] `GET /settings/agent/state` 500 duplicate key — regular `supabase` client blocked by RLS returned empty → INSERT failed with unique constraint; fixed by switching SELECT to `supabase_admin` and changing INSERT to `.upsert(on_conflict="business_id")`
+- [x] Gmail could show connected but still fail `users.messages.send` with insufficient scopes — Gmail OAuth callback now rejects tokens missing `gmail.send`, and Wish List submission now returns a reconnect-required error instead of a generic 502
 
 ### Frontend (`ai-employees-app`)
 - [x] React 18 + TypeScript + Vite + shadcn-ui + Tailwind
@@ -103,12 +105,22 @@ Last updated: 2026-03-31 (session 11 — agent settings RLS fix, calendar phone/
 - [x] Communication settings page UI (call/email/SMS scripts) — UI only, no DB save yet
 - [x] Team management (invite, roles, permissions, location assignments)
 - [x] `voiceAgentApi.ts` — `/calls/initiate`, `/calls/recent-activity`
+- [x] Account Settings copy tweak — Google Calendar section renamed to "My Google Calendar"
+- [x] Help navigation — added `Wish List` item and wired wishlist submissions through the backend using the business's connected Gmail account
+- [x] Customer Service analytics page title renamed from "Agent Performance" to "Customer Service Agent Performance"
+- [x] Customer Service scheduler page title renamed from "AI Agent Scheduler" to "Customer Service Agent Scheduler"
+- [x] Customer Service scheduler header no longer shows the temporary `New Schedule` button
+- [x] Call Recordings page header no longer shows the temporary `New Call` button
+- [x] Call Recordings detail toolbar now keeps only the Download action; Share and more-actions buttons were removed
 - [x] **Calendar page** — fully implemented, month/week/day/list views, full CRUD (`Calendar.tsx`, 824 lines)
+- [x] **Calendar list view enhancements** — month/week/day/list switcher shown beside "Make Appointment", plus date-range filter and CSV export in list view
 - [x] **Appointments** — `useAppointments.ts` full CRUD, saves to `appointments` table in Supabase
 - [x] **Services** — `useServices.ts` full CRUD + `ServicesTab.tsx` UI, saves to `services` table
 - [x] **Staff ↔ Services mapping** — `useUserServices.ts` full CRUD, saves to `user_services` table
 - [x] **Staff working hours** — `useTeamMemberAvailability.ts` + `useUserAvailability.ts`, saves to `user_availability` table
 - [x] **Staff time off / date overrides** — `user_availability_overrides` table, full CRUD + UI (TeamMemberHoursDialog, DateOverrideModal)
+- [x] Employee placeholder pages — Marketing, Sales, HR, and Executive routes now show a dedicated "Coming Soon" page instead of the generic dashboard
+- [x] Main dashboard route now shows a simple "Coming Soon" placeholder instead of mock analytics content
 
 ---
 
