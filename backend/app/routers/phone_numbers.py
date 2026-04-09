@@ -23,7 +23,7 @@ router = APIRouter(prefix="/phone-numbers", tags=["phone-numbers"])
 
 class ProvisionRequest(BaseModel):
     phone_number: str           # E.164 e.g. "+14155550100"
-    location_id: Optional[str] = None
+    location_id: str
 
 
 # ── GET /phone-numbers/search ─────────────────────────────────────────────────
@@ -78,14 +78,23 @@ async def provision_number(
 
     business_id = role_row.data[0]["business_id"]
 
-    # Guard: one active number per location (or per business if no location)
-    existing = phone_number_service.get_phone_numbers_for_business(business_id)
-    for row in existing:
-        if row.get("location_id") == body.location_id:
-            raise HTTPException(
-                status_code=409,
-                detail=f"This business/location already has an active number: {row['phone_number']}",
-            )
+    location_row = (
+        supabase_admin.table("locations")
+        .select("id")
+        .eq("id", body.location_id)
+        .eq("business_id", business_id)
+        .limit(1)
+        .execute()
+    )
+    if not location_row.data:
+        raise HTTPException(status_code=404, detail="Location not found for this business")
+
+    existing = phone_number_service.get_phone_number_for_location(business_id, body.location_id)
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This location already has an active number: {existing['phone_number']}",
+        )
 
     try:
         row = await phone_number_service.provision_phone_number(
@@ -119,6 +128,36 @@ async def list_numbers(
 
     numbers = phone_number_service.get_phone_numbers_for_business(role_row.data[0]["business_id"])
     return {"numbers": numbers}
+
+
+@router.post("/sync-dispatch")
+async def sync_dispatch_rules(
+    current_user: dict = Depends(get_current_user),
+    user_id: str = Depends(get_user_id),
+):
+    """Refresh dispatch rules so active numbers carry the latest metadata contract."""
+    role_row = (
+        supabase_admin.table("user_roles")
+        .select("business_id, role")
+        .eq("user_id", user_id)
+        .limit(1)
+        .execute()
+    )
+    if not role_row.data:
+        raise HTTPException(status_code=403, detail="User has no role assigned")
+    if role_row.data[0]["role"] not in ("super_admin", "admin"):
+        raise HTTPException(status_code=403, detail="Only admins can refresh dispatch rules")
+
+    try:
+        refreshed = await phone_number_service.refresh_dispatch_rules_for_business(
+            role_row.data[0]["business_id"]
+        )
+        return {"numbers": refreshed}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"[phone-numbers/sync-dispatch] {e}")
+        raise HTTPException(status_code=502, detail=f"Dispatch refresh failed: {str(e)}")
 
 
 # ── DELETE /phone-numbers/{id} ────────────────────────────────────────────────

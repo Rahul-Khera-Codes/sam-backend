@@ -270,10 +270,20 @@ async def initiate_call(
     # 4. Update call status to active
     supabase_admin.table("calls").update({"status": "active"}).eq("id", call_id).execute()
 
-    # 5. Voice agent: LiveKit Agents (automatic dispatch when user joins) or legacy worker
+    # 5. Voice agent: explicitly dispatch LiveKit Agents, or spawn the legacy worker
     use_livekit_agent = settings.use_livekit_agent
     logger.warning(f"use_livekit_agent: {use_livekit_agent}")
-    if not use_livekit_agent:
+    if use_livekit_agent:
+        await livekit_service.create_agent_dispatch(
+            room_id,
+            metadata={
+                "call_id": call_id,
+                "business_id": body.business_id,
+                "location_id": body.location_id or "",
+                "call_direction": body.direction.value,
+            },
+        )
+    else:
         try:
             subprocess.Popen(
                 [
@@ -309,21 +319,61 @@ async def initiate_outbound_call(
     body: OutboundCallRequest,
     user_id: str = Depends(get_user_id),
 ):
-    # Look up the outbound trunk — use specific number if provided, else pick first active trunk
-    query = (
-        supabase_admin.table("business_phone_numbers")
-        .select("phone_number, livekit_outbound_trunk_id")
-        .eq("business_id", body.business_id)
-        .eq("is_active", True)
-        .neq("livekit_outbound_trunk_id", "")
-    )
-    if not phone_row.data:
+    phone_row = None
+
+    if body.from_phone_number:
+        query = (
+            supabase_admin.table("business_phone_numbers")
+            .select("phone_number, location_id, livekit_outbound_trunk_id")
+            .eq("business_id", body.business_id)
+            .eq("phone_number", body.from_phone_number)
+            .eq("is_active", True)
+            .neq("livekit_outbound_trunk_id", "")
+            .limit(1)
+            .execute()
+        )
+        if query.data:
+            phone_row = query.data[0]
+
+    if body.location_id:
+        query = (
+            supabase_admin.table("business_phone_numbers")
+            .select("phone_number, location_id, livekit_outbound_trunk_id")
+            .eq("business_id", body.business_id)
+            .eq("location_id", body.location_id)
+            .eq("is_active", True)
+            .neq("livekit_outbound_trunk_id", "")
+            .limit(1)
+            .execute()
+        )
+        if not query.data:
+            raise HTTPException(
+                status_code=422,
+                detail="No active outbound-capable number is configured for this location.",
+            )
+        location_row = query.data[0]
+        if phone_row and phone_row["phone_number"] != location_row["phone_number"]:
+            raise HTTPException(
+                status_code=422,
+                detail="The selected from number does not belong to the requested location.",
+            )
+        phone_row = location_row
+
+    if not phone_row:
         raise HTTPException(
             status_code=422,
-            detail="No active phone number with an outbound trunk found for this business. Provision a number first.",
+            detail="Outbound calls now require a location-scoped number. Provide a location_id or matching from_phone_number first.",
         )
-    from_number = phone_row.data[0]["phone_number"]
-    outbound_trunk_id = phone_row.data[0]["livekit_outbound_trunk_id"]
+
+    resolved_location_id = phone_row.get("location_id")
+    if not resolved_location_id:
+        raise HTTPException(
+            status_code=422,
+            detail="The selected business number is not attached to a location yet.",
+        )
+
+    from_number = phone_row["phone_number"]
+    outbound_trunk_id = phone_row["livekit_outbound_trunk_id"]
 
     # 1. Create LiveKit room
     room_id = livekit_service.generate_room_id()
@@ -332,7 +382,7 @@ async def initiate_outbound_call(
     # 2. Create call record
     call_data = {
         "business_id": body.business_id,
-        "location_id": body.location_id,
+        "location_id": resolved_location_id,
         "caller_phone": body.to_phone_number,
         "caller_name": body.call_purpose or None,
         "direction": "outbound",
@@ -352,7 +402,7 @@ async def initiate_outbound_call(
         metadata={
             "call_id": call_id,
             "business_id": body.business_id,
-            "location_id": body.location_id or "",
+            "location_id": resolved_location_id,
             "call_direction": "outbound",
             "call_purpose": body.call_purpose or "",
         },

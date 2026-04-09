@@ -23,7 +23,7 @@ Be friendly, professional, and concise in all responses.
 If you cannot help with something, offer to transfer the caller to a human agent.
 
 Booking a new appointment:
-1. Ask which location they prefer (if the business has multiple).
+1. If this call is already tied to a specific location, default to that location. Only ask about another branch if the caller explicitly asks for one.
 2. Ask what service they need, then use get_services if you don't already have the list.
 3. Ask if they have a preferred staff member; otherwise offer the next available using get_staff_for_service.
 4. Use get_available_slots to find open times and offer a few options.
@@ -32,11 +32,12 @@ Booking a new appointment:
 7. Confirm the booking ID once done.
 
 Rescheduling or cancelling:
-1. Ask for the customer's name to look up their appointment using find_appointments.
+1. Start by looking up the appointment for the current called location using find_appointments.
 2. Read back the appointment details (service, date, time) — do NOT read out the ref ID to the customer, it is for internal use only.
-3. If multiple appointments are found, ask which one they mean by service and date — not by ref.
-4. For reschedule: check new availability with get_available_slots, then call update_appointment passing appointment_ref and client_name internally.
-5. For cancel: confirm once more verbally using service + date + time (e.g. "Just to confirm, you'd like to cancel your Haircut on April 2nd at 4 PM?"), then call cancel_appointment passing appointment_ref and client_name internally.
+3. If nothing is found for the current location, ask whether the booking may be at another branch. Only then retry with cross-location search.
+4. If multiple appointments are found, ask which one they mean by service and date — not by ref.
+5. For reschedule: check new availability with get_available_slots, then call update_appointment passing appointment_ref and client_name internally.
+6. For cancel: confirm once more verbally using service + date + time (e.g. "Just to confirm, you'd like to cancel your Haircut on April 2nd at 4 PM?"), then call cancel_appointment passing appointment_ref and client_name internally.
 
 General rules:
 - Never invent availability — always use the tools to check.
@@ -141,6 +142,25 @@ def _format_locations_and_employees(
             parts.append(f"staff: {', '.join(staff)}")
         lines.append("; ".join(parts))
     return "Locations and staff: " + " | ".join(lines) + "\n\n"
+
+
+def _format_called_location_context(location: dict | None, staff_names: list[str]) -> str:
+    """Format the active called-location block so the agent treats it as authoritative."""
+    if not location:
+        return ""
+
+    parts = [f"Active called location: {location.get('name') or 'Unknown'}."]
+    if location.get("address"):
+        parts.append(f"Address: {location['address']}.")
+    if location.get("phone"):
+        parts.append(f"Location phone: {location['phone']}.")
+    if staff_names:
+        parts.append(f"Staff at this location: {', '.join(staff_names)}.")
+    parts.append(
+        "Treat this as the caller's primary branch context. "
+        "Default new bookings to this location, and search this location first for updates or cancellations."
+    )
+    return " ".join(parts) + "\n\n"
 
 
 def _fetch_business_hours(supabase, business_id: str) -> list[dict]:
@@ -336,6 +356,8 @@ def build_instructions(business_id: str | None, location_id: str | None) -> str:
     brand       = _fetch_brand_voice(supabase, business_id) if business_id else None
     brand_block = _format_brand_voice(brand) if brand else ""
 
+    locations: list[dict] = []
+    staff_list: list[dict] = []
     locations_block = ""
     if business_id:
         locations = _fetch_locations(supabase, business_id)
@@ -349,12 +371,18 @@ def build_instructions(business_id: str | None, location_id: str | None) -> str:
     kb_entries = _fetch_knowledge_base(supabase, business_id) if business_id else []
     kb_block   = _format_knowledge_base(kb_entries)
 
-    # Use explicit location_id if given, otherwise fall back to first location for the business
+    # Only use an explicit location_id. Do not fall back to the first location.
     _loc_to_use = None
     if supabase and location_id:
         _loc_to_use = _fetch_location(supabase, location_id)
-    if _loc_to_use is None and locations:
-        _loc_to_use = locations[0]
+    active_location_staff: list[str] = []
+    if _loc_to_use:
+        active_location_staff = [
+            s["name"]
+            for s in staff_list
+            if _loc_to_use.get("id") in (s.get("location_ids") or [])
+        ]
+    active_location_block = _format_called_location_context(_loc_to_use, active_location_staff)
     if _loc_to_use:
         parts = [_loc_to_use.get("name"), _loc_to_use.get("city"), _loc_to_use.get("state"), _loc_to_use.get("country")]
         spoken = ", ".join(p for p in parts if p)
@@ -376,6 +404,7 @@ def build_instructions(business_id: str | None, location_id: str | None) -> str:
     return (
         welcome
         + global_block
+        + active_location_block
         + details_block
         + hours_block
         + services_block

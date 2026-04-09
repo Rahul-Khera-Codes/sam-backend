@@ -90,6 +90,7 @@ class Assistant(Agent):
         instructions: str = DEFAULT_INSTRUCTIONS,
         supabase=None,
         business_id: str | None = None,
+        location_id: str | None = None,
         call_id: str | None = None,
         locations: list[dict] | None = None,
         services: list[dict] | None = None,
@@ -100,6 +101,7 @@ class Assistant(Agent):
         super().__init__(instructions=instructions)
         self._supabase = supabase
         self._business_id = business_id
+        self._location_id = location_id
         self._call_id = call_id
         self._locations = locations or []
         self._services = services or []
@@ -125,6 +127,10 @@ class Assistant(Agent):
         self._location_id_to_name: dict[str, str] = {
             loc["id"]: loc["name"] for loc in self._locations if loc.get("id")
         }
+        self._default_location = next(
+            (loc for loc in self._locations if loc.get("id") == self._location_id),
+            None,
+        )
 
         # Preload user_services mapping
         self._user_service_ids: dict[str, list[str]] = {}
@@ -134,7 +140,9 @@ class Assistant(Agent):
                 self._user_service_ids = _fetch_user_service_ids(supabase, user_ids)
 
     def _resolve_location(self, name: str) -> dict | None:
-        """Resolve location by exact or partial name match."""
+        """Resolve location by exact or partial name match, defaulting to the anchored location."""
+        if not name.strip():
+            return self._default_location
         loc = self._location_by_name.get(name.lower())
         if loc:
             return loc
@@ -142,6 +150,16 @@ class Assistant(Agent):
             if name.lower() in k or k in name.lower():
                 return v
         return None
+
+    def _appointment_scope_label(self) -> str:
+        if self._default_location:
+            return self._default_location.get("name") or "this location"
+        return "this business"
+
+    def _apply_location_scope(self, query, *, search_other_locations: bool):
+        if self._location_id and not search_other_locations:
+            return query.eq("location_id", self._location_id)
+        return query
 
     def _resolve_service(self, name: str) -> dict | None:
         """Resolve service by exact or partial name match."""
@@ -402,6 +420,7 @@ class Assistant(Agent):
                         send_appointment_confirmation_sms(
                             supabase=self._supabase,
                             business_id=self._business_id,
+                            location_id=loc["id"] if loc else self._location_id,
                             business_name=biz_name,
                             client_phone=client_phone,
                             client_name=client_name,
@@ -430,6 +449,7 @@ class Assistant(Agent):
         self,
         context: RunContext,
         client_name: str,
+        search_other_locations: bool = False,
     ) -> str:
         """
         Look up upcoming appointments for a customer by their name.
@@ -440,7 +460,7 @@ class Assistant(Agent):
             return "Appointment lookup is unavailable right now."
         try:
             today = datetime.now().strftime("%Y-%m-%d")
-            r = (
+            query = (
                 self._supabase.table("appointments")
                 .select("id, client_name, service, appointment_date, appointment_time, location_id, assigned_user_id")
                 .eq("business_id", self._business_id)
@@ -449,10 +469,17 @@ class Assistant(Agent):
                 .ilike("client_name", f"%{client_name}%")
                 .order("appointment_date")
                 .limit(5)
-                .execute()
             )
+            query = self._apply_location_scope(query, search_other_locations=search_other_locations)
+            r = query.execute()
             data = getattr(r, "data", None) or []
             if not data:
+                if self._location_id and not search_other_locations:
+                    return (
+                        f"No upcoming appointments found for '{client_name}' at {self._appointment_scope_label()}. "
+                        "If the customer may have booked another branch, confirm that and call find_appointments again "
+                        "with search_other_locations set to true."
+                    )
                 return f"No upcoming appointments found for '{client_name}'."
 
             lines = []
@@ -487,6 +514,7 @@ class Assistant(Agent):
         new_date: str = "",
         new_time: str = "",
         notes: str = "",
+        search_other_locations: bool = False,
     ) -> str:
         """
         Reschedule an existing appointment.
@@ -514,12 +542,19 @@ class Assistant(Agent):
                 .gte("appointment_date", datetime.now().strftime("%Y-%m-%d"))
                 .neq("status", "cancelled")
             )
+            q = self._apply_location_scope(q, search_other_locations=search_other_locations)
             if client_name:
                 q = q.ilike("client_name", f"%{client_name}%")
             r_find = q.limit(50).execute()
             all_rows = getattr(r_find, "data", None) or []
             rows = [r for r in all_rows if r.get("id", "").upper().startswith(appointment_ref.upper())]
             if not rows:
+                if self._location_id and not search_other_locations:
+                    return (
+                        f"Could not find appointment '{appointment_ref}' at {self._appointment_scope_label()}. "
+                        "If the customer may have booked another branch, confirm that and call update_appointment "
+                        "again with search_other_locations set to true."
+                    )
                 return f"Could not find appointment with reference '{appointment_ref}'. Please use find_appointments first."
 
             appt_row = rows[0]
@@ -623,6 +658,7 @@ class Assistant(Agent):
         context: RunContext,
         appointment_ref: str,
         client_name: str,
+        search_other_locations: bool = False,
     ) -> str:
         """
         Cancel an existing appointment by its reference ID.
@@ -639,12 +675,19 @@ class Assistant(Agent):
                 .gte("appointment_date", datetime.now().strftime("%Y-%m-%d"))
                 .neq("status", "cancelled")
             )
+            q = self._apply_location_scope(q, search_other_locations=search_other_locations)
             if client_name:
                 q = q.ilike("client_name", f"%{client_name}%")
             r_find = q.limit(50).execute()
             all_rows = getattr(r_find, "data", None) or []
             rows = [r for r in all_rows if r.get("id", "").upper().startswith(appointment_ref.upper())]
             if not rows:
+                if self._location_id and not search_other_locations:
+                    return (
+                        f"Could not find appointment '{appointment_ref}' at {self._appointment_scope_label()}. "
+                        "If the customer may have booked another branch, confirm that and call cancel_appointment "
+                        "again with search_other_locations set to true."
+                    )
                 return f"Could not find appointment with reference '{appointment_ref}'. Please use find_appointments first."
 
             match = rows[0]
@@ -782,6 +825,7 @@ async def _finalize_call(
     supabase,
     call_id: str | None,
     business_id: str | None,
+    location_id: str | None,
     duration_s: int,
     transcript_log: list[dict],
     *,
@@ -830,6 +874,7 @@ async def _finalize_call(
                 send_missed_call_sms(
                     supabase=supabase,
                     business_id=business_id,
+                    location_id=location_id,
                     business_name=business_name or "us",
                     caller_phone=caller_phone,
                 )
@@ -876,6 +921,7 @@ async def voice_agent(ctx: agents.JobContext):
             business_id = job_meta.get("business_id")
             location_id = job_meta.get("location_id")
             call_id = job_meta.get("call_id")
+            call_direction = job_meta.get("call_direction", call_direction)
             logger.info("Context from job metadata: business_id=%s location_id=%s", business_id, location_id)
         except json.JSONDecodeError:
             logger.warning("Invalid job metadata: %s", raw_job_meta)
@@ -889,22 +935,33 @@ async def voice_agent(ctx: agents.JobContext):
                 business_id = meta.get("business_id")
                 location_id = meta.get("location_id")
                 call_id = meta.get("call_id")
+                call_direction = meta.get("call_direction", call_direction)
                 logger.info("Context from participant metadata: business_id=%s", business_id)
             except json.JSONDecodeError:
                 logger.warning("Invalid participant metadata: %s", raw_meta)
 
     # ── Source 3: participant.attributes (SIP participant attributes from dispatch rule) ──
-    if not business_id and is_sip_call:
+    if is_sip_call and (not business_id or not location_id):
         attrs = getattr(participant, "attributes", {}) or {}
-        business_id = attrs.get("business_id") or attrs.get("sip.businessId")
+        business_id = business_id or attrs.get("business_id") or attrs.get("sip.businessId")
+        location_id = location_id or attrs.get("location_id") or attrs.get("sip.locationId")
         call_direction = attrs.get("sip.callDirection", "inbound")
         if business_id:
-            logger.info("Context from SIP participant attributes: business_id=%s direction=%s", business_id, call_direction)
+            logger.info(
+                "Context from SIP participant attributes: business_id=%s location_id=%s direction=%s",
+                business_id,
+                location_id,
+                call_direction,
+            )
 
     # ── Source 4: DB lookup by dialled number (last resort for SIP) ──────────────
-    if not business_id and is_sip_call:
+    if is_sip_call and (not business_id or not location_id):
         attrs = getattr(participant, "attributes", {}) or {}
-        trunk_phone = attrs.get("sip.trunkPhoneNumber") or attrs.get("sip.phoneNumber")
+        trunk_phone = (
+            attrs.get("sip.trunkPhoneNumber")
+            or attrs.get("sip.calledNumber")
+            or attrs.get("sip.phoneNumber")
+        )
         call_direction = attrs.get("sip.callDirection", "inbound")
         if trunk_phone:
             supabase = _get_supabase()
@@ -919,9 +976,14 @@ async def voice_agent(ctx: agents.JobContext):
                         .execute()
                     )
                     if row.data:
-                        business_id = row.data[0]["business_id"]
-                        location_id = row.data[0].get("location_id")
-                        logger.info("Context from DB lookup by %s: business_id=%s", trunk_phone, business_id)
+                        business_id = business_id or row.data[0]["business_id"]
+                        location_id = location_id or row.data[0].get("location_id")
+                        logger.info(
+                            "Context from DB lookup by %s: business_id=%s location_id=%s",
+                            trunk_phone,
+                            business_id,
+                            location_id,
+                        )
                 except Exception as e:
                     logger.warning("DB lookup by phone number failed: %s", e)
 
@@ -999,6 +1061,7 @@ async def voice_agent(ctx: agents.JobContext):
         instructions=instructions,
         supabase=supabase,
         business_id=business_id,
+        location_id=location_id,
         call_id=call_id,
         locations=locations,
         services=services,
@@ -1132,6 +1195,7 @@ async def voice_agent(ctx: agents.JobContext):
         supabase,
         call_id,
         business_id,
+        location_id,
         duration_s,
         transcript_log,
         call_direction=call_direction,

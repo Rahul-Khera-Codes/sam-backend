@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-04-08 (session 26 — agent settings side panel removed)
+Last updated: 2026-04-08 (session 27 — location-scoped phone plan implemented)
 
 ---
 
@@ -83,6 +83,15 @@ Last updated: 2026-04-08 (session 26 — agent settings side panel removed)
 - [x] `GET /settings/agent/state` 500 duplicate key — regular `supabase` client blocked by RLS returned empty → INSERT failed with unique constraint; fixed by switching SELECT to `supabase_admin` and changing INSERT to `.upsert(on_conflict="business_id")`
 - [x] Gmail could show connected but still fail `users.messages.send` with insufficient scopes — Gmail OAuth callback now rejects tokens missing `gmail.send`, and Wish List submission now returns a reconnect-required error instead of a generic 502
 
+### Location-Scoped Phone Plan (session 27)
+- [x] LiveKit dispatch rules now store both `business_id` and `location_id` for newly provisioned numbers
+- [x] Added `POST /phone-numbers/sync-dispatch` to refresh existing active dispatch rules to the new metadata format
+- [x] SIP agent context now keeps the resolved `location_id` authoritative by reading dispatch metadata, SIP attributes, and DB lookup by called number
+- [x] Prompt builder no longer falls back to `locations[0]`; the called location is now explicit and treated as the primary branch context
+- [x] Appointment lookup, update, and cancellation now search the anchored location first and only expand cross-location when the tool is called with `search_other_locations=true`
+- [x] Outbound calling now resolves caller ID and outbound trunk by location and rejects numbers that are not attached to a location
+- [x] SMS sender selection now uses the resolved location's number instead of a first business-wide number
+
 ### Frontend (`ai-employees-app`)
 - [x] React 18 + TypeScript + Vite + shadcn-ui + Tailwind
 - [x] Supabase Auth with MFA/TOTP support
@@ -129,6 +138,9 @@ Last updated: 2026-04-08 (session 26 — agent settings side panel removed)
 - [x] **Staff time off / date overrides** — `user_availability_overrides` table, full CRUD + UI (TeamMemberHoursDialog, DateOverrideModal)
 - [x] Employee placeholder pages — Marketing, Sales, HR, and Executive routes now show a dedicated "Coming Soon" page instead of the generic dashboard
 - [x] Main dashboard route now shows a simple "Coming Soon" placeholder instead of mock analytics content
+- [x] Phone Numbers page now groups numbers by location, enforces one-number-per-location assignment in the UI, and highlights legacy numbers missing a location link
+- [x] Outbound call UIs now automatically use the appointment location or currently selected location instead of letting users pick a mismatched business-wide number
+- [x] Phone Numbers page now includes a per-location `Test with Web Call` action that launches a browser call using that row's `location_id` and clearly labels it as an agent-context test, not a PSTN routing test
 
 ---
 

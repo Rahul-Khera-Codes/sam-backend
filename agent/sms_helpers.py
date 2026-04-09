@@ -28,17 +28,22 @@ def _get_twilio():
         return None
 
 
-def _get_business_number(supabase, business_id: str) -> Optional[str]:
-    """Look up the active Twilio phone number for a business (used as From)."""
+def _get_business_number(
+    supabase,
+    business_id: str,
+    location_id: str | None = None,
+) -> Optional[str]:
+    """Look up the active Twilio phone number for a business/location (used as From)."""
     try:
-        result = (
+        query = (
             supabase.table("business_phone_numbers")
             .select("phone_number")
             .eq("business_id", business_id)
             .eq("is_active", True)
-            .limit(1)
-            .execute()
         )
+        if location_id:
+            query = query.eq("location_id", location_id)
+        result = query.limit(1).execute()
         if result.data:
             return result.data[0]["phone_number"]
     except Exception as e:
@@ -65,6 +70,7 @@ def _send_sms(from_number: str, to_number: str, body: str) -> bool:
 def send_appointment_confirmation_sms(
     supabase,
     business_id: str,
+    location_id: str | None,
     business_name: str,
     client_phone: str,
     client_name: str,
@@ -77,7 +83,7 @@ def send_appointment_confirmation_sms(
     Send a booking confirmation SMS to the customer.
     Fires after book_appointment when send_texts_during_after_calls is enabled.
     """
-    from_number = _get_business_number(supabase, business_id)
+    from_number = _get_business_number(supabase, business_id, location_id)
     if not from_number or not client_phone:
         return
 
@@ -93,6 +99,7 @@ def send_appointment_confirmation_sms(
 def send_appointment_reminder_sms(
     supabase,
     business_id: str,
+    location_id: str | None,
     business_name: str,
     client_phone: str,
     client_name: str,
@@ -103,7 +110,7 @@ def send_appointment_reminder_sms(
     """
     Send a reminder SMS. Called by a scheduler N days before the appointment.
     """
-    from_number = _get_business_number(supabase, business_id)
+    from_number = _get_business_number(supabase, business_id, location_id)
     if not from_number or not client_phone:
         return
 
@@ -118,6 +125,7 @@ def send_appointment_reminder_sms(
 def send_missed_call_sms(
     supabase,
     business_id: str,
+    location_id: str | None,
     business_name: str,
     caller_phone: str,
 ) -> None:
@@ -125,7 +133,7 @@ def send_missed_call_sms(
     Send a text-back when a caller hangs up before the agent could help.
     Fires from _finalize_call when missed_call_text_back is enabled.
     """
-    from_number = _get_business_number(supabase, business_id)
+    from_number = _get_business_number(supabase, business_id, location_id)
     if not from_number or not caller_phone:
         return
 

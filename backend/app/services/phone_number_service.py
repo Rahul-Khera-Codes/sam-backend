@@ -6,7 +6,6 @@ Handles Twilio number search/provisioning and LiveKit dispatch rule lifecycle.
 All provisioning is done with the service-role Supabase client (bypasses RLS).
 """
 
-import os
 import logging
 from typing import Optional
 
@@ -76,7 +75,7 @@ def search_available_numbers(
 
 async def provision_phone_number(
     business_id: str,
-    location_id: Optional[str],
+    location_id: str,
     phone_number: str,
 ) -> dict:
     """
@@ -114,7 +113,13 @@ async def provision_phone_number(
         logger.info(f"[provision] Inbound trunk created: {inbound_trunk_id}")
 
         # Create dispatch rule for this number
-        dispatch_rule_id = await _create_dispatch_rule(lk, phone_number, business_id, inbound_trunk_id)
+        dispatch_rule_id = await _create_dispatch_rule(
+            lk,
+            phone_number,
+            business_id,
+            location_id,
+            inbound_trunk_id,
+        )
         logger.info(f"[provision] Dispatch rule created: {dispatch_rule_id}")
 
         # Create outbound SIP trunk for this number — returns the trunk ID
@@ -157,6 +162,7 @@ async def _create_dispatch_rule(
     lk: api.LiveKitAPI,
     phone_number: str,
     business_id: str,
+    location_id: str,
     inbound_trunk_id: str,
 ) -> str:
     """Creates a LiveKit SIP dispatch rule for the given phone number. Returns the rule ID."""
@@ -167,7 +173,10 @@ async def _create_dispatch_rule(
                 dispatch_rule_individual=SIPDispatchRuleIndividual(room_prefix="call-", pin="")
             ),
             trunk_ids=[inbound_trunk_id],
-            attributes={"business_id": business_id},
+            attributes={
+                "business_id": business_id,
+                "location_id": location_id,
+            },
             room_config=RoomConfiguration(
                 agents=[RoomAgentDispatch(agent_name=settings.agent_name)],
             ),
@@ -282,6 +291,80 @@ async def release_phone_number(phone_number_id: str) -> dict:
     return updated.data[0]
 
 
+async def refresh_dispatch_rule(phone_number_id: str) -> dict:
+    """
+    Recreate the LiveKit dispatch rule for an existing active number so the
+    latest metadata contract is applied.
+    """
+    result = (
+        supabase_admin.table("business_phone_numbers")
+        .select("*")
+        .eq("id", phone_number_id)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
+        raise ValueError(f"Phone number {phone_number_id} not found or already released")
+
+    row = result.data[0]
+    location_id = row.get("location_id")
+    inbound_trunk_id = row.get("livekit_inbound_trunk_id")
+    if not location_id:
+        raise ValueError("Cannot refresh dispatch rule for a number without a location_id")
+    if not inbound_trunk_id:
+        raise ValueError("Cannot refresh dispatch rule without a LiveKit inbound trunk")
+
+    lk = api.LiveKitAPI(
+        url=settings.livekit_url,
+        api_key=settings.livekit_api_key,
+        api_secret=settings.livekit_api_secret,
+    )
+    try:
+        old_dispatch_rule_id = row.get("livekit_dispatch_rule_id")
+        if old_dispatch_rule_id:
+            try:
+                await lk.sip.delete_sip_dispatch_rule(
+                    DeleteSIPDispatchRuleRequest(sip_dispatch_rule_id=old_dispatch_rule_id)
+                )
+            except Exception as exc:
+                logger.warning("[refresh] Could not delete old dispatch rule %s: %s", old_dispatch_rule_id, exc)
+
+        new_dispatch_rule_id = await _create_dispatch_rule(
+            lk,
+            row["phone_number"],
+            row["business_id"],
+            location_id,
+            inbound_trunk_id,
+        )
+    finally:
+        await lk.aclose()
+
+    updated = (
+        supabase_admin.table("business_phone_numbers")
+        .update({"livekit_dispatch_rule_id": new_dispatch_rule_id})
+        .eq("id", phone_number_id)
+        .execute()
+    )
+    return updated.data[0]
+
+
+async def refresh_dispatch_rules_for_business(business_id: str) -> list[dict]:
+    """Refresh dispatch rules for all active, location-scoped numbers in one business."""
+    result = (
+        supabase_admin.table("business_phone_numbers")
+        .select("id, location_id")
+        .eq("business_id", business_id)
+        .eq("is_active", True)
+        .execute()
+    )
+    rows = [row for row in (result.data or []) if row.get("location_id")]
+    refreshed: list[dict] = []
+    for row in rows:
+        refreshed.append(await refresh_dispatch_rule(row["id"]))
+    return refreshed
+
+
 # ── Query helpers ─────────────────────────────────────────────────────────────
 
 def get_phone_numbers_for_business(business_id: str) -> list[dict]:
@@ -295,3 +378,51 @@ def get_phone_numbers_for_business(business_id: str) -> list[dict]:
         .execute()
     )
     return result.data or []
+
+
+def get_phone_number_for_location(
+    business_id: str,
+    location_id: str,
+    *,
+    require_outbound: bool = False,
+) -> dict | None:
+    """Returns the active phone number row for one business location."""
+    query = (
+        supabase_admin.table("business_phone_numbers")
+        .select("*")
+        .eq("business_id", business_id)
+        .eq("location_id", location_id)
+        .eq("is_active", True)
+        .limit(1)
+    )
+    if require_outbound:
+        query = query.neq("livekit_outbound_trunk_id", "")
+
+    result = query.execute()
+    if result.data:
+        return result.data[0]
+    return None
+
+
+def get_phone_number_for_business_number(
+    business_id: str,
+    phone_number: str,
+    *,
+    require_outbound: bool = False,
+) -> dict | None:
+    """Returns the active phone number row for one exact business number."""
+    query = (
+        supabase_admin.table("business_phone_numbers")
+        .select("*")
+        .eq("business_id", business_id)
+        .eq("phone_number", phone_number)
+        .eq("is_active", True)
+        .limit(1)
+    )
+    if require_outbound:
+        query = query.neq("livekit_outbound_trunk_id", "")
+
+    result = query.execute()
+    if result.data:
+        return result.data[0]
+    return None
