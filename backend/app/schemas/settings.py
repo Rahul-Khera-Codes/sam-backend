@@ -13,6 +13,7 @@ class AgentSettingItem(BaseModel):
 
 class AgentSettingsResponse(BaseModel):
     business_id: str
+    location_id: Optional[str] = None
     settings: List[AgentSettingItem]
 
 
@@ -24,6 +25,7 @@ class UpdateAgentSettingsRequest(BaseModel):
 
 class AgentStateResponse(BaseModel):
     business_id: str
+    location_id: Optional[str] = None
     is_active: bool
     toggled_at: Optional[datetime]
 
@@ -43,6 +45,7 @@ class AgentScheduleDayItem(BaseModel):
 
 class AgentScheduleResponse(BaseModel):
     business_id: str
+    location_id: Optional[str] = None
     schedule: List[AgentScheduleDayItem]
 
 
@@ -85,6 +88,7 @@ class UpdateForwardingContactRequest(BaseModel):
 class ForwardingRuleResponse(BaseModel):
     id: str
     business_id: str
+    location_id: Optional[str] = None
     name: str
     condition_type: str
     condition_value: Optional[Dict[str, Any]]
@@ -100,6 +104,7 @@ class CreateForwardingRuleRequest(BaseModel):
     condition_value: Optional[Dict[str, Any]] = {}
     action: Optional[Dict[str, Any]] = {}
     priority_order: int = 0
+    location_id: Optional[str] = None
 
 
 # ── Communication Settings ────────────────────

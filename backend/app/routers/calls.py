@@ -35,6 +35,7 @@ router = APIRouter(prefix="/calls", tags=["calls"])
 @router.get("", response_model=List[CallResponse])
 async def list_calls(
     business_id: str,
+    location_id: Optional[str] = None,
     status: Optional[str] = None,
     direction: Optional[str] = None,
     search: Optional[str] = None,
@@ -50,6 +51,8 @@ async def list_calls(
         .range((page - 1) * limit, page * limit - 1)
     )
 
+    if location_id:
+        query = query.eq("location_id", location_id)
     if status:
         query = query.eq("status", status)
     if direction:
@@ -71,17 +74,20 @@ async def list_calls(
 @router.get("/recent-activity")
 async def recent_activity(
     business_id: str,
+    location_id: Optional[str] = None,
     limit: int = 10,
     current_user: dict = Depends(get_current_user),
 ):
-    result = (
+    query = (
         supabase_admin.table("calls")
         .select("id, caller_name, caller_phone, status, sentiment, direction, created_at, duration_seconds")
         .eq("business_id", business_id)
         .order("created_at", desc=True)
         .limit(limit)
-        .execute()
     )
+    if location_id:
+        query = query.eq("location_id", location_id)
+    result = query.execute()
 
     items = []
     for call in (result.data or []):

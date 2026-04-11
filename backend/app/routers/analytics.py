@@ -1,3 +1,4 @@
+from typing import Optional
 from fastapi import APIRouter, Depends
 from app.core.auth import get_current_user
 from app.core.supabase import supabase_admin as supabase
@@ -33,29 +34,34 @@ def pct_change(current: float, previous: float) -> float:
 @router.get("/summary")
 async def get_summary(
     business_id: str,
+    location_id: Optional[str] = None,
     period: str = "7d",
     current_user: dict = Depends(get_current_user),
 ):
     current_start, prev_start, now = get_period_dates(period)
 
     # Current period calls
-    current = (
+    query_current = (
         supabase.table("calls")
         .select("id, status, duration_seconds, sentiment, created_at")
         .eq("business_id", business_id)
         .gte("created_at", current_start.isoformat())
-        .execute()
     )
+    if location_id:
+        query_current = query_current.eq("location_id", location_id)
+    current = query_current.execute()
 
     # Previous period calls (for % change)
-    previous = (
+    query_prev = (
         supabase.table("calls")
         .select("id, status, duration_seconds")
         .eq("business_id", business_id)
         .gte("created_at", prev_start.isoformat())
         .lt("created_at", current_start.isoformat())
-        .execute()
     )
+    if location_id:
+        query_prev = query_prev.eq("location_id", location_id)
+    previous = query_prev.execute()
 
     curr_calls = current.data or []
     prev_calls = previous.data or []
@@ -97,6 +103,7 @@ async def get_summary(
 @router.get("/call-volume-trends")
 async def call_volume_trends(
     business_id: str,
+    location_id: Optional[str] = None,
     period: str = "daily",
     current_user: dict = Depends(get_current_user),
 ):
@@ -110,13 +117,15 @@ async def call_volume_trends(
     else:
         start = now - timedelta(days=90)
 
-    result = (
+    query = (
         supabase.table("calls")
         .select("direction, status, created_at")
         .eq("business_id", business_id)
         .gte("created_at", start.isoformat())
-        .execute()
     )
+    if location_id:
+        query = query.eq("location_id", location_id)
+    result = query.execute()
 
     calls = result.data or []
 
@@ -148,19 +157,22 @@ async def call_volume_trends(
 @router.get("/call-distribution")
 async def call_distribution(
     business_id: str,
+    location_id: Optional[str] = None,
     period: str = "7d",
     current_user: dict = Depends(get_current_user),
 ):
     """Returns breakdown by call status for donut chart."""
     current_start, _, _ = get_period_dates(period)
 
-    result = (
+    query = (
         supabase.table("calls")
         .select("status")
         .eq("business_id", business_id)
         .gte("created_at", current_start.isoformat())
-        .execute()
     )
+    if location_id:
+        query = query.eq("location_id", location_id)
+    result = query.execute()
 
     calls = result.data or []
     from collections import Counter

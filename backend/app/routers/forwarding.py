@@ -1,3 +1,4 @@
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from app.core.auth import get_current_user, get_user_id
 from app.core.supabase import supabase, supabase_admin
@@ -18,15 +19,18 @@ router = APIRouter(prefix="/forwarding", tags=["forwarding"])
 @router.get("/contacts", response_model=List[ForwardingContactResponse])
 async def list_contacts(
     business_id: str,
+    location_id: Optional[str] = None,
     current_user: dict = Depends(get_current_user),
 ):
-    result = (
+    query = (
         supabase.table("forwarding_contacts")
         .select("*")
         .eq("business_id", business_id)
         .order("created_at", desc=False)
-        .execute()
     )
+    if location_id:
+        query = query.eq("location_id", location_id)
+    result = query.execute()
     return result.data or []
 
 
@@ -114,15 +118,18 @@ async def toggle_contact(
 @router.get("/rules", response_model=List[ForwardingRuleResponse])
 async def list_rules(
     business_id: str,
+    location_id: Optional[str] = None,
     current_user: dict = Depends(get_current_user),
 ):
-    result = (
+    query = (
         supabase.table("forwarding_rules")
         .select("*")
         .eq("business_id", business_id)
         .order("priority_order")
-        .execute()
     )
+    if location_id:
+        query = query.eq("location_id", location_id)
+    result = query.execute()
     return result.data or []
 
 
@@ -134,6 +141,7 @@ async def create_rule(
 ):
     result = supabase_admin.table("forwarding_rules").insert({
         "business_id": business_id,
+        "location_id": body.location_id,
         "name": body.name,
         "condition_type": body.condition_type,
         "condition_value": body.condition_value or {},
