@@ -312,3 +312,125 @@ def _fmt_time_12h(t: str) -> str:
         return f"{h12}:{m:02d} {suffix}"
     except Exception:
         return t
+
+
+# ── Location-scoped fetch functions (no fallback) ────────────────────────────
+
+
+def _fetch_business_hours_for_location(
+    supabase,
+    business_id: str,
+    location_id: str | None,
+) -> list[dict]:
+    """Fetch business hours for a specific location. Returns empty if none configured."""
+    if not supabase or not business_id:
+        return []
+    try:
+        query = (
+            supabase.table("business_hours")
+            .select("day_of_week, open_time, close_time, is_open")
+            .eq("business_id", business_id)
+        )
+        if location_id:
+            query = query.eq("location_id", location_id)
+        else:
+            query = query.is_("location_id", "null")
+        r = query.execute()
+        return getattr(r, "data", None) or []
+    except Exception as e:
+        logger.warning("Failed to fetch business hours: %s", e)
+        return []
+
+
+def _is_feature_enabled_for_location(
+    supabase,
+    business_id: str,
+    location_id: str | None,
+    feature_key: str,
+    default: bool = True,
+) -> bool:
+    """Check feature flag for a specific location. No fallback to business level."""
+    if not supabase or not business_id:
+        return default
+    try:
+        query = (
+            supabase.table("agent_settings")
+            .select("is_enabled")
+            .eq("business_id", business_id)
+            .eq("feature_key", feature_key)
+        )
+        if location_id:
+            query = query.eq("location_id", location_id)
+        else:
+            query = query.is_("location_id", "null")
+        r = query.limit(1).execute()
+        data = getattr(r, "data", None) or []
+        if data:
+            return bool(data[0].get("is_enabled", default))
+    except Exception as e:
+        logger.warning("Could not check feature flag %s: %s", feature_key, e)
+    return default
+
+
+def _fetch_services_for_location(
+    supabase,
+    business_id: str,
+    location_id: str | None,
+) -> list[dict]:
+    """Fetch services mapped to a location via location_services. Returns empty if none mapped."""
+    if not supabase or not business_id:
+        return []
+
+    if location_id:
+        try:
+            r = (
+                supabase.table("location_services")
+                .select("service_id")
+                .eq("location_id", location_id)
+                .eq("is_active", True)
+                .execute()
+            )
+            service_ids = [row["service_id"] for row in (getattr(r, "data", None) or [])]
+            if not service_ids:
+                return []
+            sr = (
+                supabase.table("services")
+                .select("id, name, description, duration_minutes, price")
+                .eq("business_id", business_id)
+                .eq("is_active", True)
+                .in_("id", service_ids)
+                .execute()
+            )
+            return getattr(sr, "data", None) or []
+        except Exception as e:
+            logger.warning("Failed to fetch location services: %s", e)
+            return []
+
+    # No location_id — return all business services (legacy web call without location)
+    return _fetch_services(supabase, business_id)
+
+
+def _fetch_knowledge_base_for_location(
+    supabase,
+    business_id: str,
+    location_id: str | None,
+) -> list[dict]:
+    """Fetch KB entries for a specific location only."""
+    if not supabase or not business_id:
+        return []
+    try:
+        query = (
+            supabase.table("knowledge_base")
+            .select("title, text_content")
+            .eq("business_id", business_id)
+            .eq("content_type", "text")
+        )
+        if location_id:
+            query = query.eq("location_id", location_id)
+        else:
+            query = query.is_("location_id", "null")
+        r = query.execute()
+        return getattr(r, "data", None) or []
+    except Exception as e:
+        logger.warning("Failed to fetch knowledge base: %s", e)
+        return []

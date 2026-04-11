@@ -43,7 +43,7 @@ from supabase_helpers import (
     _get_supabase,
     _fetch_business,
     _fetch_locations,
-    _fetch_services,
+    _fetch_services_for_location,
     _fetch_staff_with_ids,
     _fetch_user_service_ids,
     _fetch_user_availability,
@@ -51,7 +51,7 @@ from supabase_helpers import (
     _fetch_appointments_on_date,
     _compute_available_slots,
     _fmt_time_12h,
-    _is_feature_enabled,
+    _is_feature_enabled_for_location,
 )
 from sms_helpers import (
     send_appointment_confirmation_sms,
@@ -413,8 +413,9 @@ class Assistant(Agent):
                     pass
 
                 # ── SMS confirmation ───────────────────────────────────
-                if client_phone and _is_feature_enabled(
-                    self._supabase, self._business_id, "send_texts_during_after_calls"
+                if client_phone and _is_feature_enabled_for_location(
+                    self._supabase, self._business_id, self._location_id,
+                    "send_texts_during_after_calls",
                 ):
                     try:
                         send_appointment_confirmation_sms(
@@ -869,7 +870,7 @@ async def _finalize_call(
 
     # Missed call text-back
     if is_missed and business_id and caller_phone:
-        if _is_feature_enabled(supabase, business_id, "missed_call_text_back"):
+        if _is_feature_enabled_for_location(supabase, business_id, location_id, "missed_call_text_back"):
             try:
                 send_missed_call_sms(
                     supabase=supabase,
@@ -1038,7 +1039,7 @@ async def voice_agent(ctx: agents.JobContext):
         instructions = build_instructions(business_id, location_id)
         if supabase:
             locations = _fetch_locations(supabase, business_id)
-            services = _fetch_services(supabase, business_id)
+            services = _fetch_services_for_location(supabase, business_id, location_id)
             staff = _fetch_staff_with_ids(supabase, business_id)
             biz = _fetch_business(supabase, business_id)
             if biz:
@@ -1048,6 +1049,11 @@ async def voice_agent(ctx: agents.JobContext):
                 "Loaded context — locations: %d, services: %d, staff: %d (call_id=%s)",
                 len(locations), len(services), len(staff), call_id,
             )
+
+    # Warn if location has no critical data configured
+    if business_id and location_id:
+        if not services:
+            logger.warning("Location %s has no services configured — agent will inform caller", location_id)
 
     call_start_time = datetime.now(timezone.utc)
     transcript_log: list[dict] = []

@@ -11,8 +11,10 @@ from supabase_helpers import (
     _fetch_business,
     _fetch_location,
     _fetch_locations,
-    _fetch_services,
+    _fetch_services_for_location,
     _fetch_staff_with_ids,
+    _fetch_business_hours_for_location,
+    _fetch_knowledge_base_for_location,
 )
 
 logger = logging.getLogger("voice-agent")
@@ -347,12 +349,14 @@ def build_instructions(business_id: str | None, location_id: str | None) -> str:
     global_block   = _format_global_settings(business)   if business else ""
     details_block  = _format_business_details(business)  if business else ""
 
-    biz_hours    = _fetch_business_hours(supabase, business_id) if business_id else []
+    # Location-scoped fetches (hours, services, KB) — no fallback
+    biz_hours    = _fetch_business_hours_for_location(supabase, business_id, location_id) if business_id else []
     hours_block  = _format_business_hours(biz_hours)
 
-    services       = _fetch_services(supabase, business_id) if business_id else []
+    services       = _fetch_services_for_location(supabase, business_id, location_id) if business_id else []
     services_block = _format_services_for_prompt(services)
 
+    # Brand voice stays BUSINESS-WIDE (Global Settings)
     brand       = _fetch_brand_voice(supabase, business_id) if business_id else None
     brand_block = _format_brand_voice(brand) if brand else ""
 
@@ -368,7 +372,7 @@ def build_instructions(business_id: str | None, location_id: str | None) -> str:
                 employees_by_location.setdefault(lid, []).append(s["name"])
         locations_block = _format_locations_and_employees(locations, employees_by_location)
 
-    kb_entries = _fetch_knowledge_base(supabase, business_id) if business_id else []
+    kb_entries = _fetch_knowledge_base_for_location(supabase, business_id, location_id) if business_id else []
     kb_block   = _format_knowledge_base(kb_entries)
 
     # Only use an explicit location_id. Do not fall back to the first location.
