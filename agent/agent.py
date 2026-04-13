@@ -377,6 +377,7 @@ class Assistant(Agent):
                         await _gmail_send_confirmation(
                             supabase=self._supabase,
                             business_id=self._business_id,
+                            location_id=self._location_id,
                             business_name=biz_name,
                             business_phone=biz_phone,
                             client_name=client_name,
@@ -396,6 +397,7 @@ class Assistant(Agent):
                     await _gmail_send_staff_notification(
                         supabase=self._supabase,
                         business_id=self._business_id,
+                        location_id=self._location_id,
                         business_name=biz_name,
                         staff_user_id=staff["user_id"],
                         staff_name=staff["name"],
@@ -607,6 +609,7 @@ class Assistant(Agent):
                     await _gmail_send_reschedule_confirmation(
                         supabase=self._supabase,
                         business_id=self._business_id,
+                        location_id=self._location_id,
                         business_name=biz_name,
                         business_phone=biz_phone,
                         client_name=client_name,
@@ -627,6 +630,7 @@ class Assistant(Agent):
                     await _gmail_send_staff_reschedule_notification(
                         supabase=self._supabase,
                         business_id=self._business_id,
+                        location_id=self._location_id,
                         business_name=biz_name,
                         staff_user_id=assigned_uid,
                         staff_name=staff_name_label,
@@ -722,6 +726,7 @@ class Assistant(Agent):
                     await _gmail_send_cancellation_confirmation(
                         supabase=self._supabase,
                         business_id=self._business_id,
+                        location_id=self._location_id,
                         business_name=biz_name,
                         business_phone=biz_phone,
                         client_name=cname,
@@ -742,6 +747,7 @@ class Assistant(Agent):
                     await _gmail_send_staff_cancellation_notification(
                         supabase=self._supabase,
                         business_id=self._business_id,
+                        location_id=self._location_id,
                         business_name=biz_name,
                         staff_user_id=assigned_uid,
                         staff_name=staff_name_label,

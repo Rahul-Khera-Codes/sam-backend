@@ -22,6 +22,7 @@ WISHLIST_RECIPIENT = "sam@aiemployeesinc.com"
 
 class WishlistSubmissionRequest(BaseModel):
     business_id: str
+    location_id: str | None = None
     name: str
     email: str
     subject: str
@@ -118,6 +119,7 @@ async def submit_wishlist(
         body.business_id,
         settings.google_client_id,
         settings.google_client_secret,
+        body.location_id,
     )
     if not access_token:
         raise HTTPException(
@@ -125,7 +127,7 @@ async def submit_wishlist(
             detail="Gmail is not connected for this business. Connect Gmail before sending Wish List requests.",
         )
 
-    token_row = email_service.get_token_row(supabase_admin, body.business_id)
+    token_row = email_service.get_token_row(supabase_admin, body.business_id, body.location_id)
     if not token_row or not token_row.get("google_email"):
         raise HTTPException(
             status_code=409,

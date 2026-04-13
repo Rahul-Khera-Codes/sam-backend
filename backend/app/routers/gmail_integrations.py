@@ -3,13 +3,14 @@ Gmail OAuth integration routes.
 
 GET    /integrations/gmail/auth-url    → returns OAuth consent URL
 POST   /integrations/gmail/callback   → exchange code for tokens, save to DB
-GET    /integrations/gmail/status     → is Gmail connected for this business?
+GET    /integrations/gmail/status     → is Gmail connected for this business+location?
 DELETE /integrations/gmail/disconnect → revoke + delete tokens
 """
 
 import json
 import logging
 from datetime import timezone
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -24,12 +25,32 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/integrations/gmail", tags=["integrations"])
 
 
+def _apply_location_filter(query, location_id: Optional[str]):
+    """Apply location_id filter: eq if provided, is null if not."""
+    if location_id:
+        return query.eq("location_id", location_id)
+    return query.is_("location_id", "null")
+
+
+def _get_token_row_for_location(business_id: str, location_id: Optional[str]) -> Optional[dict]:
+    """Fetch gmail token row scoped to (business_id, location_id)."""
+    query = (
+        supabase_admin.table("gmail_tokens")
+        .select("*")
+        .eq("business_id", business_id)
+    )
+    query = _apply_location_filter(query, location_id)
+    result = query.limit(1).execute()
+    return result.data[0] if result.data else None
+
+
 # ── GET /integrations/gmail/auth-url ─────────────────────────────────────────
 
 @router.get("/auth-url")
 async def get_auth_url(
     business_id: str,
-    return_to: str = "/dashboard/settings/integrations",
+    location_id: Optional[str] = None,
+    return_to: str = "/dashboard/settings/business",
     user_id: str = Depends(get_user_id),
 ):
     if not settings.google_client_id:
@@ -41,6 +62,7 @@ async def get_auth_url(
     state = json.dumps({
         "user_id": user_id,
         "business_id": business_id,
+        "location_id": location_id,
         "return_to": return_to,
         "integration": "gmail",
     })
@@ -69,6 +91,7 @@ async def oauth_callback(body: GmailCallbackRequest):
     try:
         state = json.loads(body.state)
         business_id = state["business_id"]
+        location_id = state.get("location_id")
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid state parameter.")
 
@@ -96,8 +119,9 @@ async def oauth_callback(body: GmailCallbackRequest):
     )
     if not has_send_scope:
         logger.warning(
-            "Gmail OAuth callback missing gmail.send scope for business %s. Granted scopes: %s",
+            "Gmail OAuth callback missing gmail.send scope for business %s loc %s. Granted scopes: %s",
             business_id,
+            location_id,
             granted_scopes or "<not returned>",
         )
         raise HTTPException(
@@ -131,16 +155,23 @@ async def oauth_callback(body: GmailCallbackRequest):
         "refresh_token": token_data["refresh_token"],
         "token_expiry": token_expiry.isoformat(),
     }
+    if location_id:
+        row["location_id"] = location_id
 
+    # SELECT + INSERT/UPDATE (partial unique indexes don't work with upsert)
     try:
-        supabase_admin.table("gmail_tokens").upsert(
-            row, on_conflict="business_id"
-        ).execute()
+        existing = _get_token_row_for_location(business_id, location_id)
+        if existing:
+            supabase_admin.table("gmail_tokens").update(
+                {k: v for k, v in row.items() if k not in ("business_id", "location_id")}
+            ).eq("id", existing["id"]).execute()
+        else:
+            supabase_admin.table("gmail_tokens").insert(row).execute()
     except Exception as e:
         logger.error("Failed to save Gmail tokens: %s", e)
         raise HTTPException(status_code=500, detail="Failed to save Gmail connection.")
 
-    return {"connected": True, "google_email": google_email}
+    return {"connected": True, "google_email": google_email, "location_id": location_id}
 
 
 # ── GET /integrations/gmail/status ───────────────────────────────────────────
@@ -148,12 +179,12 @@ async def oauth_callback(body: GmailCallbackRequest):
 @router.get("/status")
 async def get_status(
     business_id: str,
+    location_id: Optional[str] = None,
     current_user: dict = Depends(get_current_user),
 ):
-    row = gmail.get_token_row(supabase_admin, business_id)
+    row = _get_token_row_for_location(business_id, location_id)
     if row:
         google_email = row.get("google_email", "")
-        # Backfill email if missing — fetch from Google userinfo and persist
         if not google_email and row.get("access_token"):
             try:
                 import httpx
@@ -167,11 +198,11 @@ async def get_status(
                         if google_email:
                             supabase_admin.table("gmail_tokens").update(
                                 {"google_email": google_email}
-                            ).eq("business_id", business_id).execute()
+                            ).eq("id", row["id"]).execute()
             except Exception:
                 pass
-        return {"connected": True, "google_email": google_email}
-    return {"connected": False, "google_email": ""}
+        return {"connected": True, "google_email": google_email, "location_id": location_id}
+    return {"connected": False, "google_email": "", "location_id": location_id}
 
 
 # ── DELETE /integrations/gmail/disconnect ─────────────────────────────────────
@@ -179,9 +210,10 @@ async def get_status(
 @router.delete("/disconnect")
 async def disconnect(
     business_id: str,
+    location_id: Optional[str] = None,
     current_user: dict = Depends(get_current_user),
 ):
-    row = gmail.get_token_row(supabase_admin, business_id)
+    row = _get_token_row_for_location(business_id, location_id)
     if not row:
         return {"disconnected": True}
 
@@ -191,7 +223,7 @@ async def disconnect(
         pass
 
     try:
-        supabase_admin.table("gmail_tokens").delete().eq("business_id", business_id).execute()
+        supabase_admin.table("gmail_tokens").delete().eq("id", row["id"]).execute()
     except Exception as e:
         logger.error("Failed to delete Gmail tokens: %s", e)
         raise HTTPException(status_code=500, detail="Failed to disconnect Gmail.")

@@ -13,13 +13,23 @@ from supabase_helpers import _fmt_time_12h
 logger = logging.getLogger("voice-agent")
 
 
-async def _gmail_get_valid_token(supabase, business_id: str) -> tuple[str | None, str]:
+async def _gmail_get_valid_token(
+    supabase,
+    business_id: str,
+    location_id: str | None = None,
+) -> tuple[str | None, str]:
     """
-    Return (access_token, sender_email) for the business Gmail account.
-    Refreshes the token if expired.
+    Return (access_token, sender_email) for the business+location Gmail account.
+    Refreshes the token if expired. No fallback — if the location has no token,
+    returns (None, "") and the caller should skip sending.
     """
     try:
-        r = supabase.table("gmail_tokens").select("*").eq("business_id", business_id).limit(1).execute()
+        query = supabase.table("gmail_tokens").select("*").eq("business_id", business_id)
+        if location_id:
+            query = query.eq("location_id", location_id)
+        else:
+            query = query.is_("location_id", "null")
+        r = query.limit(1).execute()
         data = getattr(r, "data", None) or []
         if not data:
             return None, ""
@@ -53,18 +63,19 @@ async def _gmail_get_valid_token(supabase, business_id: str) -> tuple[str | None
                 supabase.table("gmail_tokens").update({
                     "access_token": refreshed["access_token"],
                     "token_expiry": new_expiry.isoformat(),
-                }).eq("business_id", business_id).execute()
+                }).eq("id", row["id"]).execute()
                 return refreshed["access_token"], row.get("google_email", "")
 
         return row["access_token"], row.get("google_email", "")
     except Exception as e:
-        logger.warning("Failed to get Gmail token for business %s: %s", business_id, e)
+        logger.warning("Failed to get Gmail token for business %s loc %s: %s", business_id, location_id, e)
         return None, ""
 
 
 async def _gmail_send_confirmation(
     supabase,
     business_id: str,
+    location_id: str | None,
     business_name: str,
     business_phone: str,
     client_name: str,
@@ -83,7 +94,7 @@ async def _gmail_send_confirmation(
     from email.mime.text import MIMEText
     import httpx
 
-    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id)
+    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id, location_id)
     if not access_token:
         logger.info("Gmail not connected for business %s — skipping email", business_id)
         return
@@ -159,6 +170,7 @@ body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSy
 async def _gmail_send_staff_notification(
     supabase,
     business_id: str,
+    location_id: str | None,
     business_name: str,
     staff_user_id: str,
     staff_name: str,
@@ -178,7 +190,7 @@ async def _gmail_send_staff_notification(
     from email.mime.text import MIMEText
     import httpx
 
-    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id)
+    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id, location_id)
     if not access_token:
         return
 
@@ -277,6 +289,7 @@ body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSy
 async def _gmail_send_reschedule_confirmation(
     supabase,
     business_id: str,
+    location_id: str | None,
     business_name: str,
     business_phone: str,
     client_name: str,
@@ -295,7 +308,7 @@ async def _gmail_send_reschedule_confirmation(
     from email.mime.text import MIMEText
     import httpx
 
-    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id)
+    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id, location_id)
     if not access_token:
         return
 
@@ -370,6 +383,7 @@ body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSy
 async def _gmail_send_staff_reschedule_notification(
     supabase,
     business_id: str,
+    location_id: str | None,
     business_name: str,
     staff_user_id: str,
     staff_name: str,
@@ -389,7 +403,7 @@ async def _gmail_send_staff_reschedule_notification(
     from email.mime.text import MIMEText
     import httpx
 
-    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id)
+    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id, location_id)
     if not access_token:
         return
 
@@ -480,6 +494,7 @@ body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSy
 async def _gmail_send_cancellation_confirmation(
     supabase,
     business_id: str,
+    location_id: str | None,
     business_name: str,
     business_phone: str,
     client_name: str,
@@ -498,7 +513,7 @@ async def _gmail_send_cancellation_confirmation(
     from email.mime.text import MIMEText
     import httpx
 
-    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id)
+    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id, location_id)
     if not access_token:
         return
 
@@ -571,6 +586,7 @@ body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSy
 async def _gmail_send_staff_cancellation_notification(
     supabase,
     business_id: str,
+    location_id: str | None,
     business_name: str,
     staff_user_id: str,
     staff_name: str,
@@ -590,7 +606,7 @@ async def _gmail_send_staff_cancellation_notification(
     from email.mime.text import MIMEText
     import httpx
 
-    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id)
+    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id, location_id)
     if not access_token:
         return
 

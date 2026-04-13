@@ -133,22 +133,32 @@ async def has_gmail_send_scope(access_token: str, scope_string: str | None = Non
 
 # ── Token row helpers ─────────────────────────────────────────────────────────
 
-def get_token_row(supabase, business_id: str) -> Optional[dict]:
-    result = (
+def get_token_row(
+    supabase, business_id: str, location_id: Optional[str] = None
+) -> Optional[dict]:
+    """Fetch gmail token scoped to (business_id, location_id)."""
+    query = (
         supabase.table("gmail_tokens")
         .select("*")
         .eq("business_id", business_id)
-        .limit(1)
-        .execute()
     )
+    if location_id:
+        query = query.eq("location_id", location_id)
+    else:
+        query = query.is_("location_id", "null")
+    result = query.limit(1).execute()
     return result.data[0] if result.data else None
 
 
 async def get_valid_access_token(
-    supabase, business_id: str, client_id: str, client_secret: str
+    supabase,
+    business_id: str,
+    client_id: str,
+    client_secret: str,
+    location_id: Optional[str] = None,
 ) -> Optional[str]:
-    """Return a valid access token, refreshing if needed."""
-    row = get_token_row(supabase, business_id)
+    """Return a valid access token for (business_id, location_id), refreshing if needed."""
+    row = get_token_row(supabase, business_id, location_id)
     if not row:
         return None
 
@@ -162,7 +172,7 @@ async def get_valid_access_token(
                 "access_token": refreshed["access_token"],
                 "token_expiry": new_expiry.isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
-            }).eq("business_id", business_id).execute()
+            }).eq("id", row["id"]).execute()
             return refreshed["access_token"]
         except Exception as e:
             logger.error("Gmail token refresh failed: %s", e)
