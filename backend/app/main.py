@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.routers import calls, settings as settings_router, forwarding, analytics, integrations, gmail_integrations, phone_numbers, support, locations
+from app.routers import calls, settings as settings_router, forwarding, analytics, integrations, gmail_integrations, phone_numbers, support, locations, custom_schedules
 
 app = FastAPI(
     title="AI Voice Agent API",
@@ -32,6 +32,7 @@ app.include_router(gmail_integrations.router)
 app.include_router(phone_numbers.router)
 app.include_router(support.router)
 app.include_router(locations.router)
+app.include_router(custom_schedules.router)
 
 
 # ── Health check ──────────────────────────────
