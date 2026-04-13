@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-04-08 (session 27 — location-scoped phone plan implemented)
+Last updated: 2026-04-11 (session 28 — location-scoped architecture implemented)
 
 ---
 
@@ -92,6 +92,66 @@ Last updated: 2026-04-08 (session 27 — location-scoped phone plan implemented)
 - [x] Outbound calling now resolves caller ID and outbound trunk by location and rejects numbers that are not attached to a location
 - [x] SMS sender selection now uses the resolved location's number instead of a first business-wide number
 
+### Location-Scoped Architecture (session 28)
+- [x] DB migration: `location_id` column added to `business_hours`, `agent_settings`, `agent_state`, `communication_settings`, `forwarding_rules`, `knowledge_base`
+- [x] DB migration: `location_services` junction table created (maps services to locations)
+- [x] DB migration: backfill script copies business-wide data into location-specific rows for all existing locations
+- [x] Partial unique indexes for all migrated tables (location-scoped + legacy NULL rows)
+- [x] `location_seed_service.py` — copies business-wide defaults (hours, settings, services, KB) into a new location on creation
+- [x] `POST /locations/{id}/seed` endpoint — called by frontend after location creation
+- [x] Backend: `location_id` filter added to `GET /calls`, `GET /calls/recent-activity` (2 endpoints)
+- [x] Backend: `location_id` filter added to all 3 analytics endpoints (`/summary`, `/call-volume-trends`, `/call-distribution`)
+- [x] Backend: `location_id` filter added to all settings endpoints (agent settings, agent state, schedule, communication settings) — uses SELECT+INSERT/UPDATE pattern for partial index compatibility
+- [x] Backend: `location_id` filter added to forwarding contacts + rules endpoints
+- [x] Agent: `_fetch_business_hours_for_location`, `_fetch_services_for_location`, `_fetch_knowledge_base_for_location`, `_is_feature_enabled_for_location` — no fallback, return empty if not configured
+- [x] Agent: prompt builder uses location-scoped hours, services, KB; brand voice stays business-wide (Global Settings)
+- [x] Agent: feature flag checks use `_is_feature_enabled_for_location` for SMS decisions
+- [x] Agent: services loaded via `location_services` junction table
+- [x] Design: NO silent fallbacks — empty data = empty state in UI, not wrong data from another source
+- [x] Design: brand voice stays business-wide (part of Global Settings, not location-scoped)
+
+### Integrations → Business Settings + Per-Location Gmail (session 28)
+- [x] Migration `20260411000001_location_scope_gmail_tokens.sql`: add `location_id` to `gmail_tokens` with partial unique indexes; backfill assigns existing business-wide token to the first location
+- [x] Backend `gmail_integrations.py`: auth-url/callback/status/disconnect accept `location_id` (encoded in OAuth state)
+- [x] Backend `email_service.py`: `get_token_row` + `get_valid_access_token` accept `location_id`
+- [x] Backend `support.py` (Wish List): accepts `location_id` in body
+- [x] Agent `_gmail_get_valid_token` + all 6 `_gmail_send_*` helpers accept `location_id`
+- [x] Agent `agent.py`: passes `self._location_id` to all Gmail send call sites
+- [x] Frontend: `IntegrationsTab` component (refactored from Integrations.tsx) — uses `selectedLocationId` for Gmail
+- [x] Frontend: BusinessSettings adds "Integrations" tab; sidebar removes the Integrations item
+- [x] Frontend: `getGmailAuthUrl/getGmailStatus/disconnectGmail` accept `locationId`
+- [x] Frontend: OAuth `return_to` now points to `/dashboard/settings/business?tab=integrations`
+- [x] Frontend: old `/dashboard/settings/integrations` URL redirects to the new tab
+- [x] Per-staff Google Calendar card stays (still works the same way)
+
+### Bug Fixes (session 28 — post-migration testing)
+- [x] `idx_unique_pending_invitation` duplicate key on re-invite — edge function `invite-location-admin` now cancels existing pending invite before creating new one
+- [x] Resend "Failed to send invitation email" generic error — surface actual error reason; roll back invitation row on email failure so retry works
+- [x] `location_services` RLS only had SELECT for members — added INSERT/UPDATE/DELETE policies (services were silently failing to map to locations)
+- [x] `useTabParam` hook — active tab now persists in URL across refresh; applied to BusinessSettings, GlobalSettings, CustomerServiceSettings, CustomerServiceEmployee
+
+### Location-Scoped Bug Fixes (session 28 — post-migration testing)
+- [x] `useBusinessHours` hook — fetch/insert now filter by `location_id`; accepts `locationId` param; `BusinessSettings` passes `selectedLocationId` (fixed cross-location hours leakage)
+- [x] `BusinessSettings` Knowledge Base tab — fetch filters by `location_id`; new KB entries include `location_id` on insert
+- [x] `Calendar.tsx` — `createAppointment` passes `selectedLocationId` as `location_id` (new appointments now visible in location-filtered view)
+- [x] `useServices.createService` — auto-inserts `location_services` row for the selected location so new services show up in the location-filtered list
+- [x] `CallForwarding.tsx` — "Add Contact" dialog passes `selectedLocationId` when creating
+- [x] `voiceAgentApi.createForwardingContact` — moved `location_id` from query param to body (backend reads it from `CreateForwardingContactRequest`)
+- [x] `Locations.tsx` — fixed import (LocationsTab uses default export, not named)
+
+### Frontend — Location-Scoped Architecture (session 28)
+- [x] `voiceAgentApi.ts` — `locationId` param added to 17 API functions + `seedLocation` function
+- [x] `useAppointments.ts` — filters by `selectedLocationId`
+- [x] `useServices.ts` — filters via `location_services` junction table; shows empty if no services mapped
+- [x] `LocationEmptyState.tsx` — reusable empty state component for unconfigured location data
+- [x] All 5 CS pages (AgentPerformance, CallRecordings, Scheduler, AgentSettings, CallForwarding) pass `selectedLocationId` to API calls
+- [x] Sidebar: "Locations" nav item added under Account Settings
+- [x] `Locations.tsx` — standalone Locations page (moved from tab in Business Settings)
+- [x] `BusinessSettings.tsx` — Locations tab removed (now its own page)
+- [x] `LocationsTab.tsx` — calls `seedLocation` after creating a new location
+- [x] `Onboarding.tsx` — calls `seedLocation` after `createBusinessWithLocation`
+- [x] `useLocationServices` hook + `LocationServicesTab` component for toggling services per location
+
 ### Frontend (`ai-employees-app`)
 - [x] React 18 + TypeScript + Vite + shadcn-ui + Tailwind
 - [x] Supabase Auth with MFA/TOTP support
@@ -146,7 +206,13 @@ Last updated: 2026-04-08 (session 27 — location-scoped phone plan implemented)
 
 ## 🔄 In Progress
 
-_(nothing currently in progress)_
+### Location-Scoped Architecture — Manual Steps Required
+- [x] Run 7 SQL migrations in Supabase SQL editor (in order: `20260410000000` through `20260410000006`)
+- [ ] Regenerate Supabase TypeScript types (`npx supabase gen types typescript`) to fix `location_services` TS errors
+- [ ] Merge `feature/location-scoped-architecture` branch to main in sam-backend
+- [x] Test: select Location A → verify all pages show only Location A data (business hours bug found + fixed)
+- [ ] Test: create new location → verify seed runs and location has hours/settings/services
+- [ ] Test: inbound call → verify agent uses location-scoped hours/services/settings
 
 ---
 
