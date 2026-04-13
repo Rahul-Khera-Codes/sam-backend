@@ -209,10 +209,10 @@ Last updated: 2026-04-13 (session 28 — integrations moved to Business Settings
 ### Manual Steps Required
 - [x] Run 7 SQL migrations (`20260410000000` through `20260410000006`) — location-scoped architecture
 - [ ] **Run** `supabase/migrations/20260411000000_location_services_write_rls.sql` — adds INSERT/UPDATE/DELETE RLS for `location_services` (without it, services don't persist when added)
-- [ ] **Run** `supabase/migrations/20260411000001_location_scope_gmail_tokens.sql` — adds `location_id` to `gmail_tokens`; backfill assigns existing token to first location
-- [ ] **Deploy** `invite-location-admin` edge function (`supabase functions deploy invite-location-admin`) — picks up "cancel pending invite before re-invite" + Resend error surfacing
+- [x] **Run** `supabase/migrations/20260411000001_location_scope_gmail_tokens.sql` — adds `location_id` to `gmail_tokens`; backfill assigns existing token to first location
+- [x] **Deploy** `invite-location-admin` edge function — picks up "cancel pending invite before re-invite" + Resend error surfacing
 - [ ] **Client task:** verify `aiemployeesinc.com` on Resend dashboard — until done, all team invitation emails fail
-- [ ] Regenerate Supabase TypeScript types (`npx supabase gen types typescript`) — resolves lingering TS errors on `location_services` and new `location_id` columns; lets us remove `as any` workarounds
+- [x] Regenerate Supabase TypeScript types — resolved; removed all `as any` workarounds; tsc --noEmit passes
 - [ ] Merge `feature/location-scoped-architecture` branch to main (sam-backend)
 
 ### Testing
