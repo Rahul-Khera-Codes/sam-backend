@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-04-11 (session 28 — location-scoped architecture implemented)
+Last updated: 2026-04-13 (session 28 — integrations moved to Business Settings, Gmail per-location, bug fixes)
 
 ---
 
@@ -206,13 +206,25 @@ Last updated: 2026-04-11 (session 28 — location-scoped architecture implemente
 
 ## 🔄 In Progress
 
-### Location-Scoped Architecture — Manual Steps Required
-- [x] Run 7 SQL migrations in Supabase SQL editor (in order: `20260410000000` through `20260410000006`)
-- [ ] Regenerate Supabase TypeScript types (`npx supabase gen types typescript`) to fix `location_services` TS errors
-- [ ] Merge `feature/location-scoped-architecture` branch to main in sam-backend
-- [x] Test: select Location A → verify all pages show only Location A data (business hours bug found + fixed)
-- [ ] Test: create new location → verify seed runs and location has hours/settings/services
-- [ ] Test: inbound call → verify agent uses location-scoped hours/services/settings
+### Manual Steps Required
+- [x] Run 7 SQL migrations (`20260410000000` through `20260410000006`) — location-scoped architecture
+- [ ] **Run** `supabase/migrations/20260411000000_location_services_write_rls.sql` — adds INSERT/UPDATE/DELETE RLS for `location_services` (without it, services don't persist when added)
+- [ ] **Run** `supabase/migrations/20260411000001_location_scope_gmail_tokens.sql` — adds `location_id` to `gmail_tokens`; backfill assigns existing token to first location
+- [ ] **Deploy** `invite-location-admin` edge function (`supabase functions deploy invite-location-admin`) — picks up "cancel pending invite before re-invite" + Resend error surfacing
+- [ ] **Client task:** verify `aiemployeesinc.com` on Resend dashboard — until done, all team invitation emails fail
+- [ ] Regenerate Supabase TypeScript types (`npx supabase gen types typescript`) — resolves lingering TS errors on `location_services` and new `location_id` columns; lets us remove `as any` workarounds
+- [ ] Merge `feature/location-scoped-architecture` branch to main (sam-backend)
+
+### Testing
+- [x] Select Location A → verify all pages show only Location A data (business hours bug found + fixed)
+- [x] Add services per location → verify they persist after refresh (RLS bug found + fixed)
+- [ ] Create new location → verify seed runs and location has hours/settings/services
+- [ ] Inbound call → verify agent uses location-scoped hours/services/settings
+- [ ] Switch location → verify Gmail integration is per-location (after migration runs)
+- [ ] Re-invite same email → verify it succeeds (after edge function deployed + Resend domain verified)
+
+### Awaiting Decision
+- [ ] **SMS 2FA support** — extend `TwoFactorSetup.tsx` to support SMS codes alongside Authenticator App. Blocked on: (1) confirm scope, (2) confirm Supabase project has Phone Auth provider configured (Twilio/MessageBird/etc.). If yes: add method picker → SMS enroll/verify flow → list both factor types → update `Login.tsx` for phone challenge.
 
 ---
 
