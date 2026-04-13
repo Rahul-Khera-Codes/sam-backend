@@ -261,8 +261,19 @@ Last updated: 2026-04-13 (session 28 — Custom Schedules feature shipped: per-l
 ### Awaiting Decision
 - [ ] **SMS 2FA support** — extend `TwoFactorSetup.tsx` to support SMS codes alongside Authenticator App. Blocked on Twilio A2P 10DLC campaign approval (client doing this). Setup guide for client: `docs/SMS_2FA_SETUP.md`. Once approved + Supabase Phone provider is configured: add method picker → SMS enroll/verify flow → list both factor types → update `Login.tsx` for phone challenge.
 
+### Call Forwarding — Option B (Rules + Verbal Direction) — SHIPPED session 28
+- [x] Migration `20260413000003_forwarding_contact_rule.sql` — adds `forwarding_rule TEXT` column
+- [x] Backend schemas accept + return `forwarding_rule`
+- [x] Backend `create_contact` persists the field (update already did via `exclude_none`)
+- [x] Agent `_fetch_forwarding_contacts` returns enabled contacts for called location
+- [x] Agent `_format_forwarding_contacts` adds a prompt block telling the agent to verbally direct callers to the matching contact
+- [x] Frontend: Edit pencil button wired (was a dead button); opens dialog with Name / Title / Phone / Rule
+- [x] Frontend: Add Contact dialog also gets Title + Rule fields
+- [ ] **Run** `supabase/migrations/20260413000003_forwarding_contact_rule.sql`
+- [ ] **Regenerate** Supabase TS types after migration runs
+
 ### Call Forwarding — Option C (Real SIP Transfer) — PLANNED, NOT YET SHIPPED
-**Current state:** Option B shipping now — UI for editing contacts + natural-language rules, agent reads rules in system prompt and verbally directs callers (tells them to call the number). Actual call transfer is NOT wired up.
+**Current state:** Option B is shipped — UI for editing contacts + natural-language rules, agent reads rules in system prompt and verbally directs callers (tells them to call the number). Actual call transfer is NOT wired up.
 
 **Option C plan:** Full implementation doc at `docs/superpowers/plans/2026-04-13-call-forwarding-runtime.md`. Adds a `forward_call(contact_id)` agent tool that triggers a SIP REFER via LiveKit → Twilio hands off the live call to the contact's phone.
 
