@@ -63,6 +63,7 @@ class ForwardingContactResponse(BaseModel):
     phone: str
     department_tag: Optional[str]
     priority: str
+    forwarding_rule: Optional[str] = None
     is_active: bool
     created_at: datetime
 
@@ -70,8 +71,9 @@ class ForwardingContactResponse(BaseModel):
 class CreateForwardingContactRequest(BaseModel):
     name: str
     phone: str
-    department_tag: Optional[str] = None
+    department_tag: Optional[str] = None  # used as "Title" in UI
     priority: str = "medium"
+    forwarding_rule: Optional[str] = None
     location_id: Optional[str] = None
 
 
@@ -80,6 +82,7 @@ class UpdateForwardingContactRequest(BaseModel):
     phone: Optional[str] = None
     department_tag: Optional[str] = None
     priority: Optional[str] = None
+    forwarding_rule: Optional[str] = None
     is_active: Optional[bool] = None
 
 

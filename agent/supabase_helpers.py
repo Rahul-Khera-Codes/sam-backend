@@ -436,6 +436,34 @@ def _fetch_knowledge_base_for_location(
         return []
 
 
+def _fetch_forwarding_contacts(
+    supabase,
+    business_id: str,
+    location_id: str | None,
+) -> list[dict]:
+    """
+    Fetch enabled forwarding contacts for this (business, location).
+    The agent uses these + their natural-language rules to decide whether
+    to direct a caller to a specific person.
+    """
+    if not supabase or not business_id:
+        return []
+    try:
+        query = (
+            supabase.table("forwarding_contacts")
+            .select("id, name, phone, department_tag, forwarding_rule")
+            .eq("business_id", business_id)
+            .eq("is_active", True)
+        )
+        if location_id:
+            query = query.eq("location_id", location_id)
+        r = query.execute()
+        return getattr(r, "data", None) or []
+    except Exception as e:
+        logger.warning("Failed to fetch forwarding contacts: %s", e)
+        return []
+
+
 def _fetch_active_custom_schedule(
     supabase,
     business_id: str,

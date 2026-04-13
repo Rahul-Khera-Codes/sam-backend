@@ -47,6 +47,7 @@ async def create_contact(
         "phone": body.phone,
         "department_tag": body.department_tag,
         "priority": body.priority,
+        "forwarding_rule": body.forwarding_rule,
         "is_active": True,
     }).execute()
 

@@ -16,6 +16,7 @@ from supabase_helpers import (
     _fetch_business_hours_for_location,
     _fetch_knowledge_base_for_location,
     _fetch_active_custom_schedule,
+    _fetch_forwarding_contacts,
 )
 
 logger = logging.getLogger("voice-agent")
@@ -299,6 +300,34 @@ def _format_services_for_prompt(services: list[dict]) -> str:
     return "Services offered:\n" + "\n".join(lines) + "\n\n"
 
 
+def _format_forwarding_contacts(contacts: list[dict]) -> str:
+    """
+    Format forwarding contacts + their natural-language rules.
+    The agent uses these to decide when to direct callers to specific people.
+    v1 (Option B): verbal direction only. Agent says "please call John at X".
+    v2 (Option C, future): agent will invoke a forward_call tool to actually
+    transfer the live call. Format already includes contact_id for that use.
+    """
+    if not contacts:
+        return ""
+    lines = []
+    for c in contacts:
+        title = (c.get("department_tag") or "").strip() or "Staff"
+        rule = (c.get("forwarding_rule") or "").strip() or "(no specific rule — use judgment)"
+        lines.append(
+            f"- {c.get('name', 'Unknown')} ({title}) — phone: {c.get('phone', 'n/a')}. Rule: {rule}"
+        )
+    return (
+        "Forwarding Contacts — when a caller asks to speak with a specific "
+        "person or department, and their rule clearly matches the caller's "
+        "request, tell the caller the contact's name and phone number so "
+        "they can reach them directly. If no contact's rule clearly matches, "
+        "offer to take a message instead.\n"
+        + "\n".join(lines)
+        + "\n\n"
+    )
+
+
 def _format_knowledge_base(entries: list[dict]) -> str:
     """Format knowledge base text entries for the prompt."""
     if not entries:
@@ -421,6 +450,9 @@ def build_instructions(business_id: str | None, location_id: str | None) -> str:
     kb_entries = _fetch_knowledge_base_for_location(supabase, business_id, location_id) if business_id else []
     kb_block   = _format_knowledge_base(kb_entries)
 
+    fwd_contacts = _fetch_forwarding_contacts(supabase, business_id, location_id) if business_id else []
+    fwd_block    = _format_forwarding_contacts(fwd_contacts)
+
     # Only use an explicit location_id. Do not fall back to the first location.
     _loc_to_use = None
     if supabase and location_id:
@@ -461,5 +493,6 @@ def build_instructions(business_id: str | None, location_id: str | None) -> str:
         + brand_block
         + locations_block
         + kb_block
+        + fwd_block
         + DEFAULT_INSTRUCTIONS.strip()
     )
