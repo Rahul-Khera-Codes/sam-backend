@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-04-13 (session 28 — integrations moved to Business Settings, Gmail per-location, bug fixes)
+Last updated: 2026-04-13 (session 28 — Custom Schedules feature shipped: per-location named overrides with runtime agent enforcement)
 
 ---
 
