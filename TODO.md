@@ -261,6 +261,27 @@ Last updated: 2026-04-13 (session 28 — Custom Schedules feature shipped: per-l
 ### Awaiting Decision
 - [ ] **SMS 2FA support** — extend `TwoFactorSetup.tsx` to support SMS codes alongside Authenticator App. Blocked on Twilio A2P 10DLC campaign approval (client doing this). Setup guide for client: `docs/SMS_2FA_SETUP.md`. Once approved + Supabase Phone provider is configured: add method picker → SMS enroll/verify flow → list both factor types → update `Login.tsx` for phone challenge.
 
+### Call Forwarding — Option C (Real SIP Transfer) — PLANNED, NOT YET SHIPPED
+**Current state:** Option B shipping now — UI for editing contacts + natural-language rules, agent reads rules in system prompt and verbally directs callers (tells them to call the number). Actual call transfer is NOT wired up.
+
+**Option C plan:** Full implementation doc at `docs/superpowers/plans/2026-04-13-call-forwarding-runtime.md`. Adds a `forward_call(contact_id)` agent tool that triggers a SIP REFER via LiveKit → Twilio hands off the live call to the contact's phone.
+
+Prerequisites before starting Option C work:
+- [ ] Twilio Console → Elastic SIP Trunk → General Settings → enable **Call Transfers**
+- [ ] Same panel → set **Caller ID for Transfer Target** = "Transferee"
+- [ ] Confirm `livekit-api` Python SDK ≥ 1.0 in agent requirements (already done)
+- [ ] Confirm Option B is running stably in production for at least a few days
+
+Implementation tasks (when ready):
+- [ ] Backend: `transfer_sip_participant` wrapper in `livekit_service.py`
+- [ ] Backend: `ForwardCallRequest` schema + `POST /calls/{call_id}/forward` endpoint with agent-token auth
+- [ ] Backend: `verify_agent_token` dependency in `auth.py`
+- [ ] Backend: Add `forwarded_to UUID REFERENCES forwarding_contacts(id)` column to `calls` table (migration)
+- [ ] Agent: `forward_call(contact_id)` `@function_tool()` on Assistant class
+- [ ] Agent: expand forwarding contacts prompt block to include `contact_id` + rule (format already defined in Option B prompt builder)
+- [ ] Config: `AGENT_BACKEND_TOKEN` generated and set in both `backend/.env` and `agent/.env.local`
+- [ ] Testing: 6-scenario E2E checklist in the plan doc
+
 ---
 
 ## 📋 TODO
