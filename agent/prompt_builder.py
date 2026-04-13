@@ -15,6 +15,7 @@ from supabase_helpers import (
     _fetch_staff_with_ids,
     _fetch_business_hours_for_location,
     _fetch_knowledge_base_for_location,
+    _fetch_active_custom_schedule,
 )
 
 logger = logging.getLogger("voice-agent")
@@ -351,7 +352,52 @@ def build_instructions(business_id: str | None, location_id: str | None) -> str:
 
     # Location-scoped fetches (hours, services, KB) — no fallback
     biz_hours    = _fetch_business_hours_for_location(supabase, business_id, location_id) if business_id else []
-    hours_block  = _format_business_hours(biz_hours)
+
+    # Apply an active custom schedule (if any) for the called location
+    active_custom = None
+    if business_id:
+        active_custom = _fetch_active_custom_schedule(supabase, business_id, location_id)
+
+    if active_custom:
+        if active_custom.get("is_agent_disabled"):
+            # Override the entire hours block with a closed message
+            hours_block = (
+                f"Special notice: The agent is temporarily unavailable due to "
+                f"'{active_custom.get('name') or 'a scheduled closure'}'. "
+                f"Apologise to the caller, tell them the business is currently closed, "
+                f"and offer to take a message or suggest calling back later.\n\n"
+            )
+        else:
+            # Override today's row in biz_hours with the custom times
+            from datetime import datetime as _dt
+            today_dow = _dt.now().strftime("%A").lower()
+            new_hours = []
+            found = False
+            for row in biz_hours:
+                if row.get("day_of_week") == today_dow:
+                    new_hours.append({
+                        "day_of_week": today_dow,
+                        "is_open": True,
+                        "open_time": active_custom["open_time"],
+                        "close_time": active_custom["close_time"],
+                    })
+                    found = True
+                else:
+                    new_hours.append(row)
+            if not found:
+                new_hours.append({
+                    "day_of_week": today_dow,
+                    "is_open": True,
+                    "open_time": active_custom["open_time"],
+                    "close_time": active_custom["close_time"],
+                })
+            biz_hours = new_hours
+            hours_block = (
+                _format_business_hours(biz_hours)
+                + f"Today's hours are affected by the active schedule '{active_custom.get('name')}'.\n\n"
+            )
+    else:
+        hours_block = _format_business_hours(biz_hours)
 
     services       = _fetch_services_for_location(supabase, business_id, location_id) if business_id else []
     services_block = _format_services_for_prompt(services)

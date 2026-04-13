@@ -52,6 +52,7 @@ from supabase_helpers import (
     _compute_available_slots,
     _fmt_time_12h,
     _is_feature_enabled_for_location,
+    _fetch_active_custom_schedule,
 )
 from sms_helpers import (
     send_appointment_confirmation_sms,
@@ -1039,6 +1040,20 @@ async def voice_agent(ctx: agents.JobContext):
     business_name = ""
     business_phone = ""
 
+    # Check for agent-disabled custom schedule
+    disabled_by_schedule = None
+    if business_id and location_id:
+        if supabase is None:
+            supabase = _get_supabase()
+        if supabase is not None:
+            _cs = _fetch_active_custom_schedule(supabase, business_id, location_id)
+            if _cs and _cs.get("is_agent_disabled"):
+                disabled_by_schedule = _cs
+                logger.info(
+                    "Custom schedule '%s' is disabling the agent for this call",
+                    _cs.get("name"),
+                )
+
     if business_id:
         if supabase is None:
             supabase = _get_supabase()
@@ -1129,6 +1144,21 @@ async def voice_agent(ctx: agents.JobContext):
             ),
         ),
     )
+    # If a custom schedule is disabling the agent, deliver a short closure
+    # message and disconnect right away — no need to hold a live SIP session.
+    if disabled_by_schedule:
+        await session.generate_reply(
+            instructions=(
+                f"Immediately tell the caller: 'Thank you for calling. We are currently closed "
+                f"due to {disabled_by_schedule.get('name') or 'scheduled unavailability'}. "
+                f"Please call back during our regular hours.' Then do not say anything else."
+            )
+        )
+        # Give the TTS ~6 seconds to speak before tearing down the room
+        await asyncio.sleep(6)
+        await ctx.room.disconnect()
+        return
+
     # For outbound calls the agent initiates the conversation with purpose/intro.
     # For inbound calls (web or SIP) the agent greets normally.
     if call_direction == "outbound":

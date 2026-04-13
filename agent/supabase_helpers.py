@@ -434,3 +434,55 @@ def _fetch_knowledge_base_for_location(
     except Exception as e:
         logger.warning("Failed to fetch knowledge base: %s", e)
         return []
+
+
+def _fetch_active_custom_schedule(
+    supabase,
+    business_id: str,
+    location_id: str | None,
+    now: datetime | None = None,
+) -> dict | None:
+    """
+    Return the single custom_schedule that applies to the given moment, or None.
+    Rules:
+      - is_enabled = true
+      - type one_time: start_date <= today <= end_date
+      - type recurring: today's day-of-week in days_of_week
+    If multiple match, highest priority wins; ties broken by created_at desc.
+    """
+    if not supabase or not business_id or not location_id:
+        return None
+
+    now = now or datetime.now(timezone.utc)
+    today_str = now.strftime("%Y-%m-%d")
+    dow = now.strftime("%A").lower()  # 'monday' etc.
+
+    try:
+        r = (
+            supabase.table("custom_schedules")
+            .select("*")
+            .eq("business_id", business_id)
+            .eq("location_id", location_id)
+            .eq("is_enabled", True)
+            .order("priority", desc=True)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        rows = getattr(r, "data", None) or []
+    except Exception as e:
+        logger.warning("Failed to fetch custom schedules: %s", e)
+        return None
+
+    for row in rows:
+        stype = row.get("schedule_type")
+        if stype == "one_time":
+            sd = row.get("start_date")
+            ed = row.get("end_date")
+            if sd and ed and sd <= today_str <= ed:
+                return row
+        elif stype == "recurring":
+            days = row.get("days_of_week") or []
+            if dow in [d.lower() for d in days]:
+                return row
+
+    return None
