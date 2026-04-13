@@ -110,6 +110,22 @@ Last updated: 2026-04-13 (session 28 — integrations moved to Business Settings
 - [x] Design: NO silent fallbacks — empty data = empty state in UI, not wrong data from another source
 - [x] Design: brand voice stays business-wide (part of Global Settings, not location-scoped)
 
+### Custom Schedules (session 28 — current)
+- [x] DB migration `20260413000000_custom_schedules.sql` — table + RLS (admin/super_admin write, members read, service_role full access) + partial unique indexes + updated_at trigger + check constraints (one_time vs recurring fields, hours required when not agent-disabled)
+- [x] DB migration `20260413000001_custom_schedules_backfill.sql` — copies existing `business_hours_overrides` rows into `custom_schedules` as one-time entries on first location of each business
+- [x] DB migration `20260413000002_drop_business_hours_overrides.sql` — drops the old table (run AFTER frontend deploy)
+- [x] Backend Pydantic schemas (`backend/app/schemas/custom_schedules.py`)
+- [x] Backend CRUD router `/custom-schedules` with `_require_admin` enforcement
+- [x] Agent `supabase_helpers._fetch_active_custom_schedule` — picks highest-priority enabled match (one_time date range or recurring day-of-week)
+- [x] Agent `prompt_builder` — when active and is_agent_disabled, replaces hours block with closure notice; otherwise overrides today's row in weekly hours
+- [x] Agent `agent.py` — when is_agent_disabled active, plays a short "we're closed" message and disconnects after ~6s
+- [x] Frontend `useCustomSchedules` hook — CRUD + toggleEnabled + deriveStatus
+- [x] Frontend components: `CustomScheduleCard`, `CustomScheduleSidebar`, `CustomScheduleDialog`, `CustomScheduleDetail`
+- [x] Frontend `Scheduler.tsx` — 2-column layout, weekly grid on left by default, selected schedule detail when one is clicked, sidebar on right
+- [x] Removed `BusinessDateOverrides` component, `useBusinessHoursOverrides` hook, and its rendering in BusinessSettings
+- [ ] Run 3 new migrations in Supabase: `20260413000000`, `20260413000001`, `20260413000002`
+- [ ] Regenerate Supabase TS types after migrations (`npx supabase gen types typescript --linked > src/integrations/supabase/types.ts`)
+
 ### Integrations → Business Settings + Per-Location Gmail (session 28)
 - [x] Migration `20260411000001_location_scope_gmail_tokens.sql`: add `location_id` to `gmail_tokens` with partial unique indexes; backfill assigns existing business-wide token to the first location
 - [x] Backend `gmail_integrations.py`: auth-url/callback/status/disconnect accept `location_id` (encoded in OAuth state)
@@ -210,9 +226,13 @@ Last updated: 2026-04-13 (session 28 — integrations moved to Business Settings
 - [x] Run 7 SQL migrations (`20260410000000` through `20260410000006`) — location-scoped architecture
 - [ ] **Run** `supabase/migrations/20260411000000_location_services_write_rls.sql` — adds INSERT/UPDATE/DELETE RLS for `location_services` (without it, services don't persist when added)
 - [x] **Run** `supabase/migrations/20260411000001_location_scope_gmail_tokens.sql` — adds `location_id` to `gmail_tokens`; backfill assigns existing token to first location
+- [ ] **Run** `supabase/migrations/20260413000000_custom_schedules.sql` — creates custom_schedules table + RLS
+- [ ] **Run** `supabase/migrations/20260413000001_custom_schedules_backfill.sql` — migrates existing date overrides
+- [ ] **Run** `supabase/migrations/20260413000002_drop_business_hours_overrides.sql` — drops old table (only after frontend deploy)
 - [x] **Deploy** `invite-location-admin` edge function — picks up "cancel pending invite before re-invite" + Resend error surfacing
 - [ ] **Client task:** verify `aiemployeesinc.com` on Resend dashboard — until done, all team invitation emails fail
 - [x] Regenerate Supabase TypeScript types — resolved; removed all `as any` workarounds; tsc --noEmit passes
+- [ ] Regenerate Supabase TS types AGAIN after custom_schedules migration runs
 - [ ] Merge `feature/location-scoped-architecture` branch to main (sam-backend)
 
 ### Testing
