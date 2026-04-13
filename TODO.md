@@ -243,8 +243,23 @@ Last updated: 2026-04-13 (session 28 — Custom Schedules feature shipped: per-l
 - [ ] Switch location → verify Gmail integration is per-location (after migration runs)
 - [ ] Re-invite same email → verify it succeeds (after edge function deployed + Resend domain verified)
 
+### Testing — Custom Schedules (after migrations run)
+- [ ] Create one-time schedule "Holiday Hours" Dec 24–26, 10 AM – 2 PM → shows as Scheduled, then Active on Dec 24, then Ended Dec 27
+- [ ] Create recurring "Every Friday" 8 AM – 8 PM → shows Active year-round
+- [ ] Create "Maintenance" one-time with Agent Disabled → card shows "Agent Disabled"
+- [ ] Toggle a schedule off → status badge becomes Disabled, agent stops applying it
+- [ ] Delete a schedule → card disappears, detail pane clears
+- [ ] Agent call during active Agent-Disabled schedule → agent says closure message, hangs up within ~6s
+- [ ] Agent call during active custom-hours schedule → prompt's hours block reflects the override for today
+- [ ] Agent call outside any active schedule → weekly hours unchanged, normal behavior
+- [ ] Two overlapping schedules (priority 200 vs 100) → priority 200 wins
+- [ ] Non-admin user tries to create a schedule → RLS blocks (403)
+- [ ] Switch selected location → sidebar refreshes with that location's schedules only
+- [ ] Old `business_hours_overrides` rows appear as one-time custom_schedules after backfill
+- [ ] Business Settings → Business Hours tab no longer shows the old Date Overrides section
+
 ### Awaiting Decision
-- [ ] **SMS 2FA support** — extend `TwoFactorSetup.tsx` to support SMS codes alongside Authenticator App. Blocked on: (1) confirm scope, (2) confirm Supabase project has Phone Auth provider configured (Twilio/MessageBird/etc.). If yes: add method picker → SMS enroll/verify flow → list both factor types → update `Login.tsx` for phone challenge.
+- [ ] **SMS 2FA support** — extend `TwoFactorSetup.tsx` to support SMS codes alongside Authenticator App. Blocked on Twilio A2P 10DLC campaign approval (client doing this). Setup guide for client: `docs/SMS_2FA_SETUP.md`. Once approved + Supabase Phone provider is configured: add method picker → SMS enroll/verify flow → list both factor types → update `Login.tsx` for phone challenge.
 
 ---
 
