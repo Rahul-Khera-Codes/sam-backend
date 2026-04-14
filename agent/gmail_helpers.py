@@ -88,11 +88,14 @@ async def _gmail_send_confirmation(
     duration_minutes: int,
     confirmation_ref: str,
 ) -> None:
-    """Send appointment confirmation email via the business Gmail account (best-effort)."""
+    """Send appointment confirmation email with .ics calendar attachment (best-effort)."""
     import base64
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
+    from email.mime.base import MIMEBase
+    from email import encoders
     import httpx
+    from ics_helpers import generate_ics
 
     access_token, sender_email = await _gmail_get_valid_token(supabase, business_id, location_id)
     if not access_token:
@@ -144,12 +147,38 @@ body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSy
 <div class="foot">&copy; {business_name} &bull; Automated confirmation</div>
 </div></body></html>"""
 
-    msg = MIMEMultipart("alternative")
+    # Build .ics calendar attachment
+    ics_content = generate_ics(
+        summary=f"{service} — {business_name}",
+        description=f"Appointment with {staff_name} at {location}.\nRef: {confirmation_ref}",
+        location=location,
+        date=date,
+        time=time,
+        duration_minutes=duration_minutes,
+        organizer_email=sender_email,
+        attendee_email=client_email,
+        uid=f"{confirmation_ref}@aiemployees",
+    )
+
+    # Outer: mixed (HTML body + attachment)
+    msg = MIMEMultipart("mixed")
     msg["From"] = f"{business_name} <{sender_email}>"
     msg["To"] = client_email
     msg["Subject"] = subject
-    msg.attach(MIMEText(plain, "plain"))
-    msg.attach(MIMEText(html, "html"))
+
+    # Inner: alternative (plain + html)
+    body_part = MIMEMultipart("alternative")
+    body_part.attach(MIMEText(plain, "plain"))
+    body_part.attach(MIMEText(html, "html"))
+    msg.attach(body_part)
+
+    # .ics attachment
+    ics_part = MIMEBase("text", "calendar", method="REQUEST", name="appointment.ics")
+    ics_part.set_payload(ics_content.encode("utf-8"))
+    encoders.encode_base64(ics_part)
+    ics_part.add_header("Content-Disposition", "attachment", filename="appointment.ics")
+    msg.attach(ics_part)
+
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
 
     try:
@@ -160,7 +189,7 @@ body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSy
                 json={"raw": raw},
             )
             if resp.status_code in (200, 201):
-                logger.info("Confirmation email sent to %s", client_email)
+                logger.info("Confirmation email with .ics sent to %s", client_email)
             else:
                 logger.warning("Gmail send failed %s: %s", resp.status_code, resp.text[:200])
     except Exception as e:
@@ -302,11 +331,14 @@ async def _gmail_send_reschedule_confirmation(
     duration_minutes: int,
     confirmation_ref: str,
 ) -> None:
-    """Send reschedule confirmation email to the customer (best-effort)."""
+    """Send reschedule confirmation email with .ics attachment (best-effort)."""
     import base64
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
+    from email.mime.base import MIMEBase
+    from email import encoders
     import httpx
+    from ics_helpers import generate_ics
 
     access_token, sender_email = await _gmail_get_valid_token(supabase, business_id, location_id)
     if not access_token:
@@ -357,12 +389,35 @@ body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSy
 <div class="foot">&copy; {business_name} &bull; Automated notification</div>
 </div></body></html>"""
 
-    msg = MIMEMultipart("alternative")
+    # .ics with updated time
+    ics_content = generate_ics(
+        summary=f"{service} — {business_name} (Rescheduled)",
+        description=f"Rescheduled appointment with {staff_name} at {location}.\nRef: {confirmation_ref}",
+        location=location,
+        date=new_date,
+        time=new_time,
+        duration_minutes=duration_minutes,
+        organizer_email=sender_email,
+        attendee_email=client_email,
+        uid=f"{confirmation_ref}@aiemployees",
+    )
+
+    msg = MIMEMultipart("mixed")
     msg["From"] = f"{business_name} <{sender_email}>"
     msg["To"] = client_email
     msg["Subject"] = subject
-    msg.attach(MIMEText(plain, "plain"))
-    msg.attach(MIMEText(html, "html"))
+
+    body_part = MIMEMultipart("alternative")
+    body_part.attach(MIMEText(plain, "plain"))
+    body_part.attach(MIMEText(html, "html"))
+    msg.attach(body_part)
+
+    ics_part = MIMEBase("text", "calendar", method="REQUEST", name="appointment.ics")
+    ics_part.set_payload(ics_content.encode("utf-8"))
+    encoders.encode_base64(ics_part)
+    ics_part.add_header("Content-Disposition", "attachment", filename="appointment.ics")
+    msg.attach(ics_part)
+
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
 
     try:
@@ -373,7 +428,7 @@ body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSy
                 json={"raw": raw},
             )
             if resp.status_code in (200, 201):
-                logger.info("Reschedule confirmation sent to %s", client_email)
+                logger.info("Reschedule confirmation with .ics sent to %s", client_email)
             else:
                 logger.warning("Gmail reschedule send failed %s: %s", resp.status_code, resp.text[:200])
     except Exception as e:
