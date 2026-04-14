@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-04-13 (session 28 — Custom Schedules feature shipped: per-location named overrides with runtime agent enforcement)
+Last updated: 2026-04-14 (session 28 — SMS templates, appointment management settings, call forwarding Option B)
 
 ---
 
@@ -260,6 +260,19 @@ Last updated: 2026-04-13 (session 28 — Custom Schedules feature shipped: per-l
 
 ### Awaiting Decision
 - [ ] **SMS 2FA support** — extend `TwoFactorSetup.tsx` to support SMS codes alongside Authenticator App. Blocked on Twilio A2P 10DLC campaign approval (client doing this). Setup guide for client: `docs/SMS_2FA_SETUP.md`. Once approved + Supabase Phone provider is configured: add method picker → SMS enroll/verify flow → list both factor types → update `Login.tsx` for phone challenge.
+
+### Editable SMS Templates + Appointment Management Settings (session 28)
+- [x] `FeatureToggleRow` — added optional `onEdit` prop (pencil icon button)
+- [x] `AgentSettings.tsx` — feature toggles now auto-save to backend immediately on flip (no global Save button exists anymore)
+- [x] SMS template editor: "Send Texts During or After Calls" + "Missed Call Text-Back" each have an Edit button → dialog with message textarea + `{{placeholder}}` reference → saved directly to `config_value.message_template` in `agent_settings`
+- [x] Agent `sms_helpers.py` — `send_appointment_confirmation_sms` + `send_missed_call_sms` accept `custom_template`; substitute `{{placeholders}}` if provided, else use hardcoded default
+- [x] Agent `supabase_helpers.py` — `_get_feature_config_value()` reads `config_value` JSONB for a feature at the location level
+- [x] Agent `agent.py` — both SMS call sites fetch config_value and pass `message_template` to the helpers
+- [x] Removed "Callback Scheduling" feature from the list
+- [x] Renamed "Confirmation & Cancel Calls" → "Reminder Calls" with updated description
+- [x] Updated "Reschedule / Cancel Appointments" description to reflect automatic outbound calling post-cancellation
+- [x] Both appointment features have Edit buttons → dialog with "days before/after" number + message/script textarea → saved to `config_value.days` + `config_value.message_template`
+- [x] No migration needed — `config_value JSONB` column already exists on `agent_settings`
 
 ### Call Forwarding — Option B (Rules + Verbal Direction) — SHIPPED session 28
 - [x] Migration `20260413000003_forwarding_contact_rule.sql` — adds `forwarding_rule TEXT` column
