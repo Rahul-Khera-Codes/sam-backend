@@ -223,16 +223,12 @@ Last updated: 2026-04-14 (session 28 — SMS templates, appointment management s
 ## 🔄 In Progress
 
 ### Manual Steps Required
-- [x] Run 7 SQL migrations (`20260410000000` through `20260410000006`) — location-scoped architecture
-- [ ] **Run** `supabase/migrations/20260411000000_location_services_write_rls.sql` — adds INSERT/UPDATE/DELETE RLS for `location_services` (without it, services don't persist when added)
-- [x] **Run** `supabase/migrations/20260411000001_location_scope_gmail_tokens.sql` — adds `location_id` to `gmail_tokens`; backfill assigns existing token to first location
-- [ ] **Run** `supabase/migrations/20260413000000_custom_schedules.sql` — creates custom_schedules table + RLS
-- [ ] **Run** `supabase/migrations/20260413000001_custom_schedules_backfill.sql` — migrates existing date overrides
-- [ ] **Run** `supabase/migrations/20260413000002_drop_business_hours_overrides.sql` — drops old table (only after frontend deploy)
-- [x] **Deploy** `invite-location-admin` edge function — picks up "cancel pending invite before re-invite" + Resend error surfacing
+- [x] Run all SQL migrations (20260410000000–20260413000003) — all applied
+- [x] Deploy `invite-location-admin` edge function
+- [x] Regenerate Supabase TypeScript types (done twice — after location-scope + after custom_schedules)
 - [ ] **Client task:** verify `aiemployeesinc.com` on Resend dashboard — until done, all team invitation emails fail
-- [x] Regenerate Supabase TypeScript types — resolved; removed all `as any` workarounds; tsc --noEmit passes
-- [ ] Regenerate Supabase TS types AGAIN after custom_schedules migration runs
+- [ ] **Client task:** complete A2P 10DLC registration for SMS 2FA (`docs/SMS_2FA_SETUP.md`)
+- [ ] **Client task:** enable Call Transfers on Twilio trunk (for Option C call forwarding)
 - [ ] Merge `feature/location-scoped-architecture` branch to main (sam-backend)
 
 ### Testing
@@ -299,8 +295,8 @@ Phase 6 (v2 — future, 3-5 days):
 - [x] Agent `_format_forwarding_contacts` adds a prompt block telling the agent to verbally direct callers to the matching contact
 - [x] Frontend: Edit pencil button wired (was a dead button); opens dialog with Name / Title / Phone / Rule
 - [x] Frontend: Add Contact dialog also gets Title + Rule fields
-- [ ] **Run** `supabase/migrations/20260413000003_forwarding_contact_rule.sql`
-- [ ] **Regenerate** Supabase TS types after migration runs
+- [x] Run `20260413000003_forwarding_contact_rule.sql` — applied
+- [x] Supabase TS types regenerated (includes forwarding_rule + custom_schedules)
 
 ### Call Forwarding — Option C (Real SIP Transfer) — PLANNED, NOT YET SHIPPED
 **Current state:** Option B is shipped — UI for editing contacts + natural-language rules, agent reads rules in system prompt and verbally directs callers (tells them to call the number). Actual call transfer is NOT wired up.
@@ -322,6 +318,18 @@ Implementation tasks (when ready):
 - [ ] Agent: expand forwarding contacts prompt block to include `contact_id` + rule (format already defined in Option B prompt builder)
 - [ ] Config: `AGENT_BACKEND_TOKEN` generated and set in both `backend/.env` and `agent/.env.local`
 - [ ] Testing: 6-scenario E2E checklist in the plan doc
+
+### Future Features — Not Yet Started
+- [ ] **SMS 2FA UI** — method picker + SMS enroll/verify in TwoFactorSetup.tsx + Login.tsx phone challenge. Blocked on client A2P 10DLC approval. ~1 day.
+- [ ] **Call Forwarding Option C** — real SIP REFER transfer. Plan doc at `docs/superpowers/plans/2026-04-13-call-forwarding-runtime.md`. ~1-2 days.
+- [ ] **Roles & Permissions v2** — custom roles with DB-driven permissions. Plan doc at `docs/superpowers/plans/2026-04-14-roles-permissions.md` Phase 6. ~3-5 days.
+- [ ] **Reminder Calls / Reschedule Calls runtime** — config UI shipped (days + message), but actual cron job + outbound call logic not built. ~2-3 days.
+- [ ] **Communication Settings save** — "Save All Settings" button on CS Settings page still not wired to `PUT /settings/communication`. ~30 min.
+- [ ] **`.ics` calendar attachment** in confirmation emails. ~2-3 hours.
+- [ ] **Call recording** — needs LiveKit Egress integration. ~1-2 days.
+- [ ] **HTTPS / domain setup** for production mic access (getUserMedia requires secure context). Ops task.
+- [ ] **Backend appointment/service API endpoints** — frontend queries Supabase directly; backend is unaware. ~1 day.
+- [ ] **Business authorization check** — verify user has `user_roles` entry for requested `business_id` (currently trusts frontend). ~2-3 hours.
 
 ---
 
