@@ -372,6 +372,36 @@ def _is_feature_enabled_for_location(
     return default
 
 
+def _get_feature_config_value(
+    supabase,
+    business_id: str,
+    location_id: str | None,
+    feature_key: str,
+) -> dict:
+    """Return the config_value JSONB for a feature flag. Empty dict if not found."""
+    if not supabase or not business_id:
+        return {}
+    try:
+        query = (
+            supabase.table("agent_settings")
+            .select("config_value")
+            .eq("business_id", business_id)
+            .eq("feature_key", feature_key)
+        )
+        if location_id:
+            query = query.eq("location_id", location_id)
+        else:
+            query = query.is_("location_id", "null")
+        r = query.limit(1).execute()
+        data = getattr(r, "data", None) or []
+        if data:
+            cv = data[0].get("config_value")
+            return cv if isinstance(cv, dict) else {}
+    except Exception as e:
+        logger.warning("Could not get config_value for %s: %s", feature_key, e)
+    return {}
+
+
 def _fetch_services_for_location(
     supabase,
     business_id: str,

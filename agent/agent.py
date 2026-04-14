@@ -52,6 +52,7 @@ from supabase_helpers import (
     _compute_available_slots,
     _fmt_time_12h,
     _is_feature_enabled_for_location,
+    _get_feature_config_value,
     _fetch_active_custom_schedule,
 )
 from sms_helpers import (
@@ -421,6 +422,10 @@ class Assistant(Agent):
                     "send_texts_during_after_calls",
                 ):
                     try:
+                        _sms_cfg = _get_feature_config_value(
+                            self._supabase, self._business_id, self._location_id,
+                            "send_texts_during_after_calls",
+                        )
                         send_appointment_confirmation_sms(
                             supabase=self._supabase,
                             business_id=self._business_id,
@@ -432,6 +437,7 @@ class Assistant(Agent):
                             date=date,
                             time_str=_fmt_time_12h(time),
                             confirmation_ref=short_id,
+                            custom_template=str(_sms_cfg.get("message_template", "")),
                         )
                     except Exception:
                         pass
@@ -879,12 +885,17 @@ async def _finalize_call(
     if is_missed and business_id and caller_phone:
         if _is_feature_enabled_for_location(supabase, business_id, location_id, "missed_call_text_back"):
             try:
+                _missed_cfg = _get_feature_config_value(
+                    supabase, business_id, location_id,
+                    "missed_call_text_back",
+                )
                 send_missed_call_sms(
                     supabase=supabase,
                     business_id=business_id,
                     location_id=location_id,
                     business_name=business_name or "us",
                     caller_phone=caller_phone,
+                    custom_template=str(_missed_cfg.get("message_template", "")),
                 )
             except Exception as e:
                 logger.warning("Missed-call SMS failed: %s", e)

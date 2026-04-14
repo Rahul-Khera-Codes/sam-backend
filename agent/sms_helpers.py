@@ -78,21 +78,35 @@ def send_appointment_confirmation_sms(
     date: str,
     time_str: str,
     confirmation_ref: str,
+    custom_template: str = "",
 ) -> None:
     """
     Send a booking confirmation SMS to the customer.
     Fires after book_appointment when send_texts_during_after_calls is enabled.
+    If custom_template is provided, substitute placeholders; otherwise use default.
     """
     from_number = _get_business_number(supabase, business_id, location_id)
     if not from_number or not client_phone:
         return
 
-    body = (
-        f"Hi {client_name}, your {service} at {business_name} is confirmed.\n"
-        f"Date: {date}  Time: {time_str}\n"
-        f"Ref: {confirmation_ref}\n"
-        f"Questions? Reply or call {from_number}"
-    )
+    if custom_template:
+        body = (
+            custom_template
+            .replace("{{client_name}}", client_name)
+            .replace("{{service}}", service)
+            .replace("{{business_name}}", business_name)
+            .replace("{{date}}", date)
+            .replace("{{time}}", time_str)
+            .replace("{{ref}}", confirmation_ref)
+            .replace("{{phone}}", from_number)
+        )
+    else:
+        body = (
+            f"Hi {client_name}, your {service} at {business_name} is confirmed.\n"
+            f"Date: {date}  Time: {time_str}\n"
+            f"Ref: {confirmation_ref}\n"
+            f"Questions? Reply or call {from_number}"
+        )
     _send_sms(from_number, client_phone, body)
 
 
@@ -128,17 +142,26 @@ def send_missed_call_sms(
     location_id: str | None,
     business_name: str,
     caller_phone: str,
+    custom_template: str = "",
 ) -> None:
     """
     Send a text-back when a caller hangs up before the agent could help.
     Fires from _finalize_call when missed_call_text_back is enabled.
+    If custom_template is provided, substitute placeholders; otherwise use default.
     """
     from_number = _get_business_number(supabase, business_id, location_id)
     if not from_number or not caller_phone:
         return
 
-    body = (
-        f"Hi! You recently called {business_name} and we missed you.\n"
-        f"Reply here or call us back at {from_number} — we'd love to help!"
-    )
+    if custom_template:
+        body = (
+            custom_template
+            .replace("{{business_name}}", business_name)
+            .replace("{{phone}}", from_number)
+        )
+    else:
+        body = (
+            f"Hi! You recently called {business_name} and we missed you.\n"
+            f"Reply here or call us back at {from_number} — we'd love to help!"
+        )
     _send_sms(from_number, caller_phone, body)
