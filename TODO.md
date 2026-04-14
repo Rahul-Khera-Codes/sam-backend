@@ -324,7 +324,7 @@ Implementation tasks (when ready):
 - [ ] **Call Forwarding Option C** — real SIP REFER transfer. Plan doc at `docs/superpowers/plans/2026-04-13-call-forwarding-runtime.md`. ~1-2 days.
 - [ ] **Roles & Permissions v2** — custom roles with DB-driven permissions. Plan doc at `docs/superpowers/plans/2026-04-14-roles-permissions.md` Phase 6. ~3-5 days.
 - [ ] **Reminder Calls / Reschedule Calls runtime** — config UI shipped (days + message), but actual cron job + outbound call logic not built. ~2-3 days.
-- [ ] **Communication Settings save** — "Save All Settings" button on CS Settings page still not wired to `PUT /settings/communication`. ~30 min.
+- [x] **Communication Settings save** — wired to `GET/PUT /settings/communication` with location_id. Loads on mount, merges with defaults, Save button works. Page renamed to "Communication Settings".
 - [ ] **`.ics` calendar attachment** in confirmation emails. ~2-3 hours.
 - [ ] **Call recording** — needs LiveKit Egress integration. ~1-2 days.
 - [ ] **HTTPS / domain setup** for production mic access (getUserMedia requires secure context). Ops task.
