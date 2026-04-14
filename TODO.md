@@ -258,6 +258,23 @@ Last updated: 2026-04-14 (session 28 — SMS templates, appointment management s
 - [ ] Old `business_hours_overrides` rows appear as one-time custom_schedules after backfill
 - [ ] Business Settings → Business Hours tab no longer shows the old Date Overrides section
 
+### Roles & Permissions — PLANNED, NOT YET SHIPPED
+Full plan doc: `docs/superpowers/plans/2026-04-14-roles-permissions.md`
+
+Phase 1-5 (v1 — ~3 hours):
+- [ ] Shared `roles.ts` constants (role labels, page-access map)
+- [ ] Sidebar uses shared map; removes `admin` from Locations + Phone Numbers access
+- [ ] `ProtectedRoute` enforces role-based page access (prevents URL-guessing bypass)
+- [ ] Team Management: replace "Permissions" menu → "Manage Services" dialog; relabel roles (Admin/Manager/Team Member)
+- [ ] Roles & Permissions read-only page (permissions matrix + role cards + "New Role" disabled placeholder)
+- [ ] Backend: reusable `require_role` dependency; refactor 3 ad-hoc role checks
+
+Phase 6 (v2 — future, 3-5 days):
+- [ ] `custom_roles` + `role_page_permissions` tables
+- [ ] Dynamic sidebar + ProtectedRoute from DB-driven permissions
+- [ ] Roles & Permissions page becomes editable (CRUD for custom roles, toggle checkboxes)
+- [ ] Migrate system roles into `custom_roles`; add `custom_role_id` to `user_roles`
+
 ### Awaiting Decision
 - [ ] **SMS 2FA support** — extend `TwoFactorSetup.tsx` to support SMS codes alongside Authenticator App. Blocked on Twilio A2P 10DLC campaign approval (client doing this). Setup guide for client: `docs/SMS_2FA_SETUP.md`. Once approved + Supabase Phone provider is configured: add method picker → SMS enroll/verify flow → list both factor types → update `Login.tsx` for phone challenge.
 
