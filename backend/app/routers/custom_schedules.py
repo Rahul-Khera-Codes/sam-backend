@@ -7,7 +7,7 @@ CRUD for agent custom schedules per (business_id, location_id).
 import logging
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException
-from app.core.auth import get_user_id, get_current_user
+from app.core.auth import get_user_id, get_current_user, require_role
 from app.core.supabase import supabase_admin
 from app.schemas.custom_schedules import (
     CreateCustomScheduleRequest,
@@ -20,20 +20,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/custom-schedules", tags=["custom-schedules"])
 
 
-def _require_admin(user_id: str) -> str:
-    """Verify user is admin/super_admin and return their business_id."""
-    role_row = (
-        supabase_admin.table("user_roles")
-        .select("business_id, role")
-        .eq("user_id", user_id)
-        .limit(1)
-        .execute()
-    )
-    if not role_row.data:
-        raise HTTPException(status_code=403, detail="User has no role assigned")
-    if role_row.data[0]["role"] not in ("super_admin", "admin"):
-        raise HTTPException(status_code=403, detail="Only admins can manage custom schedules")
-    return role_row.data[0]["business_id"]
+_admin_dep = require_role("super_admin", "admin")
 
 
 def _verify_location(business_id: str, location_id: str) -> None:
@@ -57,7 +44,7 @@ async def list_custom_schedules(
     current_user: dict = Depends(get_current_user),
     user_id: str = Depends(get_user_id),
 ):
-    business_id = _require_admin(user_id)
+    business_id = _admin_dep(user_id)
     _verify_location(business_id, location_id)
 
     result = (
@@ -79,7 +66,7 @@ async def create_custom_schedule(
     body: CreateCustomScheduleRequest,
     user_id: str = Depends(get_user_id),
 ):
-    business_id = _require_admin(user_id)
+    business_id = _admin_dep(user_id)
     _verify_location(business_id, body.location_id)
 
     row = body.model_dump()
@@ -104,7 +91,7 @@ async def update_custom_schedule(
     body: UpdateCustomScheduleRequest,
     user_id: str = Depends(get_user_id),
 ):
-    business_id = _require_admin(user_id)
+    business_id = _admin_dep(user_id)
 
     # Verify row exists and belongs to this business
     existing = (
@@ -144,7 +131,7 @@ async def delete_custom_schedule(
     schedule_id: str,
     user_id: str = Depends(get_user_id),
 ):
-    business_id = _require_admin(user_id)
+    business_id = _admin_dep(user_id)
 
     existing = (
         supabase_admin.table("custom_schedules")

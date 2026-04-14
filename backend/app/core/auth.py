@@ -47,3 +47,36 @@ def get_user_id(current_user: dict = Depends(get_current_user)) -> str:
             detail="Token missing user ID",
         )
     return user_id
+
+
+def require_role(*allowed_roles: str):
+    """
+    Returns a callable that verifies the user has one of the allowed roles
+    and returns their business_id. Can be used two ways:
+
+    1. As a FastAPI dependency:
+        business_id: str = Depends(require_role("super_admin", "admin"))
+
+    2. As a plain function call (when user_id is already available):
+        business_id = require_role("super_admin", "admin")(user_id)
+    """
+    from app.core.supabase import supabase_admin
+
+    def _check(user_id: str) -> str:
+        role_row = (
+            supabase_admin.table("user_roles")
+            .select("business_id, role")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        if not role_row.data:
+            raise HTTPException(status_code=403, detail="User has no role assigned")
+        if role_row.data[0]["role"] not in allowed_roles:
+            raise HTTPException(
+                status_code=403,
+                detail=f"This action requires one of: {', '.join(allowed_roles)}",
+            )
+        return role_row.data[0]["business_id"]
+
+    return _check
