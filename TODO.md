@@ -261,13 +261,13 @@ Last updated: 2026-04-14 (session 28 — SMS templates, appointment management s
 ### Roles & Permissions — PLANNED, NOT YET SHIPPED
 Full plan doc: `docs/superpowers/plans/2026-04-14-roles-permissions.md`
 
-Phase 1-5 (v1 — ~3 hours):
-- [ ] Shared `roles.ts` constants (role labels, page-access map)
-- [ ] Sidebar uses shared map; removes `admin` from Locations + Phone Numbers access
-- [ ] `ProtectedRoute` enforces role-based page access (prevents URL-guessing bypass)
-- [ ] Team Management: replace "Permissions" menu → "Manage Services" dialog; relabel roles (Admin/Manager/Team Member)
-- [ ] Roles & Permissions read-only page (permissions matrix + role cards + "New Role" disabled placeholder)
-- [ ] Backend: reusable `require_role` dependency; refactor 3 ad-hoc role checks
+Phase 1-5 (v1 — SHIPPED session 28):
+- [x] Shared `roles.ts` constants (ROLE_LABELS, ROLE_OPTIONS, RESTRICTED_PAGES, canAccessPath)
+- [x] Sidebar uses shared map; Locations + Phone Numbers now Admin-only per client spreadsheet
+- [x] `ProtectedRoute` enforces role-based page access (redirects to /dashboard on URL-guessing)
+- [x] Team Management: "Permissions" → "Manage Services" dialog (per-staff service assignment via user_services); role labels everywhere show Admin/Manager/Team Member
+- [x] Roles & Permissions read-only page at /dashboard/roles-permissions (permissions matrix + role cards + disabled "New Role" placeholder)
+- [x] Backend: `require_role()` in auth.py; refactored custom_schedules.py to use it
 
 Phase 6 (v2 — future, 3-5 days):
 - [ ] `custom_roles` + `role_page_permissions` tables
