@@ -325,7 +325,7 @@ Implementation tasks (when ready):
 - [ ] **Roles & Permissions v2** — custom roles with DB-driven permissions. Plan doc at `docs/superpowers/plans/2026-04-14-roles-permissions.md` Phase 6. ~3-5 days.
 - [ ] **Reminder Calls / Reschedule Calls runtime** — config UI shipped (days + message), but actual cron job + outbound call logic not built. ~2-3 days.
 - [x] **Communication Settings save** — wired to `GET/PUT /settings/communication` with location_id. Loads on mount, merges with defaults, Save button works. Page renamed to "Communication Settings".
-- [ ] **`.ics` calendar attachment** in confirmation emails. ~2-3 hours.
+- [x] **`.ics` calendar attachment** — confirmation + reschedule emails now include `appointment.ics`. Uses same UID (confirmation ref) so reschedules update the original calendar event.
 - [ ] **Call recording** — needs LiveKit Egress integration. ~1-2 days.
 - [ ] **HTTPS / domain setup** for production mic access (getUserMedia requires secure context). Ops task.
 - [ ] **Backend appointment/service API endpoints** — frontend queries Supabase directly; backend is unaware. ~1 day.
