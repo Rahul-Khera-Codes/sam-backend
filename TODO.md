@@ -226,10 +226,22 @@ Last updated: 2026-04-14 (session 28 — SMS templates, appointment management s
 - [x] Run all SQL migrations (20260410000000–20260413000003) — all applied
 - [x] Deploy `invite-location-admin` edge function
 - [x] Regenerate Supabase TypeScript types (done twice — after location-scope + after custom_schedules)
+- [ ] **Run** `20260414000000_audit_log_location_id.sql` — adds location_id to settings_audit_log
+- [ ] **Run** `20260414000001_backfill_null_appointments.sql` — assigns NULL-location appointments to first location
+- [ ] **Regenerate** TS types after the 2 new migrations
 - [ ] **Client task:** verify `aiemployeesinc.com` on Resend dashboard — until done, all team invitation emails fail
 - [ ] **Client task:** complete A2P 10DLC registration for SMS 2FA (`docs/SMS_2FA_SETUP.md`)
 - [ ] **Client task:** enable Call Transfers on Twilio trunk (for Option C call forwarding)
 - [ ] Merge `feature/location-scoped-architecture` branch to main (sam-backend)
+
+### Location-Scope Audit Findings — Fixed (session 28)
+- [x] **Critical:** Agent `book_appointment` now falls back to `self._location_id` when location resolution fails (no more NULL location_id)
+- [x] **Medium:** `bulk_toggle_contacts` accepts location_id and filters
+- [x] **Medium:** `settings_audit_log` includes location_id; GET endpoint filters by it; AgentSettings page passes selectedLocationId
+- [x] **Low:** `useAppointments` skips fetching when no location selected (was returning all-business data)
+- [x] **Low:** `_get_business_number` deterministic ordering (oldest active first)
+- [x] **Low:** Migration to backfill old NULL-location appointments
+- See `docs/audits/2026-04-14-location-scope-audit.md` for full audit + remaining low-severity item (#7)
 
 ### Testing
 - [x] Select Location A → verify all pages show only Location A data (business hours bug found + fixed)

@@ -3,6 +3,9 @@
 End-to-end audit of all location-scoped tables across DB, backend, agent, and frontend.
 Verified against actual code; severity ratings reflect real-world impact.
 
+> **STATUS UPDATE (2026-04-14 later):** All findings #1, #2, #3, #4, #5, #6, #8 fixed and committed.
+> Remaining: #7 (location_services RLS — by design, low priority). Migrations need to be run by user.
+
 ---
 
 ## Summary
