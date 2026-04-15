@@ -226,9 +226,9 @@ Last updated: 2026-04-14 (session 28 — SMS templates, appointment management s
 - [x] Run all SQL migrations (20260410000000–20260413000003) — all applied
 - [x] Deploy `invite-location-admin` edge function
 - [x] Regenerate Supabase TypeScript types (done twice — after location-scope + after custom_schedules)
-- [ ] **Run** `20260414000000_audit_log_location_id.sql` — adds location_id to settings_audit_log
-- [ ] **Run** `20260414000001_backfill_null_appointments.sql` — assigns NULL-location appointments to first location
-- [ ] **Regenerate** TS types after the 2 new migrations
+- [x] Run `20260414000000_audit_log_location_id.sql` — applied
+- [x] Run `20260414000001_backfill_null_appointments.sql` — applied
+- [x] Regenerate TS types — done; settings_audit_log includes location_id; tsc clean
 - [ ] **Client task:** verify `aiemployeesinc.com` on Resend dashboard — until done, all team invitation emails fail
 - [ ] **Client task:** complete A2P 10DLC registration for SMS 2FA (`docs/SMS_2FA_SETUP.md`)
 - [ ] **Client task:** enable Call Transfers on Twilio trunk (for Option C call forwarding)
