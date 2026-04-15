@@ -1,6 +1,6 @@
 from typing import Optional
 from fastapi import APIRouter, Depends
-from app.core.auth import get_current_user
+from app.core.auth import require_business_access
 from app.core.supabase import supabase_admin as supabase
 from datetime import datetime, timezone, timedelta
 
@@ -36,7 +36,7 @@ async def get_summary(
     business_id: str,
     location_id: Optional[str] = None,
     period: str = "7d",
-    current_user: dict = Depends(get_current_user),
+    _: str = Depends(require_business_access()),
 ):
     current_start, prev_start, now = get_period_dates(period)
 
@@ -105,7 +105,7 @@ async def call_volume_trends(
     business_id: str,
     location_id: Optional[str] = None,
     period: str = "daily",
-    current_user: dict = Depends(get_current_user),
+    _: str = Depends(require_business_access()),
 ):
     """Returns time-series inbound/outbound data for the chart."""
     now = datetime.now(timezone.utc)
@@ -159,7 +159,7 @@ async def call_distribution(
     business_id: str,
     location_id: Optional[str] = None,
     period: str = "7d",
-    current_user: dict = Depends(get_current_user),
+    _: str = Depends(require_business_access()),
 ):
     """Returns breakdown by call status for donut chart."""
     current_start, _, _ = get_period_dates(period)

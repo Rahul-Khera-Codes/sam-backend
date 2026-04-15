@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-04-14 (session 28 — SMS templates, appointment management settings, call forwarding Option B)
+Last updated: 2026-04-15 (session 29 — business authorization checks across backend routers)
 
 ---
 
@@ -233,6 +233,20 @@ Last updated: 2026-04-14 (session 28 — SMS templates, appointment management s
 - [ ] **Client task:** complete A2P 10DLC registration for SMS 2FA (`docs/SMS_2FA_SETUP.md`)
 - [ ] **Client task:** enable Call Transfers on Twilio trunk (for Option C call forwarding)
 - [ ] Merge `feature/location-scoped-architecture` branch to main (sam-backend)
+
+### Business Authorization Hardening (session 29)
+- [x] `verify_business_access(user_id, business_id)` helper in `backend/app/core/auth.py` — queries `user_roles`, returns role or raises 403
+- [x] `require_business_access()` dependency factory — reads business_id from query/path params, enforces membership
+- [x] `calls.py` — list/recent/get/transcript/summary/recording/status/initiate endpoints now verify caller owns the business; added `_verify_call_access` helper for resource-ID endpoints
+- [x] `analytics.py` — all endpoints switched to `require_business_access()`
+- [x] `settings.py` — all GET/PUT endpoints (agent, schedule, state, communication, audit-log) enforce business access
+- [x] `forwarding.py` — list/create endpoints use `require_business_access()`; update/delete/toggle look up the resource's business_id and verify; added `_verify_contact_access`/`_verify_rule_access` helpers
+- [x] `integrations.py` (Google Calendar) — auth-url/status/disconnect all verify business access
+- [x] `gmail_integrations.py` — auth-url/status/disconnect all verify business access
+- [x] `support.py` — wishlist endpoint uses standardized `verify_business_access`
+- [x] `custom_schedules.py`/`locations.py`/`phone_numbers.py` already derive business_id from user's own `user_roles` row → inherently safe (no user-supplied business_id trusted)
+- [x] `ast.parse` syntax check clean on all 8 modified files
+- Note: still need manual smoke test — hit a user's endpoint with another business's ID and confirm 403
 
 ### Location-Scope Audit Findings — Fixed (session 28)
 - [x] **Critical:** Agent `book_appointment` now falls back to `self._location_id` when location resolution fails (no more NULL location_id)

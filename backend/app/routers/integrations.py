@@ -14,7 +14,7 @@ from datetime import timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from app.core.auth import get_current_user, get_user_id
+from app.core.auth import get_current_user, get_user_id, verify_business_access
 from app.core.config import settings
 from app.core.supabase import supabase_admin
 from app.services import google_calendar_service as gcal
@@ -37,6 +37,8 @@ async def get_auth_url(
     `return_to` is the frontend path Google should redirect back to after OAuth.
     `state` encodes user_id + business_id + return_to.
     """
+    verify_business_access(user_id, business_id)
+
     if not settings.google_client_id:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -140,6 +142,7 @@ async def get_status(
     user_id: str = Depends(get_user_id),
 ):
     """Returns whether the current user has connected Google Calendar for this business."""
+    verify_business_access(user_id, business_id)
     token_row = gcal.get_token_row(supabase_admin, user_id)
     if token_row and token_row.get("business_id") == business_id:
         google_email = token_row.get("google_email", "")
@@ -172,6 +175,7 @@ async def disconnect(
     user_id: str = Depends(get_user_id),
 ):
     """Revoke Google tokens and remove the DB record."""
+    verify_business_access(user_id, business_id)
     token_row = gcal.get_token_row(supabase_admin, user_id)
     if not token_row:
         return {"disconnected": True}

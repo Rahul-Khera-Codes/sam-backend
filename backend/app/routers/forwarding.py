@@ -1,6 +1,6 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
-from app.core.auth import get_current_user, get_user_id
+from app.core.auth import get_current_user, get_user_id, require_business_access, verify_business_access
 from app.core.supabase import supabase, supabase_admin
 from app.schemas.settings import (
     ForwardingContactResponse,
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/forwarding", tags=["forwarding"])
 async def list_contacts(
     business_id: str,
     location_id: Optional[str] = None,
-    current_user: dict = Depends(get_current_user),
+    _: str = Depends(require_business_access()),
 ):
     query = (
         supabase.table("forwarding_contacts")
@@ -39,6 +39,7 @@ async def create_contact(
     business_id: str,
     body: CreateForwardingContactRequest,
     user_id: str = Depends(get_user_id),
+    _: str = Depends(require_business_access()),
 ):
     result = supabase_admin.table("forwarding_contacts").insert({
         "business_id": business_id,
@@ -54,12 +55,35 @@ async def create_contact(
     return result.data[0]
 
 
+def _verify_contact_access(contact_id: str, user_id: str) -> None:
+    """Verify the authenticated user has access to the contact's business."""
+    row = (
+        supabase_admin.table("forwarding_contacts")
+        .select("business_id").eq("id", contact_id).limit(1).execute()
+    )
+    if not row.data:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    verify_business_access(user_id, row.data[0]["business_id"])
+
+
+def _verify_rule_access(rule_id: str, user_id: str) -> None:
+    row = (
+        supabase_admin.table("forwarding_rules")
+        .select("business_id").eq("id", rule_id).limit(1).execute()
+    )
+    if not row.data:
+        raise HTTPException(status_code=404, detail="Rule not found")
+    verify_business_access(user_id, row.data[0]["business_id"])
+
+
 @router.put("/contacts/{contact_id}", response_model=ForwardingContactResponse)
 async def update_contact(
     contact_id: str,
     body: UpdateForwardingContactRequest,
-    current_user: dict = Depends(get_current_user),
+    user_id: str = Depends(get_user_id),
 ):
+    _verify_contact_access(contact_id, user_id)
+
     update_data = body.model_dump(exclude_none=True)
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -80,8 +104,9 @@ async def update_contact(
 @router.delete("/contacts/{contact_id}")
 async def delete_contact(
     contact_id: str,
-    current_user: dict = Depends(get_current_user),
+    user_id: str = Depends(get_user_id),
 ):
+    _verify_contact_access(contact_id, user_id)
     supabase_admin.table("forwarding_contacts").delete().eq("id", contact_id).execute()
     return {"success": True}
 
@@ -91,7 +116,7 @@ async def bulk_toggle_contacts(
     business_id: str,
     body: dict,
     location_id: Optional[str] = None,
-    current_user: dict = Depends(get_current_user),
+    _: str = Depends(require_business_access()),
 ):
     query = supabase_admin.table("forwarding_contacts").update(
         {"is_active": body.get("is_active")}
@@ -107,8 +132,9 @@ async def bulk_toggle_contacts(
 async def toggle_contact(
     contact_id: str,
     body: dict,
-    current_user: dict = Depends(get_current_user),
+    user_id: str = Depends(get_user_id),
 ):
+    _verify_contact_access(contact_id, user_id)
     result = (
         supabase_admin.table("forwarding_contacts")
         .update({"is_active": body.get("is_active")})
@@ -124,7 +150,7 @@ async def toggle_contact(
 async def list_rules(
     business_id: str,
     location_id: Optional[str] = None,
-    current_user: dict = Depends(get_current_user),
+    _: str = Depends(require_business_access()),
 ):
     query = (
         supabase.table("forwarding_rules")
@@ -143,6 +169,7 @@ async def create_rule(
     business_id: str,
     body: CreateForwardingRuleRequest,
     user_id: str = Depends(get_user_id),
+    _: str = Depends(require_business_access()),
 ):
     result = supabase_admin.table("forwarding_rules").insert({
         "business_id": business_id,
@@ -162,8 +189,9 @@ async def create_rule(
 async def update_rule(
     rule_id: str,
     body: dict,
-    current_user: dict = Depends(get_current_user),
+    user_id: str = Depends(get_user_id),
 ):
+    _verify_rule_access(rule_id, user_id)
     result = (
         supabase_admin.table("forwarding_rules")
         .update(body)
@@ -180,7 +208,8 @@ async def update_rule(
 @router.delete("/rules/{rule_id}")
 async def delete_rule(
     rule_id: str,
-    current_user: dict = Depends(get_current_user),
+    user_id: str = Depends(get_user_id),
 ):
+    _verify_rule_access(rule_id, user_id)
     supabase_admin.table("forwarding_rules").delete().eq("id", rule_id).execute()
     return {"success": True}

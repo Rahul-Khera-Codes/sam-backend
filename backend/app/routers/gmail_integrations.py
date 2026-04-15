@@ -15,7 +15,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from app.core.auth import get_current_user, get_user_id
+from app.core.auth import get_current_user, get_user_id, verify_business_access
 from app.core.config import settings
 from app.core.supabase import supabase_admin
 from app.services import email_service as gmail
@@ -53,6 +53,8 @@ async def get_auth_url(
     return_to: str = "/dashboard/settings/business",
     user_id: str = Depends(get_user_id),
 ):
+    verify_business_access(user_id, business_id)
+
     if not settings.google_client_id:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -180,8 +182,9 @@ async def oauth_callback(body: GmailCallbackRequest):
 async def get_status(
     business_id: str,
     location_id: Optional[str] = None,
-    current_user: dict = Depends(get_current_user),
+    user_id: str = Depends(get_user_id),
 ):
+    verify_business_access(user_id, business_id)
     row = _get_token_row_for_location(business_id, location_id)
     if row:
         google_email = row.get("google_email", "")
@@ -211,8 +214,9 @@ async def get_status(
 async def disconnect(
     business_id: str,
     location_id: Optional[str] = None,
-    current_user: dict = Depends(get_current_user),
+    user_id: str = Depends(get_user_id),
 ):
+    verify_business_access(user_id, business_id)
     row = _get_token_row_for_location(business_id, location_id)
     if not row:
         return {"disconnected": True}

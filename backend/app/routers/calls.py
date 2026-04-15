@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from app.core.auth import get_current_user, get_user_id
+from app.core.auth import get_current_user, get_user_id, require_business_access, verify_business_access
 from app.core.config import settings
 from app.core.supabase import supabase, supabase_admin
 from app.schemas.calls import (
@@ -41,7 +41,7 @@ async def list_calls(
     search: Optional[str] = None,
     page: int = 1,
     limit: int = 20,
-    current_user: dict = Depends(get_current_user),
+    _: str = Depends(require_business_access()),
 ):
     query = (
         supabase_admin.table("calls")
@@ -76,7 +76,7 @@ async def recent_activity(
     business_id: str,
     location_id: Optional[str] = None,
     limit: int = 10,
-    current_user: dict = Depends(get_current_user),
+    _: str = Depends(require_business_access()),
 ):
     query = (
         supabase_admin.table("calls")
@@ -134,7 +134,7 @@ async def recent_activity(
 @router.get("/{call_id}", response_model=CallResponse)
 async def get_call(
     call_id: str,
-    current_user: dict = Depends(get_current_user),
+    user_id: str = Depends(get_user_id),
 ):
     result = (
         supabase_admin.table("calls")
@@ -147,16 +147,29 @@ async def get_call(
     if not result.data:
         raise HTTPException(status_code=404, detail="Call not found")
 
+    verify_business_access(user_id, result.data[0]["business_id"])
     return result.data[0]
 
 
 # ── GET /calls/{id}/transcript ────────────────
 
+def _verify_call_access(call_id: str, user_id: str) -> dict:
+    """Look up a call and verify the user has access to its business. Returns the call row."""
+    call_row = (
+        supabase_admin.table("calls").select("business_id").eq("id", call_id).limit(1).execute()
+    )
+    if not call_row.data:
+        raise HTTPException(status_code=404, detail="Call not found")
+    verify_business_access(user_id, call_row.data[0]["business_id"])
+    return call_row.data[0]
+
+
 @router.get("/{call_id}/transcript", response_model=TranscriptResponse)
 async def get_transcript(
     call_id: str,
-    current_user: dict = Depends(get_current_user),
+    user_id: str = Depends(get_user_id),
 ):
+    _verify_call_access(call_id, user_id)
     result = (
         supabase_admin.table("transcripts")
         .select("*")
@@ -176,8 +189,9 @@ async def get_transcript(
 @router.get("/{call_id}/summary", response_model=CallSummaryResponse)
 async def get_summary(
     call_id: str,
-    current_user: dict = Depends(get_current_user),
+    user_id: str = Depends(get_user_id),
 ):
+    _verify_call_access(call_id, user_id)
     result = (
         supabase_admin.table("call_summaries")
         .select("*")
@@ -198,8 +212,9 @@ async def get_summary(
 @router.get("/{call_id}/recording")
 async def get_recording(
     call_id: str,
-    current_user: dict = Depends(get_current_user),
+    user_id: str = Depends(get_user_id),
 ):
+    _verify_call_access(call_id, user_id)
     # Get the recording reference
     result = (
         supabase_admin.table("recordings")
@@ -237,6 +252,8 @@ async def initiate_call(
     body: InitiateCallRequest,
     user_id: str = Depends(get_user_id),
 ):
+    verify_business_access(user_id, body.business_id)
+
     # 1. Generate a LiveKit room
     room_id = livekit_service.generate_room_id()
     await livekit_service.create_room(room_id)
@@ -325,6 +342,7 @@ async def initiate_outbound_call(
     body: OutboundCallRequest,
     user_id: str = Depends(get_user_id),
 ):
+    verify_business_access(user_id, body.business_id)
     phone_row = None
 
     if body.from_phone_number:
@@ -439,8 +457,9 @@ async def initiate_outbound_call(
 async def update_call_status(
     call_id: str,
     body: dict,
-    current_user: dict = Depends(get_current_user),
+    user_id: str = Depends(get_user_id),
 ):
+    _verify_call_access(call_id, user_id)
     allowed_statuses = ["active", "completed", "forwarded", "failed", "missed"]
     new_status = body.get("status")
 

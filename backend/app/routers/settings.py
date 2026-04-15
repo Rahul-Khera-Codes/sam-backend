@@ -1,6 +1,6 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
-from app.core.auth import get_current_user, get_user_id
+from app.core.auth import get_current_user, get_user_id, require_business_access
 from app.core.supabase import supabase_admin
 from app.schemas.settings import (
     AgentSettingsResponse,
@@ -65,7 +65,7 @@ def _serialize_schedule_rows(rows: list[dict]) -> list[dict]:
 async def get_agent_settings(
     business_id: str,
     location_id: Optional[str] = None,
-    current_user: dict = Depends(get_current_user),
+    _: str = Depends(require_business_access()),
 ):
     query = (
         supabase_admin.table("agent_settings")
@@ -92,6 +92,7 @@ async def update_agent_settings(
     body: UpdateAgentSettingsRequest,
     location_id: Optional[str] = None,
     user_id: str = Depends(get_user_id),
+    _: str = Depends(require_business_access()),
 ):
     # Get current values for audit log
     current_query = (
@@ -152,6 +153,7 @@ async def reset_agent_settings(
     business_id: str,
     location_id: Optional[str] = None,
     user_id: str = Depends(get_user_id),
+    _: str = Depends(require_business_access()),
 ):
     defaults = {
         "inbound_calling": True,
@@ -197,7 +199,7 @@ async def reset_agent_settings(
 async def get_agent_state(
     business_id: str,
     location_id: Optional[str] = None,
-    current_user: dict = Depends(get_current_user),
+    _: str = Depends(require_business_access()),
 ):
     query = (
         supabase_admin.table("agent_state")
@@ -221,6 +223,7 @@ async def toggle_agent_state(
     body: ToggleAgentStateRequest,
     location_id: Optional[str] = None,
     user_id: str = Depends(get_user_id),
+    _: str = Depends(require_business_access()),
 ):
     row = {
         "business_id": business_id,
@@ -251,7 +254,7 @@ async def toggle_agent_state(
 async def get_agent_schedule(
     business_id: str,
     location_id: Optional[str] = None,
-    current_user: dict = Depends(get_current_user),
+    _: str = Depends(require_business_access()),
 ):
     query = (
         supabase_admin.table("business_hours")
@@ -276,6 +279,7 @@ async def update_agent_schedule(
     body: UpdateAgentScheduleRequest,
     location_id: Optional[str] = None,
     user_id: str = Depends(get_user_id),
+    _: str = Depends(require_business_access()),
 ):
     seen_days = set()
     for item in body.schedule:
@@ -334,7 +338,7 @@ async def update_agent_schedule(
 async def get_audit_log(
     business_id: str,
     location_id: Optional[str] = None,
-    current_user: dict = Depends(get_current_user),
+    _: str = Depends(require_business_access()),
 ):
     query = (
         supabase_admin.table("settings_audit_log")
@@ -357,7 +361,7 @@ async def get_audit_log(
 async def get_communication_settings(
     business_id: str,
     location_id: Optional[str] = None,
-    current_user: dict = Depends(get_current_user),
+    _: str = Depends(require_business_access()),
 ):
     query = (
         supabase_admin.table("communication_settings")
@@ -382,6 +386,7 @@ async def update_communication_settings(
     body: UpdateCommunicationSettingsRequest,
     location_id: Optional[str] = None,
     user_id: str = Depends(get_user_id),
+    _: str = Depends(require_business_access()),
 ):
     for item in body.settings:
         row = {

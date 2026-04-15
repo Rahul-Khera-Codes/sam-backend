@@ -8,7 +8,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.core.auth import get_user_id
+from app.core.auth import get_user_id, verify_business_access
 from app.core.config import settings
 from app.core.supabase import supabase_admin
 from app.services import email_service
@@ -94,16 +94,7 @@ async def submit_wishlist(
     if not requester_name or not requester_email or not subject or not message:
         raise HTTPException(status_code=400, detail="All fields are required.")
 
-    membership = (
-        supabase_admin.table("user_roles")
-        .select("business_id")
-        .eq("user_id", user_id)
-        .eq("business_id", body.business_id)
-        .limit(1)
-        .execute()
-    )
-    if not membership.data:
-        raise HTTPException(status_code=403, detail="You do not have access to this business.")
+    verify_business_access(user_id, body.business_id)
 
     business_row = (
         supabase_admin.table("businesses")
