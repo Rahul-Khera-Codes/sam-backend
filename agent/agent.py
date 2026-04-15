@@ -325,7 +325,10 @@ class Assistant(Agent):
         try:
             row = {
                 "business_id": self._business_id,
-                "location_id": loc["id"] if loc else None,
+                # Fall back to the called location if the resolver couldn't match the
+                # user-spoken location name. self._location_id is set from dispatch
+                # rule metadata and is always present for SIP calls.
+                "location_id": (loc["id"] if loc else None) or self._location_id,
                 "assigned_user_id": staff["user_id"],
                 "client_name": client_name,
                 "client_phone": client_phone,
