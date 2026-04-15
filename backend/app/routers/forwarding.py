@@ -90,11 +90,15 @@ async def delete_contact(
 async def bulk_toggle_contacts(
     business_id: str,
     body: dict,
+    location_id: Optional[str] = None,
     current_user: dict = Depends(get_current_user),
 ):
-    supabase_admin.table("forwarding_contacts").update(
+    query = supabase_admin.table("forwarding_contacts").update(
         {"is_active": body.get("is_active")}
-    ).eq("business_id", business_id).execute()
+    ).eq("business_id", business_id)
+    if location_id:
+        query = query.eq("location_id", location_id)
+    query.execute()
 
     return {"success": True}
 

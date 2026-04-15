@@ -131,6 +131,7 @@ async def update_agent_settings(
         if old_val != setting.is_enabled:
             audit_entries.append({
                 "business_id": business_id,
+                "location_id": location_id,
                 "feature_key": setting.feature_key,
                 "old_value": old_val,
                 "new_value": setting.is_enabled,
@@ -332,16 +333,19 @@ async def update_agent_schedule(
 @router.get("/agent/audit-log")
 async def get_audit_log(
     business_id: str,
+    location_id: Optional[str] = None,
     current_user: dict = Depends(get_current_user),
 ):
-    result = (
+    query = (
         supabase_admin.table("settings_audit_log")
         .select("*")
         .eq("business_id", business_id)
         .order("changed_at", desc=True)
         .limit(50)
-        .execute()
     )
+    if location_id:
+        query = query.eq("location_id", location_id)
+    result = query.execute()
 
     return {"entries": result.data or []}
 

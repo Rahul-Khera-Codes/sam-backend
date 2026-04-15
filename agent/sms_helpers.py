@@ -43,7 +43,8 @@ def _get_business_number(
         )
         if location_id:
             query = query.eq("location_id", location_id)
-        result = query.limit(1).execute()
+        # Deterministic order — oldest active number wins if multiple exist
+        result = query.order("created_at", desc=False).limit(1).execute()
         if result.data:
             return result.data[0]["phone_number"]
     except Exception as e:
