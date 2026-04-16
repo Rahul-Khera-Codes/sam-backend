@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-04-15 (session 29 — business authorization checks across backend routers)
+Last updated: 2026-04-16 (session 30 — Support form wired, Tutorials removed from sidebar)
 
 ---
 
@@ -552,7 +552,8 @@ These don't exist yet on the backend (frontend queries Supabase directly — bac
 - [ ] Wire up `confirmation_reminder_calls` feature flag to email trigger
 
 ### Support Page — Form Submission
-- [ ] Wire "Submit Request" form on Support page to send to `support@aiemployeesinc.com` (set up email account first, then connect via Gmail API or SMTP)
+- [x] Wire "Submit Request" form on Support page — `POST /support/submit` sends via business's connected Gmail to `support@aiemployeesinc.com`; both Support + Wish List modes fully wired (session 30)
+- [x] Removed Tutorials from sidebar nav (session 30)
 
 ### Frontend — Remaining Stubs
 - [ ] Marketing Employee page
