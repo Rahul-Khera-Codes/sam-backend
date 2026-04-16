@@ -123,8 +123,8 @@ Last updated: 2026-04-15 (session 29 — business authorization checks across ba
 - [x] Frontend components: `CustomScheduleCard`, `CustomScheduleSidebar`, `CustomScheduleDialog`, `CustomScheduleDetail`
 - [x] Frontend `Scheduler.tsx` — 2-column layout, weekly grid on left by default, selected schedule detail when one is clicked, sidebar on right
 - [x] Removed `BusinessDateOverrides` component, `useBusinessHoursOverrides` hook, and its rendering in BusinessSettings
-- [ ] Run 3 new migrations in Supabase: `20260413000000`, `20260413000001`, `20260413000002`
-- [ ] Regenerate Supabase TS types after migrations (`npx supabase gen types typescript --linked > src/integrations/supabase/types.ts`)
+- [x] Run 3 new migrations in Supabase: `20260413000000`, `20260413000001`, `20260413000002` (applied — see session 28 manual steps)
+- [x] Regenerate Supabase TS types after migrations (done — session 28)
 
 ### Integrations → Business Settings + Per-Location Gmail (session 28)
 - [x] Migration `20260411000001_location_scope_gmail_tokens.sql`: add `location_id` to `gmail_tokens` with partial unique indexes; backfill assigns existing business-wide token to the first location
@@ -229,7 +229,7 @@ Last updated: 2026-04-15 (session 29 — business authorization checks across ba
 - [x] Run `20260414000000_audit_log_location_id.sql` — applied
 - [x] Run `20260414000001_backfill_null_appointments.sql` — applied
 - [x] Regenerate TS types — done; settings_audit_log includes location_id; tsc clean
-- [ ] **Client task:** verify `aiemployeesinc.com` on Resend dashboard — until done, all team invitation emails fail
+- [ ] **Client task + us:** reconfigure `aiemployeesinc.com` DNS on Hostinger for Resend — domain moved from Ionic → Hostinger, old DNS records gone, Resend verification broken. Login emails + team invitation emails not working until DNS re-added on Hostinger and re-verified in Resend dashboard.
 - [ ] **Client task:** complete A2P 10DLC registration for SMS 2FA (`docs/SMS_2FA_SETUP.md`)
 - [ ] **Client task:** enable Call Transfers on Twilio trunk (for Option C call forwarding)
 - [ ] Merge `feature/location-scoped-architecture` branch to main (sam-backend)
@@ -355,7 +355,7 @@ Implementation tasks (when ready):
 - [ ] **Call recording** — needs LiveKit Egress integration. ~1-2 days.
 - [ ] **HTTPS / domain setup** for production mic access (getUserMedia requires secure context). Ops task.
 - [ ] **Backend appointment/service API endpoints** — frontend queries Supabase directly; backend is unaware. ~1 day.
-- [ ] **Business authorization check** — verify user has `user_roles` entry for requested `business_id` (currently trusts frontend). ~2-3 hours.
+- [x] **Business authorization check** — `verify_business_access` + `require_business_access()` enforced across 7 routers (session 29)
 
 ---
 
@@ -403,10 +403,10 @@ These don't exist yet on the backend (frontend queries Supabase directly — bac
 - [ ] `GET /services/{service_id}/staff` — staff who offer this service
 
 ### Backend — Business Authorization
-- [ ] Add business_id authorization check — verify user has `user_roles` entry for requested `business_id` (currently trusts frontend)
+- [x] Add business_id authorization check — done in session 29 via `verify_business_access`/`require_business_access`
 
 ### Communication Settings — Fix Frontend Save
-- [ ] `CustomerServiceSettings.tsx` — "Save All Settings" button currently does nothing; wire up to `PUT /settings/communication` backend endpoint
+- [x] `CustomerServiceSettings.tsx` — "Save All Settings" wired to `PUT /settings/communication` (shipped in commit 87b6bab, verified session 29)
 
 ### Phone / Twilio + LiveKit SIP Integration
 
