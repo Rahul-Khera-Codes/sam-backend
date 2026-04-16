@@ -1,6 +1,7 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
-from app.core.auth import get_current_user, get_user_id, require_business_access
+from pydantic import BaseModel
+from app.core.auth import get_current_user, get_user_id, require_business_access, verify_business_access
 from app.core.supabase import supabase_admin
 from app.schemas.settings import (
     AgentSettingsResponse,
@@ -413,3 +414,43 @@ async def update_communication_settings(
             supabase_admin.table("communication_settings").insert(row).execute()
 
     return {"success": True, "updated": len(body.settings)}
+
+
+# ── POST /settings/business/deactivate ───────────────────────────────────────
+# Soft-deletes the business. Super admin only. Requires typing the business
+# name to confirm. Data is retained for 90 days; phone number is not released.
+
+class DeactivateBusinessRequest(BaseModel):
+    business_name: str  # must match businesses.name exactly
+
+
+@router.post("/business/deactivate")
+async def deactivate_business(
+    business_id: str,
+    body: DeactivateBusinessRequest,
+    user_id: str = Depends(get_user_id),
+):
+    role = verify_business_access(user_id, business_id)
+    if role != "super_admin":
+        raise HTTPException(status_code=403, detail="Only super admins can deactivate a business.")
+
+    biz = (
+        supabase_admin.table("businesses")
+        .select("name")
+        .eq("id", business_id)
+        .limit(1)
+        .execute()
+    )
+    if not biz.data:
+        raise HTTPException(status_code=404, detail="Business not found.")
+
+    actual_name = biz.data[0]["name"].strip()
+    if body.business_name.strip() != actual_name:
+        raise HTTPException(status_code=400, detail="Business name does not match. Please type the exact name to confirm.")
+
+    supabase_admin.table("businesses").update({
+        "is_deleted": True,
+        "deleted_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", business_id).execute()
+
+    return {"deactivated": True}

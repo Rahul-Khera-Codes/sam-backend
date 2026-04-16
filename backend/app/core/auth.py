@@ -57,6 +57,8 @@ def verify_business_access(user_id: str, business_id: str) -> str:
     Raises 403 if the user has no membership in this business — prevents
     a user from passing an arbitrary business_id in the URL/body to
     access another business's data.
+
+    Also raises 403 if the business has been soft-deleted.
     """
     from app.core.supabase import supabase_admin
 
@@ -73,6 +75,20 @@ def verify_business_access(user_id: str, business_id: str) -> str:
             status_code=403,
             detail="You don't have access to this business",
         )
+
+    biz = (
+        supabase_admin.table("businesses")
+        .select("is_deleted")
+        .eq("id", business_id)
+        .limit(1)
+        .execute()
+    )
+    if biz.data and biz.data[0].get("is_deleted"):
+        raise HTTPException(
+            status_code=403,
+            detail="This business account has been deactivated. Contact support to restore access.",
+        )
+
     return role_row.data[0]["role"]
 
 
