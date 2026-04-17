@@ -99,6 +99,8 @@ class Assistant(Agent):
         staff: list[dict] | None = None,
         business_name: str = "",
         business_phone: str = "",
+        room_name: str | None = None,
+        sip_participant_identity: str | None = None,
     ) -> None:
         super().__init__(instructions=instructions)
         self._supabase = supabase
@@ -110,6 +112,8 @@ class Assistant(Agent):
         self._staff = staff or []
         self._business_name = business_name
         self._business_phone = business_phone
+        self._room_name = room_name
+        self._sip_participant_identity = sip_participant_identity
 
         # Lookup maps (case-insensitive name → record)
         self._location_by_name: dict[str, dict] = {
@@ -216,13 +220,26 @@ class Assistant(Agent):
         service_name: str,
     ) -> str:
         """
-        Get staff members at a specific location who can perform a given service.
+        Get staff members at the current location who can perform a given service.
         Call this before offering staff choices to the customer.
+        Only works for the currently called location — use get_other_location_phone
+        if the caller is asking about a different branch.
         """
         loc = self._resolve_location(location_name)
         if not loc:
-            available = ", ".join(l["name"] for l in self._locations)
-            return f"Location '{location_name}' not found. Available locations: {available or 'none'}."
+            if self._default_location:
+                loc = self._default_location
+            else:
+                return "No location found. Please ask the customer for details."
+
+        # If a specific location is active, block lookups for other locations.
+        if self._location_id and loc.get("id") != self._location_id:
+            phone = loc.get("phone") or ""
+            phone_str = f" You can reach them at {phone}." if phone else ""
+            return (
+                f"I can only handle bookings for {self._default_location['name'] if self._default_location else 'this location'}. "
+                f"For {loc['name']}, please call that branch directly.{phone_str}"
+            )
 
         svc = self._resolve_service(service_name)
 
@@ -243,6 +260,52 @@ class Assistant(Agent):
 
         names = ", ".join(s["name"] for s in staff_at_loc)
         return f"Staff available at {loc['name']}: {names}."
+
+    @function_tool()
+    async def get_other_location_phone(
+        self,
+        context: RunContext,
+        location_name: str,
+    ) -> str:
+        """
+        Get the phone number for a different branch when the caller explicitly asks for it.
+        Only use this when the caller has specifically asked about another location.
+        """
+        loc = self._resolve_location(location_name)
+        if not loc:
+            other = [l["name"] for l in self._locations if l.get("id") != self._location_id]
+            return f"I couldn't find a branch called '{location_name}'. Other branches: {', '.join(other) or 'none'}."
+        if loc.get("id") == self._location_id:
+            name = self._default_location["name"] if self._default_location else "this location"
+            return f"You're already calling {name}! Is there something I can help you with here?"
+
+        loc_id = loc["id"]
+        phone = None
+
+        # Prefer the PSTN number from business_phone_numbers (what callers actually dial)
+        if self._supabase and self._business_id:
+            try:
+                r = (
+                    self._supabase.table("business_phone_numbers")
+                    .select("phone_number")
+                    .eq("business_id", self._business_id)
+                    .eq("location_id", loc_id)
+                    .is_("released_at", "null")
+                    .limit(1)
+                    .execute()
+                )
+                if r.data:
+                    phone = r.data[0]["phone_number"]
+            except Exception as e:
+                logger.warning("business_phone_numbers lookup failed for location %s: %s", loc_id, e)
+
+        # Fall back to locations.phone if no PSTN number is assigned
+        if not phone:
+            phone = loc.get("phone") or ""
+
+        if phone:
+            return f"The phone number for {loc['name']} is {phone}."
+        return f"I don't have a phone number on file for {loc['name']}. You may want to check their website or search online."
 
     @function_tool()
     async def get_available_slots(
@@ -668,6 +731,97 @@ class Assistant(Agent):
             return "Sorry, could not update the appointment. Please contact us directly."
 
     @function_tool()
+    async def forward_call(
+        self,
+        context: RunContext,
+        contact_id: str,
+    ) -> str:
+        """
+        Transfer the current inbound phone call to a forwarding contact via SIP REFER.
+        contact_id: the UUID shown next to the contact in the Forwarding Contacts list.
+        Always confirm with the caller before calling this — say something like
+        "I'll transfer you to [Name] now. Please hold." THEN call this tool.
+        Only works on live inbound SIP calls, not web test calls.
+        """
+        if not self._supabase or not self._business_id:
+            return "Call forwarding is unavailable right now."
+        if not self._sip_participant_identity or not self._room_name:
+            return "Call forwarding is only available on inbound phone calls, not web test calls."
+
+        # Look up the contact
+        try:
+            r = (
+                self._supabase.table("forwarding_contacts")
+                .select("id, name, phone")
+                .eq("id", contact_id)
+                .eq("business_id", self._business_id)
+                .limit(1)
+                .execute()
+            )
+            if not r.data:
+                return f"Could not find a forwarding contact with ID {contact_id}."
+            contact = r.data[0]
+        except Exception as e:
+            logger.error("Failed to fetch forwarding contact %s: %s", contact_id, e)
+            return "Could not look up the forwarding contact. Please try again."
+
+        phone = contact.get("phone") or ""
+        if not phone:
+            name = contact.get("name", "that contact")
+            return f"{name} does not have a phone number on file. I cannot transfer the call."
+
+        phone = _normalize_phone_e164(phone)
+        contact_name = contact.get("name", "the contact")
+
+        # Do the SIP REFER transfer
+        try:
+            from livekit.api import LiveKitAPI
+            from livekit.protocol.sip import TransferSIPParticipantRequest
+
+            livekit_url = os.getenv("LIVEKIT_URL")
+            livekit_api_key = os.getenv("LIVEKIT_API_KEY")
+            livekit_api_secret = os.getenv("LIVEKIT_API_SECRET")
+
+            transfer_to = f"tel:{phone}"
+            api = LiveKitAPI(
+                url=livekit_url,
+                api_key=livekit_api_key,
+                api_secret=livekit_api_secret,
+            )
+            try:
+                req = TransferSIPParticipantRequest(
+                    room_name=self._room_name,
+                    participant_identity=self._sip_participant_identity,
+                    transfer_to=transfer_to,
+                )
+                await api.sip.transfer_sip_participant(req)
+            finally:
+                await api.aclose()
+        except Exception as e:
+            logger.error("SIP REFER transfer failed for contact %s: %s", contact_id, e)
+            return (
+                f"Sorry, I wasn't able to transfer the call to {contact_name}. "
+                f"You can reach them directly at {phone}."
+            )
+
+        # Mark call as forwarded in DB
+        if self._call_id and self._supabase:
+            try:
+                self._supabase.table("calls").update({
+                    "status": "forwarded",
+                    "forwarded_to": contact_id,
+                    "ended_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("id", self._call_id).execute()
+            except Exception as e:
+                logger.warning("Failed to update call status after forward: %s", e)
+
+        logger.info(
+            "Forwarded call %s to contact %s (%s)",
+            self._call_id, contact_name, phone,
+        )
+        return f"Transferring you to {contact_name} now. Please hold."
+
+    @function_tool()
     async def cancel_appointment(
         self,
         context: RunContext,
@@ -869,12 +1023,19 @@ async def _finalize_call(
     is_missed = (call_direction == "inbound" and not transcript_log)
     final_status = "missed" if is_missed else "completed"
 
+    # Don't overwrite a forwarded status set by the forward_call tool.
     try:
-        supabase.table("calls").update({
-            "status": final_status,
-            "ended_at": datetime.now(timezone.utc).isoformat(),
-            "duration_seconds": duration_s,
-        }).eq("id", call_id).execute()
+        current = supabase.table("calls").select("status").eq("id", call_id).limit(1).execute()
+        if current.data and current.data[0].get("status") == "forwarded":
+            supabase.table("calls").update({
+                "duration_seconds": duration_s,
+            }).eq("id", call_id).execute()
+        else:
+            supabase.table("calls").update({
+                "status": final_status,
+                "ended_at": datetime.now(timezone.utc).isoformat(),
+                "duration_seconds": duration_s,
+            }).eq("id", call_id).execute()
     except Exception as e:
         logger.error("Failed to update call status: %s", e)
 
@@ -934,6 +1095,8 @@ async def voice_agent(ctx: agents.JobContext):
         or participant.identity.startswith("sip-")
     )
     call_direction: str = "inbound"  # default; "outbound" for agent-initiated calls
+    call_purpose: str | None = None      # e.g. "appointment_reminder", "appointment_reschedule"
+    message_template: str | None = None  # opening script for scheduled outbound calls
 
     # ── Source 1: ctx.job.metadata (set by LiveKit dispatch rule for SIP inbound) ──
     raw_job_meta = getattr(ctx.job, "metadata", None)
@@ -944,7 +1107,9 @@ async def voice_agent(ctx: agents.JobContext):
             location_id = job_meta.get("location_id")
             call_id = job_meta.get("call_id")
             call_direction = job_meta.get("call_direction", call_direction)
-            logger.info("Context from job metadata: business_id=%s location_id=%s", business_id, location_id)
+            call_purpose = job_meta.get("call_purpose")
+            message_template = job_meta.get("message_template")
+            logger.info("Context from job metadata: business_id=%s location_id=%s purpose=%s", business_id, location_id, call_purpose)
         except json.JSONDecodeError:
             logger.warning("Invalid job metadata: %s", raw_job_meta)
 
@@ -1075,7 +1240,13 @@ async def voice_agent(ctx: agents.JobContext):
         if supabase:
             locations = _fetch_locations(supabase, business_id)
             services = _fetch_services_for_location(supabase, business_id, location_id)
-            staff = _fetch_staff_with_ids(supabase, business_id)
+            all_staff = _fetch_staff_with_ids(supabase, business_id)
+            # Restrict staff to the called location so the agent never books or
+            # discusses staff from other branches.
+            if location_id:
+                staff = [s for s in all_staff if location_id in s.get("location_ids", [])]
+            else:
+                staff = all_staff
             biz = _fetch_business(supabase, business_id)
             if biz:
                 business_name = biz.get("name", "") or ""
@@ -1109,6 +1280,8 @@ async def voice_agent(ctx: agents.JobContext):
         staff=staff,
         business_name=business_name,
         business_phone=business_phone,
+        room_name=ctx.room.name,
+        sip_participant_identity=participant.identity if is_sip_call else None,
     )
 
     # ── Transcript capture ────────────────────────────────────────────────────
@@ -1176,12 +1349,18 @@ async def voice_agent(ctx: agents.JobContext):
     # For outbound calls the agent initiates the conversation with purpose/intro.
     # For inbound calls (web or SIP) the agent greets normally.
     if call_direction == "outbound":
-        await session.generate_reply(
-            instructions=(
+        if message_template and call_purpose in ("appointment_reminder", "appointment_reschedule"):
+            outbound_instructions = (
+                f"You are making an outbound call on behalf of the business. "
+                f"Open with this script exactly: \"{message_template}\" — then continue "
+                f"the conversation naturally based on the caller's response."
+            )
+        else:
+            outbound_instructions = (
                 "You are calling on behalf of the business. Introduce yourself briefly, "
                 "state the purpose of the call, and ask how you can help."
             )
-        )
+        await session.generate_reply(instructions=outbound_instructions)
     else:
         await session.generate_reply()
 

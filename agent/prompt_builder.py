@@ -43,6 +43,12 @@ Rescheduling or cancelling:
 5. For reschedule: check new availability with get_available_slots, then call update_appointment passing appointment_ref and client_name internally.
 6. For cancel: confirm once more verbally using service + date + time (e.g. "Just to confirm, you'd like to cancel your Haircut on April 2nd at 4 PM?"), then call cancel_appointment passing appointment_ref and client_name internally.
 
+Location rules:
+- You are answering calls for a specific branch. Only discuss services, staff, and availability for that branch.
+- If a caller asks about services or staff at a different branch, do NOT provide that information. Instead, use get_other_location_phone to get their phone number and direct the caller there.
+- If a caller wants to book at a different branch, politely explain that you can only book for the current branch and provide the other branch's phone number.
+- You may freely provide phone numbers for other branches when callers explicitly ask for them.
+
 General rules:
 - Never invent availability — always use the tools to check.
 - Confirm details clearly before any write action (book, update, cancel).
@@ -303,10 +309,8 @@ def _format_services_for_prompt(services: list[dict]) -> str:
 def _format_forwarding_contacts(contacts: list[dict]) -> str:
     """
     Format forwarding contacts + their natural-language rules.
-    The agent uses these to decide when to direct callers to specific people.
-    v1 (Option B): verbal direction only. Agent says "please call John at X".
-    v2 (Option C, future): agent will invoke a forward_call tool to actually
-    transfer the live call. Format already includes contact_id for that use.
+    Option C: agent invokes forward_call(contact_id) to do a real SIP REFER transfer.
+    contact_id is included in the prompt so the agent can pass it to the tool.
     """
     if not contacts:
         return ""
@@ -315,14 +319,13 @@ def _format_forwarding_contacts(contacts: list[dict]) -> str:
         title = (c.get("department_tag") or "").strip() or "Staff"
         rule = (c.get("forwarding_rule") or "").strip() or "(no specific rule — use judgment)"
         lines.append(
-            f"- {c.get('name', 'Unknown')} ({title}) — phone: {c.get('phone', 'n/a')}. Rule: {rule}"
+            f"- {c.get('name', 'Unknown')} ({title}) [contact_id: {c.get('id', '')}] — phone: {c.get('phone', 'n/a')}. Rule: {rule}"
         )
     return (
-        "Forwarding Contacts — when a caller asks to speak with a specific "
-        "person or department, and their rule clearly matches the caller's "
-        "request, tell the caller the contact's name and phone number so "
-        "they can reach them directly. If no contact's rule clearly matches, "
-        "offer to take a message instead.\n"
+        "Forwarding Contacts — when a caller asks to speak with a specific person or department "
+        "and their rule clearly matches the caller's request, confirm with the caller first, then "
+        "call forward_call(contact_id) with the contact_id shown below to transfer the call. "
+        "If no contact's rule clearly matches, offer to take a message instead.\n"
         + "\n".join(lines)
         + "\n\n"
     )
@@ -440,12 +443,30 @@ def build_instructions(business_id: str | None, location_id: str | None) -> str:
     locations_block = ""
     if business_id:
         locations = _fetch_locations(supabase, business_id)
-        employees_by_location: dict[str, list[str]] = {}
         staff_list = _fetch_staff_with_ids(supabase, business_id)
-        for s in staff_list:
-            for lid in s.get("location_ids", []):
-                employees_by_location.setdefault(lid, []).append(s["name"])
-        locations_block = _format_locations_and_employees(locations, employees_by_location)
+        if location_id:
+            # Location-scoped call: show other branches with phone only so the
+            # agent can direct callers there but cannot book or discuss their services.
+            other_locs = [l for l in locations if l.get("id") != location_id]
+            if other_locs:
+                lines = []
+                for loc in other_locs:
+                    parts = [loc.get("name") or "Unknown"]
+                    if loc.get("phone"):
+                        parts.append(f"phone: {loc['phone']}")
+                    lines.append(" — ".join(parts))
+                locations_block = (
+                    "Other branches (phone number only — do NOT book or discuss services/staff for these locations; "
+                    "if the caller asks, direct them to call that branch directly):\n"
+                    + "\n".join(f"- {l}" for l in lines)
+                    + "\n\n"
+                )
+        else:
+            employees_by_location: dict[str, list[str]] = {}
+            for s in staff_list:
+                for lid in s.get("location_ids", []):
+                    employees_by_location.setdefault(lid, []).append(s["name"])
+            locations_block = _format_locations_and_employees(locations, employees_by_location)
 
     kb_entries = _fetch_knowledge_base_for_location(supabase, business_id, location_id) if business_id else []
     kb_block   = _format_knowledge_base(kb_entries)

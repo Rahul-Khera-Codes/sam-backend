@@ -165,6 +165,42 @@ async def create_sip_participant(
         await api.aclose()
 
 
+async def transfer_sip_participant(
+    room_name: str,
+    participant_identity: str,
+    transfer_to: str,
+) -> None:
+    """
+    Transfer a SIP participant to a new destination via SIP REFER.
+    transfer_to: E.164 phone number (e.g. +14155551234) or sip: URI.
+    Requires Call Transfer (SIP REFER) enabled on the Twilio trunk.
+    """
+    from livekit.protocol.sip import TransferSIPParticipantRequest
+
+    # Accept bare E.164 numbers and convert to tel: URI
+    if transfer_to.startswith("+") or transfer_to.lstrip("+").isdigit():
+        transfer_to = f"tel:{transfer_to}"
+
+    api = LiveKitAPI(
+        url=settings.livekit_url,
+        api_key=settings.livekit_api_key,
+        api_secret=settings.livekit_api_secret,
+    )
+    try:
+        req = TransferSIPParticipantRequest(
+            room_name=room_name,
+            participant_identity=participant_identity,
+            transfer_to=transfer_to,
+        )
+        await api.sip.transfer_sip_participant(req)
+        print(
+            f"[LiveKit] SIP REFER sent room={room_name} participant={participant_identity} transfer_to={transfer_to}",
+            flush=True,
+        )
+    finally:
+        await api.aclose()
+
+
 async def end_room(room_id: str) -> None:
     """Deletes/closes a LiveKit room."""
     api = LiveKitAPI(

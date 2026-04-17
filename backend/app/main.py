@@ -1,20 +1,45 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+logging.basicConfig(level=logging.INFO)
+
 from app.core.config import settings
-from app.routers import calls, settings as settings_router, forwarding, analytics, integrations, gmail_integrations, phone_numbers, support, locations, custom_schedules
+from app.routers import (
+    calls,
+    settings as settings_router,
+    forwarding,
+    analytics,
+    integrations,
+    gmail_integrations,
+    phone_numbers,
+    support,
+    locations,
+    custom_schedules,
+)
+from app.services.scheduler_service import start_scheduler, stop_scheduler
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    start_scheduler()
+    yield
+    stop_scheduler()
+
 
 app = FastAPI(
     title="AI Voice Agent API",
     description="Backend for the AI Employees voice agent — LiveKit + GPT-4o Realtime",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # ── CORS ──────────────────────────────────────
-# Allow requests from the Lovable frontend
 
 app.add_middleware(
     CORSMiddleware,
-    # allow_origins=settings.cors_origins_list,
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],

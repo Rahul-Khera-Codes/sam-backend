@@ -31,3 +31,6 @@ httpx==0.27.0
 anyio==4.3.0
 
 twilio==9.10.4
+
+# Scheduler (reminder + reschedule outbound calls cron)
+apscheduler>=3.10,<4

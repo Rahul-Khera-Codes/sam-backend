@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-04-16 (session 30 — Support form wired, Tutorials removed from sidebar)
+Last updated: 2026-04-17 (session 33 — Reminder/Reschedule cron runtime shipped; agent uses message_template for outbound opener)
 
 ---
 
@@ -123,6 +123,7 @@ Last updated: 2026-04-16 (session 30 — Support form wired, Tutorials removed f
 - [x] Frontend components: `CustomScheduleCard`, `CustomScheduleSidebar`, `CustomScheduleDialog`, `CustomScheduleDetail`
 - [x] Frontend `Scheduler.tsx` — 2-column layout, weekly grid on left by default, selected schedule detail when one is clicked, sidebar on right
 - [x] Removed `BusinessDateOverrides` component, `useBusinessHoursOverrides` hook, and its rendering in BusinessSettings
+- [x] Danger Zone moved from below-tabs standalone section into its own "Danger Zone" tab in BusinessSettings — tab only visible to super_admin, shown in red (session 31)
 - [x] Run 3 new migrations in Supabase: `20260413000000`, `20260413000001`, `20260413000002` (applied — see session 28 manual steps)
 - [x] Regenerate Supabase TS types after migrations (done — session 28)
 
@@ -229,10 +230,35 @@ Last updated: 2026-04-16 (session 30 — Support form wired, Tutorials removed f
 - [x] Run `20260414000000_audit_log_location_id.sql` — applied
 - [x] Run `20260414000001_backfill_null_appointments.sql` — applied
 - [x] Regenerate TS types — done; settings_audit_log includes location_id; tsc clean
-- [ ] **Client task + us:** reconfigure `aiemployeesinc.com` DNS on Hostinger for Resend — domain moved from Ionic → Hostinger, old DNS records gone, Resend verification broken. Login emails + team invitation emails not working until DNS re-added on Hostinger and re-verified in Resend dashboard.
+- [x] **Run migration** `20260416000000_businesses_soft_delete.sql` in Supabase — applied
+- [x] **Us + client:** reconfigure `aiemployeesinc.com` DNS on Hostinger for Resend — **DONE** (domain verified in Resend Apr 16 8:00 PM). Next: confirm Supabase SMTP "From address" is `@aiemployeesinc.com` + test forgot-password email.
+- [ ] **Investigate:** Google sign-in not working — check Supabase OAuth redirect URLs + Google Cloud Console allowed redirect URIs. `redirectTo` is `${window.location.origin}/pending-invitations`.
+- [ ] **Investigate:** Sign up flow — test if sign-up works once Resend DNS is fixed (Supabase sends email confirmation via Resend SMTP).
 - [ ] **Client task:** complete A2P 10DLC registration for SMS 2FA (`docs/SMS_2FA_SETUP.md`)
-- [ ] **Client task:** enable Call Transfers on Twilio trunk (for Option C call forwarding)
+- [x] **Client task:** enable Call Transfers on Twilio trunk — done session 32
 - [ ] Merge `feature/location-scoped-architecture` branch to main (sam-backend)
+- [ ] **E2E test Option C** — make real SIP call to Mirage (+14157077538) or Downtown (+14158559408), ask agent to transfer to a forwarding contact, confirm caller is bridged and `calls.status=forwarded` + `forwarded_to` is set in DB
+- [x] **Auth emails fixed** — Resend DNS verified on Hostinger, Supabase SMTP password set, edge function `RESEND_API_KEY` secret set. All auth emails + team invitations now working (session 32)
+
+### Client Call — 2026-04-16 Action Items
+Priority items from call with client (Charles + Rahul):
+
+**CRITICAL — blocking client testing (all same root cause — no code change needed):**
+- [ ] Fix all auth emails (forgot password, sign-up, Google sign-in, team invites) — ALL use Resend with `aiemployeesinc.com` domain. Supabase Auth SMTP configured in Supabase dashboard to use Resend. Edge function sends from `notifications@aiemployeesinc.com` + `invites@aiemployeesinc.com`. DNS moved Ionos → Hostinger so Resend domain verification is broken. Fix: add Resend DKIM/SPF/DMARC records in Hostinger DNS → verify in Resend dashboard. Verified in `supabase/functions/invite-location-admin/index.ts`.
+
+**Agent — location isolation (client confirmed: keep strictly separate):**
+- [x] Verify agent only shows services from the specific called location — no cross-location service bleed. Fixed: `_fetch_services_for_location` scopes by `location_services` junction; staff filtered to called location at load time.
+- [x] If caller asks about services at another location, agent should offer that location's phone number (not book across locations). Fixed: `get_staff_for_service` blocks cross-location lookups; new `get_other_location_phone` tool looks up PSTN number from `business_phone_numbers`.
+- [x] Remove cross-location appointment booking from agent if currently present. Fixed: staff `_staff_by_name` map only contains current-location staff; `get_staff_for_service` returns redirect message for other branches.
+
+**Already done (confirmed on call):**
+- [x] Tutorials removed from sidebar
+- [x] Soft delete / account deactivation (business archive with 90-day grace period)
+- [x] Deactivation modal correctly asks for business name — confirmed "Downtown" is the actual business name (Downtown Barber Shop), not a location name. No bug.
+
+**Deferred by client:**
+- [x] Integrations search bar — added to IntegrationsTab; filters by name + description across all sections, collapses empty sections, shows "no results" message (session 31)
+- [ ] Roles & Permissions v2 (custom role creation) — client confirmed only super_admin/admin can create roles. Deferred.
 
 ### Business Authorization Hardening (session 29)
 - [x] `verify_business_access(user_id, business_id)` helper in `backend/app/core/auth.py` — queries `user_roles`, returns role or raises 403
@@ -324,32 +350,19 @@ Phase 6 (v2 — future, 3-5 days):
 - [x] Run `20260413000003_forwarding_contact_rule.sql` — applied
 - [x] Supabase TS types regenerated (includes forwarding_rule + custom_schedules)
 
-### Call Forwarding — Option C (Real SIP Transfer) — PLANNED, NOT YET SHIPPED
-**Current state:** Option B is shipped — UI for editing contacts + natural-language rules, agent reads rules in system prompt and verbally directs callers (tells them to call the number). Actual call transfer is NOT wired up.
-
-**Option C plan:** Full implementation doc at `docs/superpowers/plans/2026-04-13-call-forwarding-runtime.md`. Adds a `forward_call(contact_id)` agent tool that triggers a SIP REFER via LiveKit → Twilio hands off the live call to the contact's phone.
-
-Prerequisites before starting Option C work:
-- [ ] Twilio Console → Elastic SIP Trunk → General Settings → enable **Call Transfers**
-- [ ] Same panel → set **Caller ID for Transfer Target** = "Transferee"
-- [ ] Confirm `livekit-api` Python SDK ≥ 1.0 in agent requirements (already done)
-- [ ] Confirm Option B is running stably in production for at least a few days
-
-Implementation tasks (when ready):
-- [ ] Backend: `transfer_sip_participant` wrapper in `livekit_service.py`
-- [ ] Backend: `ForwardCallRequest` schema + `POST /calls/{call_id}/forward` endpoint with agent-token auth
-- [ ] Backend: `verify_agent_token` dependency in `auth.py`
-- [ ] Backend: Add `forwarded_to UUID REFERENCES forwarding_contacts(id)` column to `calls` table (migration)
-- [ ] Agent: `forward_call(contact_id)` `@function_tool()` on Assistant class
-- [ ] Agent: expand forwarding contacts prompt block to include `contact_id` + rule (format already defined in Option B prompt builder)
-- [ ] Config: `AGENT_BACKEND_TOKEN` generated and set in both `backend/.env` and `agent/.env.local`
-- [ ] Testing: 6-scenario E2E checklist in the plan doc
+### Call Forwarding — Option C (Real SIP Transfer) — SHIPPED session 32
+- [x] Twilio trunk: Call Transfer (SIP REFER) enabled, Caller ID = Transferee, PSTN Transfer enabled
+- [x] Migration `20260416000001_calls_forwarded_to.sql` — `forwarded_to UUID REFERENCES forwarding_contacts(id)` — applied
+- [x] `livekit_service.py` — `transfer_sip_participant(room, identity, transfer_to)` wrapper
+- [x] `prompt_builder.py` — forwarding contacts include `contact_id`; instruction tells agent to call `forward_call(contact_id)` after confirming with caller
+- [x] `agent.py` — `forward_call(contact_id)` tool: looks up contact, sends SIP REFER via LiveKit, sets call `status=forwarded` + `forwarded_to` in DB
+- [x] `agent.py` — `_finalize_call` skips status overwrite if already `forwarded`
 
 ### Future Features — Not Yet Started
 - [ ] **SMS 2FA UI** — method picker + SMS enroll/verify in TwoFactorSetup.tsx + Login.tsx phone challenge. Blocked on client A2P 10DLC approval. ~1 day.
-- [ ] **Call Forwarding Option C** — real SIP REFER transfer. Plan doc at `docs/superpowers/plans/2026-04-13-call-forwarding-runtime.md`. ~1-2 days.
+- [x] **Call Forwarding Option C** — real SIP REFER transfer. Shipped session 32.
 - [ ] **Roles & Permissions v2** — custom roles with DB-driven permissions. Plan doc at `docs/superpowers/plans/2026-04-14-roles-permissions.md` Phase 6. ~3-5 days.
-- [ ] **Reminder Calls / Reschedule Calls runtime** — config UI shipped (days + message), but actual cron job + outbound call logic not built. ~2-3 days.
+- [x] **Reminder Calls / Reschedule Calls runtime** — APScheduler cron inside FastAPI lifespan; `scheduler_service.py` with `run_reminder_calls` + `run_reschedule_calls`; agent uses `message_template` for outbound opener. Migration `20260417000000_appointments_call_tracking.sql` (apply manually). Shipped session 33.
 - [x] **Communication Settings save** — wired to `GET/PUT /settings/communication` with location_id. Loads on mount, merges with defaults, Save button works. Page renamed to "Communication Settings".
 - [x] **`.ics` calendar attachment** — confirmation + reschedule emails now include `appointment.ics`. Uses same UID (confirmation ref) so reschedules update the original calendar event.
 - [ ] **Call recording** — needs LiveKit Egress integration. ~1-2 days.

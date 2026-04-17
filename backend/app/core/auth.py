@@ -1,7 +1,11 @@
+import logging
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 bearer_scheme = HTTPBearer()
 
@@ -60,15 +64,23 @@ def verify_business_access(user_id: str, business_id: str) -> str:
 
     Also raises 403 if the business has been soft-deleted.
     """
+    import httpx
     from app.core.supabase import supabase_admin
 
-    role_row = (
+    def _execute_with_retry(query):
+        """Retry once on httpx.RemoteProtocolError (stale HTTP/2 connection)."""
+        try:
+            return query.execute()
+        except httpx.RemoteProtocolError:
+            logger.warning("Supabase connection dropped; retrying once")
+            return query.execute()
+
+    role_row = _execute_with_retry(
         supabase_admin.table("user_roles")
         .select("role")
         .eq("user_id", user_id)
         .eq("business_id", business_id)
         .limit(1)
-        .execute()
     )
     if not role_row.data:
         raise HTTPException(
@@ -76,12 +88,11 @@ def verify_business_access(user_id: str, business_id: str) -> str:
             detail="You don't have access to this business",
         )
 
-    biz = (
+    biz = _execute_with_retry(
         supabase_admin.table("businesses")
         .select("is_deleted")
         .eq("id", business_id)
         .limit(1)
-        .execute()
     )
     if biz.data and biz.data[0].get("is_deleted"):
         raise HTTPException(
