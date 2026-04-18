@@ -992,6 +992,97 @@ async def _generate_summary(
     logger.info("Summary saved for call %s (sentiment=%s)", call_id, sentiment)
 
 
+# ── Call recording via LiveKit Egress ────────────────────────────────────────
+
+async def _start_egress(room_name: str, call_id: str, business_id: str) -> tuple[str | None, str | None]:
+    """Start a room composite (audio-only) egress to Supabase S3. Returns (egress_id, storage_path)."""
+    from livekit.api import LiveKitAPI
+    from livekit.protocol.egress import (
+        RoomCompositeEgressRequest,
+        EncodedFileOutput,
+        EncodedFileType,
+        S3Upload,
+    )
+
+    access_key = os.getenv("SUPABASE_STORAGE_ACCESS_KEY_ID", "")
+    secret_key = os.getenv("SUPABASE_STORAGE_SECRET_ACCESS_KEY", "")
+    endpoint = os.getenv("SUPABASE_STORAGE_URL", "")
+    region = os.getenv("SUPABASE_STORAGE_REGION", "us-east-1")
+    bucket = os.getenv("SUPABASE_STORAGE_BUCKET", "call-recordings")
+
+    if not all([access_key, secret_key, endpoint]):
+        logger.warning("S3 credentials not configured — skipping egress recording")
+        return None, None
+
+    storage_path = f"{business_id}/{call_id}.ogg"
+
+    api = LiveKitAPI(
+        url=os.getenv("LIVEKIT_URL", ""),
+        api_key=os.getenv("LIVEKIT_API_KEY", ""),
+        api_secret=os.getenv("LIVEKIT_API_SECRET", ""),
+    )
+    try:
+        req = RoomCompositeEgressRequest(
+            room_name=room_name,
+            audio_only=True,
+            file_outputs=[EncodedFileOutput(
+                file_type=EncodedFileType.OGG,
+                filepath=storage_path,
+                s3=S3Upload(
+                    access_key=access_key,
+                    secret=secret_key,
+                    region=region,
+                    endpoint=endpoint,
+                    bucket=bucket,
+                    force_path_style=True,
+                ),
+            )],
+        )
+        info = await api.egress.start_room_composite_egress(req)
+        logger.info("Egress started — egress_id=%s path=%s", info.egress_id, storage_path)
+        return info.egress_id, storage_path
+    except Exception as e:
+        logger.warning("Failed to start egress: %s", e)
+        return None, None
+    finally:
+        await api.aclose()
+
+
+async def _stop_egress(egress_id: str) -> None:
+    """Stop an active egress. The file is finalized and uploaded after this call."""
+    from livekit.api import LiveKitAPI
+    from livekit.protocol.egress import StopEgressRequest
+
+    api = LiveKitAPI(
+        url=os.getenv("LIVEKIT_URL", ""),
+        api_key=os.getenv("LIVEKIT_API_KEY", ""),
+        api_secret=os.getenv("LIVEKIT_API_SECRET", ""),
+    )
+    try:
+        await api.egress.stop_egress(StopEgressRequest(egress_id=egress_id))
+        logger.info("Egress stopped — egress_id=%s", egress_id)
+    except Exception as e:
+        logger.warning("Failed to stop egress %s: %s", egress_id, e)
+    finally:
+        await api.aclose()
+
+
+def _write_recording_row(
+    supabase, call_id: str, business_id: str, storage_path: str, duration_s: int
+) -> None:
+    try:
+        supabase.table("recordings").insert({
+            "call_id": call_id,
+            "business_id": business_id,
+            "storage_path": storage_path,
+            "storage_bucket": "call-recordings",
+            "duration_seconds": duration_s,
+        }).execute()
+        logger.info("Recording row saved — call_id=%s path=%s", call_id, storage_path)
+    except Exception as e:
+        logger.warning("Failed to write recording row: %s", e)
+
+
 async def _finalize_call(
     supabase,
     call_id: str | None,
@@ -1103,9 +1194,9 @@ async def voice_agent(ctx: agents.JobContext):
     if isinstance(raw_job_meta, str) and raw_job_meta:
         try:
             job_meta = json.loads(raw_job_meta)
-            business_id = job_meta.get("business_id")
-            location_id = job_meta.get("location_id")
-            call_id = job_meta.get("call_id")
+            business_id = job_meta.get("business_id") or None
+            location_id = job_meta.get("location_id") or None
+            call_id = job_meta.get("call_id") or None
             call_direction = job_meta.get("call_direction", call_direction)
             call_purpose = job_meta.get("call_purpose")
             message_template = job_meta.get("message_template")
@@ -1119,9 +1210,9 @@ async def voice_agent(ctx: agents.JobContext):
         if isinstance(raw_meta, str) and raw_meta:
             try:
                 meta = json.loads(raw_meta)
-                business_id = meta.get("business_id")
-                location_id = meta.get("location_id")
-                call_id = meta.get("call_id")
+                business_id = meta.get("business_id") or None
+                location_id = meta.get("location_id") or None
+                call_id = meta.get("call_id") or None
                 call_direction = meta.get("call_direction", call_direction)
                 logger.info("Context from participant metadata: business_id=%s", business_id)
             except json.JSONDecodeError:
@@ -1346,6 +1437,12 @@ async def voice_agent(ctx: agents.JobContext):
         await ctx.room.disconnect()
         return
 
+    # Start recording (no-op if S3 credentials are not configured)
+    egress_id: str | None = None
+    egress_storage_path: str | None = None
+    if call_id and business_id:
+        egress_id, egress_storage_path = await _start_egress(ctx.room.name, call_id, business_id)
+
     # For outbound calls the agent initiates the conversation with purpose/intro.
     # For inbound calls (web or SIP) the agent greets normally.
     if call_direction == "outbound":
@@ -1373,6 +1470,10 @@ async def voice_agent(ctx: agents.JobContext):
         caller_left.set()
 
     await caller_left.wait()
+
+    # ── Stop recording ────────────────────────────────────────────────────────
+    if egress_id:
+        await _stop_egress(egress_id)
 
     # ── Post-call finalization ────────────────────────────────────────────────
     duration_s = int((datetime.now(timezone.utc) - call_start_time).total_seconds())
@@ -1413,6 +1514,10 @@ async def voice_agent(ctx: agents.JobContext):
             except Exception as e:
                 logger.warning("Fallback call record creation also failed: %s", e)
 
+    # Write recordings row now that we have call_id + duration
+    if egress_id and egress_storage_path and call_id and business_id and supabase:
+        _write_recording_row(supabase, call_id, business_id, egress_storage_path, duration_s)
+
     logger.info(
         "Finalizing call %s — duration=%ds utterances=%d",
         call_id, duration_s, len(transcript_log),
@@ -1426,7 +1531,10 @@ async def voice_agent(ctx: agents.JobContext):
         except Exception:
             pass
 
-    await _finalize_call(
+    # Run finalization in background so the entrypoint can return before the
+    # framework's 10-second kill timeout fires (summary generation via OpenAI
+    # can take longer than 10 s and was getting cut off).
+    asyncio.ensure_future(_finalize_call(
         supabase,
         call_id,
         business_id,
@@ -1436,7 +1544,7 @@ async def voice_agent(ctx: agents.JobContext):
         call_direction=call_direction,
         caller_phone=_caller_phone,
         business_name=business_name,
-    )
+    ))
 
 
 if __name__ == "__main__":

@@ -436,8 +436,9 @@ def _fetch_services_for_location(
             logger.warning("Failed to fetch location services: %s", e)
             return []
 
-    # No location_id — return all business services (legacy web call without location)
-    return _fetch_services(supabase, business_id)
+    # No location_id — return empty per no-silent-fallback design
+    logger.warning("_fetch_services_for_location called with no location_id for business %s", business_id)
+    return []
 
 
 def _fetch_knowledge_base_for_location(

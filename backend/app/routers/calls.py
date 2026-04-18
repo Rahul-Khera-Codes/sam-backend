@@ -231,8 +231,8 @@ async def get_recording(
     bucket = recording.get("storage_bucket", "call-recordings")
     path = recording.get("storage_path")
 
-    # Generate signed URL (valid for 1 hour)
-    signed = supabase.storage.from_(bucket).create_signed_url(path, 3600)
+    # Generate signed URL (valid for 1 hour) — must use admin/service-role client
+    signed = supabase_admin.storage.from_(bucket).create_signed_url(path, 3600)
 
     return {
         "recording_id": recording["id"],
@@ -286,7 +286,7 @@ async def initiate_call(
         metadata={
             "call_id": call_id,
             "business_id": body.business_id,
-            "location_id": body.location_id or "",
+            "location_id": body.location_id or None,
         },
     )
 
@@ -302,7 +302,7 @@ async def initiate_call(
             metadata={
                 "call_id": call_id,
                 "business_id": body.business_id,
-                "location_id": body.location_id or "",
+                "location_id": body.location_id or None,
                 "call_direction": body.direction.value,
             },
         )

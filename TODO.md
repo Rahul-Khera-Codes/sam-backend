@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-04-17 (session 33 — Reminder/Reschedule cron runtime shipped; agent uses message_template for outbound opener)
+Last updated: 2026-04-17 (session 33 — Gmail OAuth fix, cron runtime, null-location cleanup migration, agent services fallback removed)
 
 ---
 
@@ -232,13 +232,20 @@ Last updated: 2026-04-17 (session 33 — Reminder/Reschedule cron runtime shippe
 - [x] Regenerate TS types — done; settings_audit_log includes location_id; tsc clean
 - [x] **Run migration** `20260416000000_businesses_soft_delete.sql` in Supabase — applied
 - [x] **Us + client:** reconfigure `aiemployeesinc.com` DNS on Hostinger for Resend — **DONE** (domain verified in Resend Apr 16 8:00 PM). Next: confirm Supabase SMTP "From address" is `@aiemployeesinc.com` + test forgot-password email.
-- [ ] **Investigate:** Google sign-in not working — check Supabase OAuth redirect URLs + Google Cloud Console allowed redirect URIs. `redirectTo` is `${window.location.origin}/pending-invitations`.
-- [ ] **Investigate:** Sign up flow — test if sign-up works once Resend DNS is fixed (Supabase sends email confirmation via Resend SMTP).
+- [x] **Google sign-in** — working (session 33)
+- [x] **Sign-up flow** — working after Resend SMTP fix (session 33)
 - [ ] **Client task:** complete A2P 10DLC registration for SMS 2FA (`docs/SMS_2FA_SETUP.md`)
 - [x] **Client task:** enable Call Transfers on Twilio trunk — done session 32
 - [ ] Merge `feature/location-scoped-architecture` branch to main (sam-backend)
 - [ ] **E2E test Option C** — make real SIP call to Mirage (+14157077538) or Downtown (+14158559408), ask agent to transfer to a forwarding contact, confirm caller is bridged and `calls.status=forwarded` + `forwarded_to` is set in DB
 - [x] **Auth emails fixed** — Resend DNS verified on Hostinger, Supabase SMTP password set, edge function `RESEND_API_KEY` secret set. All auth emails + team invitations now working (session 32)
+- [x] **Gmail OAuth fixed** — `GoogleOAuthCallback` double-`?` URL bug fixed; OAuth flow now correctly passes `code` + `state` to IntegrationsTab (session 33)
+- [x] **Agent services fallback removed** — `_fetch_services_for_location` no longer falls back to all-business services when `location_id` is None; returns empty + warning log instead (session 33)
+- [x] **Null-location data cleanup** — migration `20260417000001_cleanup_null_location_rows.sql` created; run `supabase db push` in `ai-employees-app`
+- [x] **Migrations moved to correct dir** — `20260416000001_calls_forwarded_to.sql` + `20260417000000_appointments_call_tracking.sql` moved to `ai-employees-app/supabase/migrations/`; run `supabase db push`
+- [x] **Run `supabase db push`** — all 3 migrations applied: `20260416000001`, `20260417000000`, `20260417000001`
+- [ ] **Run `POST /phone-numbers/sync-dispatch`** — re-stamps dispatch rules with `location_id` so agent resolves correct location on inbound SIP calls
+- [ ] **httpx stale connection** — `verify_business_access` now retries once on `RemoteProtocolError`; monitor if issue recurs
 
 ### Client Call — 2026-04-16 Action Items
 Priority items from call with client (Charles + Rahul):
@@ -365,7 +372,7 @@ Phase 6 (v2 — future, 3-5 days):
 - [x] **Reminder Calls / Reschedule Calls runtime** — APScheduler cron inside FastAPI lifespan; `scheduler_service.py` with `run_reminder_calls` + `run_reschedule_calls`; agent uses `message_template` for outbound opener. Migration `20260417000000_appointments_call_tracking.sql` (apply manually). Shipped session 33.
 - [x] **Communication Settings save** — wired to `GET/PUT /settings/communication` with location_id. Loads on mount, merges with defaults, Save button works. Page renamed to "Communication Settings".
 - [x] **`.ics` calendar attachment** — confirmation + reschedule emails now include `appointment.ics`. Uses same UID (confirmation ref) so reschedules update the original calendar event.
-- [ ] **Call recording** — needs LiveKit Egress integration. ~1-2 days.
+- [x] **Call recording** — LiveKit Egress → Supabase Storage S3. Agent starts/stops egress per call, writes `recordings` row. Frontend audio player wired with real `<audio>` element, progress bar (seekable), download button. Signed URL via `supabase_admin`. Shipped session 34.
 - [ ] **HTTPS / domain setup** for production mic access (getUserMedia requires secure context). Ops task.
 - [ ] **Backend appointment/service API endpoints** — frontend queries Supabase directly; backend is unaware. ~1 day.
 - [x] **Business authorization check** — `verify_business_access` + `require_business_access()` enforced across 7 routers (session 29)
