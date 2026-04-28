@@ -66,6 +66,8 @@ class ForwardingContactResponse(BaseModel):
     forwarding_rule: Optional[str] = None
     is_active: bool
     created_at: datetime
+    available_start: Optional[str] = None
+    available_end: Optional[str] = None
 
 
 class CreateForwardingContactRequest(BaseModel):
@@ -75,6 +77,8 @@ class CreateForwardingContactRequest(BaseModel):
     priority: str = "medium"
     forwarding_rule: Optional[str] = None
     location_id: Optional[str] = None
+    available_start: Optional[str] = None
+    available_end: Optional[str] = None
 
 
 class UpdateForwardingContactRequest(BaseModel):
@@ -84,6 +88,8 @@ class UpdateForwardingContactRequest(BaseModel):
     priority: Optional[str] = None
     forwarding_rule: Optional[str] = None
     is_active: Optional[bool] = None
+    available_start: Optional[str] = None
+    available_end: Optional[str] = None
 
 
 # ── Forwarding Rules ──────────────────────────

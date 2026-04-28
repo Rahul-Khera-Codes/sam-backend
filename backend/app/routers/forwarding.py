@@ -50,6 +50,8 @@ async def create_contact(
         "priority": body.priority,
         "forwarding_rule": body.forwarding_rule,
         "is_active": True,
+        "available_start": body.available_start,
+        "available_end": body.available_end,
     }).execute()
 
     return result.data[0]
