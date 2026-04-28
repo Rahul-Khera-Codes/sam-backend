@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-04-17 (session 33 — Gmail OAuth fix, cron runtime, null-location cleanup migration, agent services fallback removed)
+Last updated: 2026-04-27 (session 36 — UI fixes: no-show followup feature, remove feedback section, hide price-varies in My Services)
 
 ---
 
@@ -364,6 +364,32 @@ Phase 6 (v2 — future, 3-5 days):
 - [x] `prompt_builder.py` — forwarding contacts include `contact_id`; instruction tells agent to call `forward_call(contact_id)` after confirming with caller
 - [x] `agent.py` — `forward_call(contact_id)` tool: looks up contact, sends SIP REFER via LiveKit, sets call `status=forwarded` + `forwarded_to` in DB
 - [x] `agent.py` — `_finalize_call` skips status overwrite if already `forwarded`
+
+### Pricing Strategy Research (session 35)
+- [x] Full platform analysis — feature inventory, tech stack, target customer documented in `docs/PRICING_STRATEGY.md`
+- [x] Twilio pricing researched — phone numbers ($1.15/mo), SIP trunking inbound ($0.0011/min), outbound ($0.0034/min), SMS ($0.012/msg total)
+- [x] LiveKit pricing researched — agent session minutes ($0.01/min dominant cost), WebRTC caller ($0.0005/min), Ship plan $50/mo with 5,000 agent min
+- [x] OpenAI Realtime API pricing researched — GPT-4o full ($0.29/call avg 3min), GPT-4o mini ($0.09/call avg 3min); mini is 68% cheaper
+- [x] Supabase pricing researched — Pro $25/mo + Large compute $100/mo = $125/mo shared platform cost; negligible per-customer above 30 customers
+- [x] Cost per call model built — total COGS ~$0.13/call (mini) or $0.33/call (full GPT-4o) for 3-min avg call
+- [x] Pricing floor analysis — $100/mo flat viable only with GPT-4o mini + ~150-200 call cap; losing money at 300+ calls with full model
+- [x] 4 pricing options documented: tiered buckets, usage-based, flat unlimited, per-location
+- [x] Competitive analysis — Numa, Smith.ai, Retell, Bland.ai, GoHighLevel; $99-349 tiers are below-market for SMB AI receptionist
+- [x] Recommended first launch: Starter $99 (150 calls), Growth $199 (400 calls, 3 locations), Pro $349 (800 calls, 5 locations) — 61-71% gross margin
+- [x] Full document saved: `docs/PRICING_STRATEGY.md`
+
+### UI Fixes (session 36 — client feedback)
+- [x] `AgentSettings.tsx` — completed "No-Show Follow-Up" feature: added `noshow_followup` to `APPOINTMENT_FEATURES`, `EDITABLE_FEATURES`, dialog description, textarea placeholder; backend `reset_agent_settings` now includes `noshow_followup: True` in defaults
+- [x] `AgentSettings.tsx` — removed "Feedback After the Call (1-5)" from Advanced Features section (client request)
+- [x] `MyServicesSection.tsx` — hide price display when `price <= 0`; fixes `$-1.00` showing for services with "Price varies" toggled on
+
+### Business Hours / Scheduler UI Fixes (session 35 — client feedback)
+- [x] `CustomScheduleSidebar.tsx` — added "Regular Hours" card at top of right sidebar; shows green "Active" badge + green border when no custom schedule is enabled; dims with opacity when a custom schedule overrides it; "Edit in Business Settings →" link navigates to Business Hours tab
+- [x] `Scheduler.tsx` — time formatting now respects `business.time_format` (12h/24h from Global Settings); `buildTimeOptions(use24h)` helper generates correct labels; `formatDisplayTime()` replaces hardcoded 12h `toMeridiemTime`
+- [x] `Scheduler.tsx` — Weekly Schedule card subtitle now shows "Synced with Business Settings → Business Hours" as a clickable link (makes the data connection explicit to the user)
+- [x] `Scheduler.tsx` — passes `defaultHoursLabel` and `onEditDefaultHours` to sidebar; imports `useNavigate`
+- [x] `BusinessSettings.tsx` — Business Hours tab header now shows "Used by AI Agent Scheduler" badge to make the connection clear
+- [x] `BusinessSettings.tsx` — `timeOptions` expanded from 24 hourly slots to 48 half-hour slots; format-aware labels (12h AM/PM or 24h) based on `business.time_format`
 
 ### Future Features — Not Yet Started
 - [ ] **SMS 2FA UI** — method picker + SMS enroll/verify in TwoFactorSetup.tsx + Login.tsx phone challenge. Blocked on client A2P 10DLC approval. ~1 day.

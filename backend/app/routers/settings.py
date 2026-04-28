@@ -165,6 +165,7 @@ async def reset_agent_settings(
         "callback_scheduling": True,
         "reschedule_cancel_appointments": True,
         "confirmation_reminder_calls": True,
+        "noshow_followup": True,
         "multi_language_support": False,
         "feedback_after_call": True,
     }

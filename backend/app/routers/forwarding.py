@@ -23,7 +23,7 @@ async def list_contacts(
     _: str = Depends(require_business_access()),
 ):
     query = (
-        supabase.table("forwarding_contacts")
+        supabase_admin.table("forwarding_contacts")
         .select("*")
         .eq("business_id", business_id)
         .order("created_at", desc=False)
@@ -153,7 +153,7 @@ async def list_rules(
     _: str = Depends(require_business_access()),
 ):
     query = (
-        supabase.table("forwarding_rules")
+        supabase_admin.table("forwarding_rules")
         .select("*")
         .eq("business_id", business_id)
         .order("priority_order")
