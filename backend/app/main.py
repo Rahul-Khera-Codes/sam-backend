@@ -18,6 +18,7 @@ from app.routers import (
     support,
     locations,
     custom_schedules,
+    roles as roles_router,
 )
 from app.services.scheduler_service import start_scheduler, stop_scheduler
 
@@ -58,6 +59,7 @@ app.include_router(phone_numbers.router)
 app.include_router(support.router)
 app.include_router(locations.router)
 app.include_router(custom_schedules.router)
+app.include_router(roles_router.router)
 
 
 # ── Health check ──────────────────────────────
