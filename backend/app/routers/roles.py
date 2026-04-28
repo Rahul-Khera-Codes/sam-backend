@@ -9,11 +9,16 @@ from app.schemas.roles import (
 router = APIRouter(prefix="/roles", tags=["roles"])
 
 
-def _get_role_business_id(role_id: str) -> str:
-    r = supabase_admin.table("custom_roles").select("business_id").eq("id", role_id).limit(1).execute()
+def _get_role(role_id: str) -> dict:
+    """Returns dict with business_id and is_system for the given role_id."""
+    r = supabase_admin.table("custom_roles").select("business_id, is_system").eq("id", role_id).limit(1).execute()
     if not r.data:
         raise HTTPException(status_code=404, detail="Role not found")
-    return r.data[0]["business_id"]
+    return r.data[0]
+
+
+def _get_role_business_id(role_id: str) -> str:
+    return _get_role(role_id)["business_id"]
 
 
 def _require_admin(user_id: str, business_id: str):
@@ -61,19 +66,20 @@ async def create_role(
         src_perms = supabase_admin.table("role_page_permissions").select("page_key, is_allowed").eq("role_id", src_id).execute()
         if src_perms.data:
             new_perms = [{"role_id": role["id"], "page_key": p["page_key"], "is_allowed": p["is_allowed"]} for p in src_perms.data]
-            supabase_admin.table("role_page_permissions").insert(new_perms).execute()
+            seed_result = supabase_admin.table("role_page_permissions").insert(new_perms).execute()
+            if not seed_result.data:
+                raise HTTPException(status_code=500, detail="Role created but permission seeding failed")
 
     return role
 
 
 @router.delete("/{role_id}", status_code=204)
 async def delete_role(role_id: str, user_id: str = Depends(get_user_id)):
-    business_id = _get_role_business_id(role_id)
-    verify_business_access(user_id, business_id)
-    _require_admin(user_id, business_id)
+    role = _get_role(role_id)
+    verify_business_access(user_id, role["business_id"])
+    _require_admin(user_id, role["business_id"])
 
-    check = supabase_admin.table("custom_roles").select("is_system").eq("id", role_id).limit(1).execute()
-    if check.data and check.data[0]["is_system"]:
+    if role["is_system"]:
         raise HTTPException(status_code=400, detail="System roles cannot be deleted")
 
     supabase_admin.table("custom_roles").delete().eq("id", role_id).execute()
