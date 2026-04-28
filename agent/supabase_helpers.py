@@ -467,6 +467,31 @@ def _fetch_knowledge_base_for_location(
         return []
 
 
+def _is_within_available_hours(available_start: str | None, available_end: str | None) -> bool:
+    """
+    Return True if the current UTC time falls within [available_start, available_end].
+    If either value is missing or malformed, returns True (always available).
+    Handles overnight windows where end < start (e.g. 22:00 – 06:00).
+    """
+    if not available_start or not available_end:
+        return True
+    try:
+        now_utc = datetime.now(timezone.utc)
+        now_minutes = now_utc.hour * 60 + now_utc.minute
+
+        start_h, start_m = map(int, available_start.split(":"))
+        end_h, end_m     = map(int, available_end.split(":"))
+        start_minutes = start_h * 60 + start_m
+        end_minutes   = end_h * 60 + end_m
+
+        if start_minutes <= end_minutes:
+            return start_minutes <= now_minutes <= end_minutes
+        else:
+            return now_minutes >= start_minutes or now_minutes <= end_minutes
+    except (ValueError, AttributeError):
+        return True
+
+
 def _fetch_forwarding_contacts(
     supabase,
     business_id: str,
@@ -482,7 +507,7 @@ def _fetch_forwarding_contacts(
     try:
         query = (
             supabase.table("forwarding_contacts")
-            .select("id, name, phone, department_tag, forwarding_rule")
+            .select("id, name, phone, department_tag, forwarding_rule, available_start, available_end")
             .eq("business_id", business_id)
             .eq("is_active", True)
         )

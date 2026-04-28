@@ -54,6 +54,7 @@ from supabase_helpers import (
     _is_feature_enabled_for_location,
     _get_feature_config_value,
     _fetch_active_custom_schedule,
+    _is_within_available_hours,
 )
 from sms_helpers import (
     send_appointment_confirmation_sms,
@@ -752,7 +753,7 @@ class Assistant(Agent):
         try:
             r = (
                 self._supabase.table("forwarding_contacts")
-                .select("id, name, phone")
+                .select("id, name, phone, available_start, available_end")
                 .eq("id", contact_id)
                 .eq("business_id", self._business_id)
                 .limit(1)
@@ -764,6 +765,16 @@ class Assistant(Agent):
         except Exception as e:
             logger.error("Failed to fetch forwarding contact %s: %s", contact_id, e)
             return "Could not look up the forwarding contact. Please try again."
+
+        avail_start = contact.get("available_start")
+        avail_end   = contact.get("available_end")
+        if not _is_within_available_hours(avail_start, avail_end):
+            contact_name = contact.get("name", "that contact")
+            hours_msg = f"{avail_start} – {avail_end} UTC"
+            return (
+                f"I'm sorry, {contact_name} is only available {hours_msg} and is not "
+                f"available right now. Would you like me to take a message instead?"
+            )
 
         phone = contact.get("phone") or ""
         if not phone:
