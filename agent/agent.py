@@ -55,6 +55,7 @@ from supabase_helpers import (
     _get_feature_config_value,
     _fetch_active_custom_schedule,
     _is_within_available_hours,
+    _validate_booking_datetime,
 )
 from sms_helpers import (
     send_appointment_confirmation_sms,
@@ -328,6 +329,13 @@ class Assistant(Agent):
         if not staff:
             return f"Staff member '{staff_name}' not found."
 
+        # Reject past dates and closed days before computing slots
+        date_err = _validate_booking_datetime(
+            self._supabase, self._business_id, self._location_id, date, "00:00"
+        )
+        if date_err:
+            return date_err
+
         slot_minutes = 60
         if service_name:
             svc = self._resolve_service(service_name)
@@ -381,6 +389,23 @@ class Assistant(Agent):
         duration_str = str(svc["duration_minutes"]) if svc and svc.get("duration_minutes") else "60"
         service_label = svc["name"] if svc else service_name
         location_label = loc["name"] if loc else location_name
+
+        # Guard 1: date/time/business-hours validation
+        booking_location_id = (loc["id"] if loc else None) or self._location_id
+        date_err = _validate_booking_datetime(
+            self._supabase, self._business_id, booking_location_id, date, time
+        )
+        if date_err:
+            return date_err
+
+        # Guard 2: double-booking — slot already taken for this staff member
+        existing = _fetch_appointments_on_date(self._supabase, staff["user_id"], date)
+        for appt in existing:
+            if (appt.get("appointment_time") or "")[:5] == time[:5]:
+                return (
+                    f"{staff['name']} is not available at {_fmt_time_12h(time[:5])} on {date}. "
+                    f"Please choose a different time slot."
+                )
 
         combined_notes = notes or ""
         if self._call_id:
