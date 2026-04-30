@@ -244,11 +244,17 @@ def _handle_subscription_upsert(sub) -> None:
         return
 
     price_id = None
+    period_start = None
+    period_end = None
     items_obj = _attr(sub, "items")
     items_data = _attr(items_obj, "data") or [] if items_obj else []
     if items_data:
-        price_obj = _attr(items_data[0], "price")
+        first_item = items_data[0]
+        price_obj = _attr(first_item, "price")
         price_id = _attr(price_obj, "id") if price_obj else None
+        # Stripe API 2026+ moved period dates from subscription root to items
+        period_start = _attr(first_item, "current_period_start") or _attr(sub, "current_period_start")
+        period_end = _attr(first_item, "current_period_end") or _attr(sub, "current_period_end")
 
     plan_info = _plan_by_price_id(price_id or "")
 
@@ -256,8 +262,8 @@ def _handle_subscription_upsert(sub) -> None:
         "stripe_subscription_id": _attr(sub, "id"),
         "stripe_price_id": price_id,
         "stripe_subscription_status": _attr(sub, "status"),
-        "subscription_period_start": _ts(_attr(sub, "current_period_start")),
-        "subscription_period_end": _ts(_attr(sub, "current_period_end")),
+        "subscription_period_start": _ts(period_start),
+        "subscription_period_end": _ts(period_end),
     }
     if plan_info.get("call_limit"):
         update["subscription_call_limit"] = plan_info["call_limit"]
