@@ -342,6 +342,91 @@ def _fetch_business_hours_for_location(
         return []
 
 
+def _validate_booking_datetime(
+    supabase,
+    business_id: str,
+    location_id: str | None,
+    date: str,
+    time: str,
+) -> str | None:
+    """
+    Returns None if the date/time is valid for booking.
+    Returns an agent-readable error string if not.
+    Checks: date not in past, valid formats, business open on that day,
+    time within open/close hours, custom schedule overrides.
+    """
+    try:
+        appt_date = datetime.strptime(date, "%Y-%m-%d").date()
+    except ValueError:
+        return f"Invalid date format '{date}'. Please use YYYY-MM-DD."
+
+    today = datetime.now(timezone.utc).date()
+    if appt_date < today:
+        return (
+            f"Cannot book appointments in the past. "
+            f"Today is {today.strftime('%Y-%m-%d')}."
+        )
+
+    try:
+        appt_time = datetime.strptime(time[:5], "%H:%M").time()
+    except ValueError:
+        return f"Invalid time format '{time}'. Please use HH:MM (24-hour)."
+
+    day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    day_name = day_names[appt_date.weekday()]
+
+    # Custom schedule takes priority over regular hours
+    appt_dt = datetime(appt_date.year, appt_date.month, appt_date.day, tzinfo=timezone.utc)
+    custom = _fetch_active_custom_schedule(supabase, business_id, location_id, now=appt_dt)
+    if custom is not None:
+        if custom.get("is_agent_disabled"):
+            return (
+                f"The business is closed on {date} due to a special schedule. "
+                f"Please choose a different date."
+            )
+        open_t = (custom.get("open_time") or "")[:5]
+        close_t = (custom.get("close_time") or "")[:5]
+        if open_t and close_t:
+            try:
+                open_time = datetime.strptime(open_t, "%H:%M").time()
+                close_time = datetime.strptime(close_t, "%H:%M").time()
+                if appt_time < open_time or appt_time >= close_time:
+                    return (
+                        f"The time {_fmt_time_12h(time[:5])} is outside the special "
+                        f"schedule hours ({_fmt_time_12h(open_t)}–{_fmt_time_12h(close_t)}) "
+                        f"for {date}."
+                    )
+            except ValueError:
+                pass
+        return None  # Custom schedule valid, skip regular hours
+
+    # Regular business hours (_fetch_business_hours_for_location handles None supabase safely)
+    hours = _fetch_business_hours_for_location(supabase, business_id, location_id)
+    day_hours = next((h for h in hours if h.get("day_of_week") == day_name), None)
+    if day_hours is not None and not day_hours.get("is_open"):
+        return (
+            f"The business is closed on {day_name.capitalize()}s. "
+            f"Please choose a day when the business is open."
+        )
+    if day_hours:
+        open_t = (day_hours.get("open_time") or "")[:5]
+        close_t = (day_hours.get("close_time") or "")[:5]
+        if open_t and close_t:
+            try:
+                open_time = datetime.strptime(open_t, "%H:%M").time()
+                close_time = datetime.strptime(close_t, "%H:%M").time()
+                if appt_time < open_time or appt_time >= close_time:
+                    return (
+                        f"The time {_fmt_time_12h(time[:5])} is outside business hours "
+                        f"({_fmt_time_12h(open_t)}–{_fmt_time_12h(close_t)}) "
+                        f"on {day_name.capitalize()}s."
+                    )
+            except ValueError:
+                pass
+
+    return None
+
+
 def _is_feature_enabled_for_location(
     supabase,
     business_id: str,
