@@ -49,12 +49,12 @@ class Settings(BaseSettings):
     stripe_starter_price_id: str = ""
     stripe_growth_price_id: str = ""
     stripe_pro_price_id: str = ""
-    billing_success_url: str = "http://localhost:5173/dashboard/billing?success=true"
-    billing_cancel_url: str = "http://localhost:5173/dashboard/billing"
+    billing_success_url: str = "http://localhost:8080/dashboard/settings/billing?success=true"
+    billing_cancel_url: str = "http://localhost:8080/dashboard/settings/billing"
 
     # App
     environment: str = "development"
-    cors_origins: str = "http://localhost:5173,http://localhost:8081"
+    cors_origins: str = "http://localhost:5173,http://localhost:8081,http://localhost:8080"
 
     @property
     def cors_origins_list(self) -> List[str]:

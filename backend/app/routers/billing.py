@@ -213,9 +213,17 @@ async def stripe_webhook(
 
 # ── Webhook helpers ───────────────────────────────────────────────────────────
 
-def _handle_checkout_completed(session: dict) -> None:
-    business_id = (session.get("metadata") or {}).get("business_id")
-    customer_id = session.get("customer")
+def _attr(obj, key, default=None):
+    """Read a field from a Stripe SDK object (attribute access) or plain dict."""
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _handle_checkout_completed(session) -> None:
+    metadata = _attr(session, "metadata") or {}
+    business_id = metadata.get("business_id") if isinstance(metadata, dict) else _attr(metadata, "business_id")
+    customer_id = _attr(session, "customer")
     if not business_id or not customer_id:
         return
     supabase_admin.table("businesses").update({
@@ -230,24 +238,26 @@ def _ts(unix: Optional[int]) -> Optional[str]:
     return datetime.fromtimestamp(unix, tz=timezone.utc).isoformat()
 
 
-def _handle_subscription_upsert(sub: dict) -> None:
-    customer_id = sub.get("customer")
+def _handle_subscription_upsert(sub) -> None:
+    customer_id = _attr(sub, "customer")
     if not customer_id:
         return
 
     price_id = None
-    items = sub.get("items", {}).get("data", [])
-    if items:
-        price_id = items[0].get("price", {}).get("id")
+    items_obj = _attr(sub, "items")
+    items_data = _attr(items_obj, "data") or [] if items_obj else []
+    if items_data:
+        price_obj = _attr(items_data[0], "price")
+        price_id = _attr(price_obj, "id") if price_obj else None
 
     plan_info = _plan_by_price_id(price_id or "")
 
     update: dict = {
-        "stripe_subscription_id": sub.get("id"),
+        "stripe_subscription_id": _attr(sub, "id"),
         "stripe_price_id": price_id,
-        "stripe_subscription_status": sub.get("status"),
-        "subscription_period_start": _ts(sub.get("current_period_start")),
-        "subscription_period_end": _ts(sub.get("current_period_end")),
+        "stripe_subscription_status": _attr(sub, "status"),
+        "subscription_period_start": _ts(_attr(sub, "current_period_start")),
+        "subscription_period_end": _ts(_attr(sub, "current_period_end")),
     }
     if plan_info.get("call_limit"):
         update["subscription_call_limit"] = plan_info["call_limit"]
@@ -259,11 +269,11 @@ def _handle_subscription_upsert(sub: dict) -> None:
 
     business_id = r.data[0]["id"]
     supabase_admin.table("businesses").update(update).eq("id", business_id).execute()
-    logger.info("Subscription upserted for business %s: %s", business_id, sub.get("status"))
+    logger.info("Subscription upserted for business %s: %s", business_id, _attr(sub, "status"))
 
 
-def _handle_subscription_deleted(sub: dict) -> None:
-    customer_id = sub.get("customer")
+def _handle_subscription_deleted(sub) -> None:
+    customer_id = _attr(sub, "customer")
     if not customer_id:
         return
     r = supabase_admin.table("businesses").select("id").eq("stripe_customer_id", customer_id).limit(1).execute()
@@ -281,8 +291,8 @@ def _handle_subscription_deleted(sub: dict) -> None:
     logger.info("Subscription deleted for business %s", business_id)
 
 
-def _handle_invoice_paid(invoice: dict) -> None:
-    sub_id = invoice.get("subscription")
+def _handle_invoice_paid(invoice) -> None:
+    sub_id = _attr(invoice, "subscription")
     if not sub_id:
         return
     try:
@@ -293,8 +303,8 @@ def _handle_invoice_paid(invoice: dict) -> None:
         logger.error("Failed to refresh subscription on invoice.payment_succeeded: %s", e)
 
 
-def _handle_invoice_failed(invoice: dict) -> None:
-    customer_id = invoice.get("customer")
+def _handle_invoice_failed(invoice) -> None:
+    customer_id = _attr(invoice, "customer")
     if not customer_id:
         return
     r = supabase_admin.table("businesses").select("id").eq("stripe_customer_id", customer_id).limit(1).execute()
