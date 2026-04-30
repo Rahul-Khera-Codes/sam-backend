@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-04-27 (session 36 — UI fixes: no-show followup feature, remove feedback section, hide price-varies in My Services)
+Last updated: 2026-04-29 (QA Sessions 1–7 complete — 2 bugs open, headless QA done)
 
 ---
 
@@ -313,6 +313,17 @@ Priority items from call with client (Charles + Rahul):
 - [ ] Old `business_hours_overrides` rows appear as one-time custom_schedules after backfill
 - [ ] Business Settings → Business Hours tab no longer shows the old Date Overrides section
 
+### QA Sessions 1–7 — Complete (2026-04-29)
+- [x] **51 tests run** — 34 passed, 5 failed (3 false-fails, 2 real bugs), 13 blocked
+- [x] Sessions 1–3: Calendar, Profile Settings, Business Settings — all ✅
+- [x] Sessions 4–5: Global Settings, Team Management, Roles & Permissions, Phone Numbers, Locations — verified; 2 real bugs found
+- [x] Session 6: CSE structural page checks ✅; AI behavior tests 🔲 BLOCKED (voice-only)
+- [x] Session 7: TC-ROLES-002 retest (still failing — new root cause: stale closure); TC-TEAM-006 blocked; Support email functional (409 Gmail not connected expected)
+- [ ] **TC-ROLES-002** ❌ FIX NEEDED — `RolesPermissions.tsx` `togglePermission` stale `selectedRoleId` closure; PUT fires but saves to wrong role; use `useRef` or pass roleId as explicit param
+- [ ] **TC-TEAM-006** ❌ FIX NEEDED — `TeamManagement.tsx:375` wrap Remove User in AlertDialog confirmation before calling `handleRemoveUser`
+- [ ] **DB cleanup** — delete "QA Test Role" (id: fb9b7b29-aaf9-443f-a99a-275e325e12bd) + "QA Test Location" from Supabase
+- [ ] **AI behavior tests** — permanently blocked headlessly; must test via live voice call or "Test with Web Call" button in browser
+
 ### Roles & Permissions — PLANNED, NOT YET SHIPPED
 Full plan doc: `docs/superpowers/plans/2026-04-14-roles-permissions.md`
 
@@ -324,11 +335,13 @@ Phase 1-5 (v1 — SHIPPED session 28):
 - [x] Roles & Permissions read-only page at /dashboard/roles-permissions (permissions matrix + role cards + disabled "New Role" placeholder)
 - [x] Backend: `require_role()` in auth.py; refactored custom_schedules.py to use it
 
-Phase 6 (v2 — future, 3-5 days):
-- [ ] `custom_roles` + `role_page_permissions` tables
-- [ ] Dynamic sidebar + ProtectedRoute from DB-driven permissions
-- [ ] Roles & Permissions page becomes editable (CRUD for custom roles, toggle checkboxes)
-- [ ] Migrate system roles into `custom_roles`; add `custom_role_id` to `user_roles`
+Phase 6 (v2 — SHIPPED session 38):
+- [x] `custom_roles` + `role_page_permissions` tables (migrations 20260428000001–000003)
+- [x] Dynamic sidebar + ProtectedRoute from DB-driven permissions (`useRolePermissions` hook)
+- [x] Roles & Permissions page fully editable (CRUD for custom roles, toggle checkboxes)
+- [x] `custom_role_id` added to `user_roles` + `location_invitations`; invite dialog shows custom roles
+- [x] Backend: `roles.py` router + `schemas/roles.py` (GET/POST/DELETE roles, GET/PUT permissions)
+- [ ] **Pending:** run migrations 20260428000001–000003 + deploy edge functions
 
 ### Awaiting Decision
 - [ ] **SMS 2FA support** — extend `TwoFactorSetup.tsx` to support SMS codes alongside Authenticator App. Blocked on Twilio A2P 10DLC campaign approval (client doing this). Setup guide for client: `docs/SMS_2FA_SETUP.md`. Once approved + Supabase Phone provider is configured: add method picker → SMS enroll/verify flow → list both factor types → update `Login.tsx` for phone challenge.
@@ -391,10 +404,19 @@ Phase 6 (v2 — future, 3-5 days):
 - [x] `BusinessSettings.tsx` — Business Hours tab header now shows "Used by AI Agent Scheduler" badge to make the connection clear
 - [x] `BusinessSettings.tsx` — `timeOptions` expanded from 24 hourly slots to 48 half-hour slots; format-aware labels (12h AM/PM or 24h) based on `business.time_format`
 
+### Pre-Release Checklist Fixes (session 36–37 — shipped)
+- [x] **Migration** `20260428000000_forwarding_contact_hours.sql` — `available_start`/`available_end` TEXT added to `forwarding_contacts` — applied via `supabase db push`
+- [x] Backend schemas — `available_start`/`available_end` added to all 3 Forwarding Contact schemas (`ForwardingContactResponse`, `CreateForwardingContactRequest`, `UpdateForwardingContactRequest`)
+- [x] Frontend type — `available_start?`/`available_end?` added to `ForwardingContact` in `voiceAgentApi.ts`; also added to `createForwardingContact` + `updateForwardingContact` data param types (spec fix session 37)
+- [x] Frontend UI — Add/Edit Contact dialogs in `CallForwarding.tsx` have time pickers; contact cards show "Available HH:MM – HH:MM UTC" when set
+- [x] Agent — `_is_within_available_hours()` in `supabase_helpers.py`; `forward_call` checks contact's hours before SIP REFER and returns polite refusal if outside window
+- [x] Setup checklist — `CustomerServiceEmployee.tsx` derives completion from real API data (phone number, schedule, forwarding contacts, Gmail, services, recent calls); clicks navigate to relevant pages; Gmail check fixed to use `s.connected` (not `s.is_connected`)
+- Full plan: `docs/superpowers/plans/2026-04-28-pre-release-checklist-fixes.md`
+
 ### Future Features — Not Yet Started
 - [ ] **SMS 2FA UI** — method picker + SMS enroll/verify in TwoFactorSetup.tsx + Login.tsx phone challenge. Blocked on client A2P 10DLC approval. ~1 day.
 - [x] **Call Forwarding Option C** — real SIP REFER transfer. Shipped session 32.
-- [ ] **Roles & Permissions v2** — custom roles with DB-driven permissions. Plan doc at `docs/superpowers/plans/2026-04-14-roles-permissions.md` Phase 6. ~3-5 days.
+- [x] **Roles & Permissions v2** — custom roles with DB-driven permissions. Shipped session 38. Plan: `docs/superpowers/plans/2026-04-28-custom-roles-v2.md`.
 - [x] **Reminder Calls / Reschedule Calls runtime** — APScheduler cron inside FastAPI lifespan; `scheduler_service.py` with `run_reminder_calls` + `run_reschedule_calls`; agent uses `message_template` for outbound opener. Migration `20260417000000_appointments_call_tracking.sql` (apply manually). Shipped session 33.
 - [x] **Communication Settings save** — wired to `GET/PUT /settings/communication` with location_id. Loads on mount, merges with defaults, Save button works. Page renamed to "Communication Settings".
 - [x] **`.ics` calendar attachment** — confirmation + reschedule emails now include `appointment.ics`. Uses same UID (confirmation ref) so reschedules update the original calendar event.

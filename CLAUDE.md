@@ -37,3 +37,12 @@ docker compose up -d                          # start all services
 docker logs -f sam-backend-sam-agent-1        # agent logs
 docker compose restart sam-agent              # restart agent (if hot reload missed a change)
 ```
+
+## QA Agent Rules (read when in QA mode)
+- Read docs/qa_state.md and docs/QA_FINDINGS.md at session start
+- Update docs/qa_state.md coverage map and last-run stats before ending
+- Append all failures to docs/QA_FINDINGS.md using TC-[id] format
+- Update client_launch_checklist.md statuses as tests pass/fail
+- NEVER edit any source file during QA — document findings only
+- Use Playwright via Node.js for browser simulation
+- Screenshot failures → save to docs/qa-screenshots/TC-[id].png

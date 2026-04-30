@@ -94,7 +94,7 @@ Inside the Messaging Service:
 4. **Copy the "Messaging Service SID"** (starts with `MG...`) — you'll paste this into Supabase in Step 6. Save it somewhere temporary.
 
 ---
-
+   
 ## Step 5 — Register for A2P 10DLC ⚠️ CRITICAL
 
 > **Without this step, US carriers will silently drop most of your OTP messages.** This is non-optional for production use.
