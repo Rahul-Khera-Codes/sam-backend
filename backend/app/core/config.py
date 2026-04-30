@@ -43,6 +43,15 @@ class Settings(BaseSettings):
     twilio_term_sip_password: str = ""
     twilio_term_domain: str = ""
 
+    # Stripe
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_starter_price_id: str = ""
+    stripe_growth_price_id: str = ""
+    stripe_pro_price_id: str = ""
+    billing_success_url: str = "http://localhost:5173/dashboard/billing?success=true"
+    billing_cancel_url: str = "http://localhost:5173/dashboard/billing"
+
     # App
     environment: str = "development"
     cors_origins: str = "http://localhost:5173,http://localhost:8081"
