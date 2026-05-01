@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-04-29 (QA Sessions 1–7 complete — 2 bugs open, headless QA done)
+Last updated: 2026-04-30 (Session 39 — Stripe billing integration complete; 2 bugs open: TC-ROLES-002, TC-TEAM-006)
 
 ---
 
@@ -414,6 +414,13 @@ Phase 6 (v2 — SHIPPED session 38):
 - Full plan: `docs/superpowers/plans/2026-04-28-pre-release-checklist-fixes.md`
 
 ### Future Features — Not Yet Started
+- [ ] **TC-ROLES-002 — Fix permissions stale closure (HIGH — blocks feature/custom-roles-v2 merge)**
+  - `RolesPermissions.tsx` `togglePermission` uses stale `selectedRoleId` from closure; PUT fires to auto-loaded role, not clicked tab
+  - Fix: use `useRef` for `selectedRoleId` OR pass role ID as explicit param to toggle handler
+  - Confirmed in QA Session 7 backend logs: PUT to `5dd0e06d` when `fb9b7b29` tab was active
+- [ ] **TC-TEAM-006 — Add confirmation dialog to Remove User (HIGH — blocks feature/custom-roles-v2 merge)**
+  - `TeamManagement.tsx:375` — Remove User dropdown item fires `handleRemoveUser` immediately, no dialog
+  - Fix: wrap in AlertDialog (already used elsewhere in codebase) before calling `handleRemoveUser`
 - [ ] **SMS 2FA UI** — method picker + SMS enroll/verify in TwoFactorSetup.tsx + Login.tsx phone challenge. Blocked on client A2P 10DLC approval. ~1 day.
 - [x] **Call Forwarding Option C** — real SIP REFER transfer. Shipped session 32.
 - [x] **Roles & Permissions v2** — custom roles with DB-driven permissions. Shipped session 38. Plan: `docs/superpowers/plans/2026-04-28-custom-roles-v2.md`.
@@ -628,7 +635,7 @@ These don't exist yet on the backend (frontend queries Supabase directly — bac
 - [ ] Sales Employee page
 - [ ] HR Employee page
 - [ ] Executive Assistant page
-- [ ] Billing page
+- [x] Billing page — full Stripe integration: Checkout, Customer Portal, webhooks, usage tracking (session 39)
 - [x] Integrations page — Google Calendar OAuth fully wired (connect, callback, disconnect, status)
 - [ ] Integrations page — wire up Twilio connection
 - [ ] Setup checklist in `/dashboard/customer-service/setup` — sync state to backend (currently all mock/UI-only)
