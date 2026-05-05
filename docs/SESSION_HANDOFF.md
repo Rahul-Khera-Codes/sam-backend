@@ -1,4 +1,4 @@
-# Session Handoff — 2026-04-29 (Session 38)
+# Session Handoff — 2026-05-05 (Session 41)
 
 Read this at the start of every session. It captures the full current state so you can pick up immediately.
 
@@ -23,7 +23,9 @@ Always check `TODO.md` in sam-backend for full task status.
 
 ## Current Branch
 
-`feature/custom-roles-v2` (both repos) — not yet merged to main.
+`feature/strip-integration` (sam-backend) — Stripe billing complete, not yet merged to main.
+
+`feature/custom-roles-v2` (both repos) — QA done, 2 bugs must be fixed before merge.
 
 `feature/location-scoped-architecture` (sam-backend) — **ready to merge to main**, not yet merged.
 
@@ -53,9 +55,15 @@ Always check `TODO.md` in sam-backend for full task status.
 - Integrations tab — Gmail OAuth wired; search bar filters all cards
 - Business authorization enforced across all backend routers
 
+### Also Working ✅ (added session 39–40)
+- **Stripe Billing** — full integration: plan selection (Starter/Growth/Pro), Stripe Checkout redirect, Customer Portal for self-serve management, webhooks sync subscription state to DB, usage progress bar, period start/renewal dates shown
+- **Booking validation guards** — `_validate_booking_datetime` in `supabase_helpers.py`; `get_available_slots` + `book_appointment` both reject past dates, closed days, out-of-hours times, custom schedule overrides, double-booking
+- **TC-ROLES-002** — `togglePermission` now receives `roleId` explicitly from `selectedRole.id`; null-safety guard added
+- **TC-TEAM-006** — AlertDialog confirmation before Remove User; `isRemoving` guard; Escape-key protection
+
 ### Blocked / Waiting
 - **SMS 2FA** — blocked on client A2P 10DLC campaign approval
-- **Billing** — static/placeholder UI, no Stripe integration built
+- **Resend DNS** — domain verification failed on Hostinger; email verification emails broken; re-add DKIM/SPF/DMARC in Hostinger DNS zone
 
 ---
 
@@ -167,12 +175,18 @@ Key env files:
 - [x] **Run migrations** `20260428000001`, `20260428000002`, `20260428000003` — applied (QA Session 1 confirmed)
 - [ ] **Deploy edge functions** — `supabase functions deploy invite-location-admin accept-invitation` — still needed for customRoleId in invites
 - [ ] Resend DNS on Hostinger — add DKIM/SPF/DMARC for `aiemployeesinc.com`
-- [ ] Merge `feature/location-scoped-architecture` → main (sam-backend)
-- [ ] Merge `feature/custom-roles-v2` → main (both repos) — after manual testing
+- [x] **Apply Stripe migration** — `20260430000001_businesses_stripe.sql` — applied ✅
+- [ ] **Merge `feature/strip-integration` → main (both repos)** — all TC fixes + Stripe + booking validation ready
+- [ ] **Update billing URLs in `backend/.env` on server** — `BILLING_SUCCESS_URL=http://116.202.210.102:20252/dashboard/settings/billing?success=true` and `BILLING_CANCEL_URL=http://116.202.210.102:20252/dashboard/settings/billing`
+- [ ] **`docker compose up --build -d`** after backend merge
+- [ ] **Fix Resend DNS on Hostinger** — re-add DKIM/SPF/DMARC; domain verification failed, email verification broken
+- [ ] **Update Stripe webhook URL** to prod domain when HTTPS is set up
+- [ ] Merge `feature/custom-roles-v2` → main (both repos) — after TC-ROLES-002 + TC-TEAM-006 fixed
 - [ ] **`POST /phone-numbers/sync-dispatch`** — re-stamp existing dispatch rules with `location_id`
 - [ ] E2E test Option C: make real SIP call → ask to transfer → confirm `status=forwarded` in DB
 
 ## Applied Migrations (all done)
+- `20260430000001` — businesses Stripe columns ✅ applied
 - `20260327000000–20260327000001` — appointments columns + status
 - `20260328000000` — business_phone_numbers table
 - `20260331000000` — bpn outbound trunk column
@@ -195,34 +209,68 @@ Key env files:
 
 ---
 
-## What Was Done This Session (QA Sessions 4–7, 2026-04-29)
+## What Was Done This Session (Session 41, 2026-05-05)
 
-**This was a pure QA session block — no source files were modified. All entries are observational.**
+**Project planning started for billing UI update; code analysis complete.**
 
-1. **TC-ROLES-002 — permission toggle bug — root cause evolved**
-   - Original bug (Sessions 4–5): guard `if (!selectedRoleId || !isAdminUser) return` ran AFTER the optimistic `setPermissions(updated)` call → zero PUTs sent to backend
-   - Partial fix deployed (Session 7): guard moved before optimistic update in `RolesPermissions.tsx`
-   - **New bug confirmed (Session 7)**: PUT now fires and returns 200 OK, but targets the WRONG role_id — the role that was auto-selected when the page loaded, not the tab the user clicked. Stale `selectedRoleId` closure in `togglePermission`. State still reverts after reload for the clicked role.
-   - Status: ❌ STILL OPEN — new fix needed (fix stale closure, e.g. use `useRef` or pass role ID as param)
+1. **Client comms logged** — `docs/CLIENT_COMMS_LOG.md` created; Sam's pricing table, per-agent billing decision, DNS root cause all logged
+2. **Project folder structure** — `docs/projects/` created with `billing-ui-update/` and `per-agent-billing/` subfolders (overview → analysis → plan → specs)
+3. **`billing-ui-update/00-overview.md`** — high-level theory doc complete: 5-tier structure, architecture decisions, risks, scope
+4. **`billing-ui-update/01-analysis.md`** — code analysis complete: all exact touch points identified across 4 files; no DB migration needed; Stripe dashboard prereqs documented
+5. **Next:** `02-plan.md` — detailed implementation steps (pending)
 
-2. **TC-TEAM-006 — Remove User fires immediately — still open**
-   - `TeamManagement.tsx:375` still calls `handleRemoveUser(member)` directly on `DropdownMenuItem` onClick with no confirmation dialog
-   - Fix not deployed as of Session 7
-   - Status: ❌ STILL OPEN
+---
 
-3. **TC-SUPPORT-001 — Support form submission — functional with environment constraint**
-   - POST `/support/submit` reaches backend correctly
-   - Returns 409 in test env because Gmail OAuth is not connected — expected behavior
-   - Form logic is fully working; delivery works when Gmail connected in Settings → Integrations
-   - Status: ✅ PASS (environment constraint)
+## What Was Done Previous Session (Session 40, 2026-05-01)
 
-4. **QA infrastructure complete — all headless tests done**
-   - Sessions 1–7 covered: Auth, Calendar, Profile, Business Settings, Global Settings, Team Management, Roles & Permissions, Phone Numbers, Locations, CSE structural pages, Support
-   - Total: 51 tests run — 34 passed, 5 failed (2 real bugs open), 13 blocked
-   - AI behavior tests permanently blocked headlessly — voice-only (LiveKit WebRTC)
-   - Remaining open items require developer fixes (TC-ROLES-002 + TC-TEAM-006) or live voice calls (AI behavior)
+**TC-ROLES-002 + TC-TEAM-006 fixed; booking validation layer added; Stripe billing URLs/config documented.**
 
-5. **Test artifacts still in DB** — "QA Test Role" + "QA Test Location" need manual cleanup
+1. **TC-TEAM-006 fixed** — `TeamManagement.tsx`: AlertDialog confirmation before Remove User fires; `isRemoving` loading guard prevents double-click; `onOpenChange` guards against Escape-key dismiss mid-request. Commits: `943b35b`, `f0a58a3`, `5f13a80`
+
+2. **TC-ROLES-002 fixed** — `RolesPermissions.tsx`: `togglePermission` now accepts `roleId: string` as explicit first param; call site passes `selectedRole.id`; `isAdminUser && selectedRole` null guard added. Commits: `b2c04db`, `81305dd`
+
+3. **Booking validation** — `agent/supabase_helpers.py`: `_validate_booking_datetime()` rejects past dates, closed days, out-of-hours times, custom schedule overrides; `get_available_slots` and `book_appointment` in `agent.py` both guarded; double-booking check in `book_appointment`. 11 unit tests in `agent/tests/test_booking_validation.py`.
+
+4. **Resend DNS issue identified** — `aiemployeesinc.com` domain verification failed in Resend (likely Hostinger DNS records dropped). Email verification emails are broken. Fix: re-add DKIM/SPF/DMARC in Hostinger DNS zone.
+
+5. **Billing URLs** — need to update `BILLING_SUCCESS_URL` + `BILLING_CANCEL_URL` in `backend/.env` on server to `http://116.202.210.102:20252/...` before merging.
+
+6. **All work on `feature/strip-integration`** — not yet merged to main. Ready to merge once billing URLs updated and DNS fixed.
+
+---
+
+## What Was Done Previous Session (Session 39, 2026-04-30)
+
+**Full Stripe billing integration built end-to-end and verified working in browser.**
+
+1. **Stripe billing router** — `sam-backend/backend/app/routers/billing.py` (new)
+   - `GET /billing/subscription` — returns plan name, status, call usage, period dates
+   - `POST /billing/create-checkout-session` — creates Stripe Checkout session, returns redirect URL
+   - `POST /billing/customer-portal` — creates Stripe Customer Portal session, returns redirect URL
+   - `POST /billing/webhook` — handles `checkout.session.completed`, `customer.subscription.created/updated/deleted`, `invoice.payment_succeeded`, `invoice.payment_failed`
+   - `_attr()` helper for safe StripeObject/dict field access (Stripe SDK v15 uses attribute access, not `.get()`)
+   - Period dates read from `sub.items.data[0]` (Stripe 2026 API moved them from subscription root)
+
+2. **Billing schemas** — `sam-backend/backend/app/schemas/billing.py` (new)
+   - `SubscriptionResponse`, `CreateCheckoutSessionRequest`, `CreateCheckoutSessionResponse`, `CustomerPortalResponse`
+
+3. **Config** — `sam-backend/backend/app/core/config.py` — added 7 Stripe fields including price IDs for 3 plans
+
+4. **Migration** — `ai-employees-app/supabase/migrations/20260430000001_businesses_stripe.sql` — 7 Stripe columns on `businesses` table (**not yet applied to Supabase — apply before launch**)
+
+5. **TypeScript types** — `ai-employees-app/src/integrations/supabase/types.ts` — 7 Stripe fields added to businesses Row/Insert/Update
+
+6. **Frontend API** — `ai-employees-app/src/lib/voiceAgentApi.ts` — `getBillingSubscription`, `createCheckoutSession`, `createCustomerPortalSession` functions
+
+7. **Billing.tsx** — `ai-employees-app/src/pages/dashboard/Billing.tsx` — fully rewritten; shows plan cards (no sub) or usage progress + plan card (active sub); "Manage Plan" opens Stripe Customer Portal
+
+8. **Bugs fixed during session:**
+   - 503 on checkout: `STRIPE_SECRET_KEY` missing from backend `.env`; `STRIPE_PRICE_PRICE_ID` typo
+   - 500 on webhooks: `AttributeError: get` — Stripe SDK StripeObjects don't support `.get()` → fixed with `_attr()` helper
+   - 404 on success redirect: URL was `/dashboard/billing` but route is `/dashboard/settings/billing`
+   - Period dates showing `—`: Stripe 2026 API moved `current_period_start/end` to `sub.items.data[0]`; DB patched directly + code fixed
+
+9. **All verified live in browser** — subscription active, Starter plan shown, 0/150 calls, correct period start/renewal dates
 
 ---
 

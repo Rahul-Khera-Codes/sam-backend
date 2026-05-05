@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-04-30 (Session 39 — Stripe billing integration complete; 2 bugs open: TC-ROLES-002, TC-TEAM-006)
+Last updated: 2026-05-05 (Session 41 — project structure created; billing UI update + per-agent billing in planning)
 
 ---
 
@@ -319,8 +319,8 @@ Priority items from call with client (Charles + Rahul):
 - [x] Sessions 4–5: Global Settings, Team Management, Roles & Permissions, Phone Numbers, Locations — verified; 2 real bugs found
 - [x] Session 6: CSE structural page checks ✅; AI behavior tests 🔲 BLOCKED (voice-only)
 - [x] Session 7: TC-ROLES-002 retest (still failing — new root cause: stale closure); TC-TEAM-006 blocked; Support email functional (409 Gmail not connected expected)
-- [ ] **TC-ROLES-002** ❌ FIX NEEDED — `RolesPermissions.tsx` `togglePermission` stale `selectedRoleId` closure; PUT fires but saves to wrong role; use `useRef` or pass roleId as explicit param
-- [ ] **TC-TEAM-006** ❌ FIX NEEDED — `TeamManagement.tsx:375` wrap Remove User in AlertDialog confirmation before calling `handleRemoveUser`
+- [x] **TC-ROLES-002** ✅ FIXED — `togglePermission` now receives `roleId` explicitly from `selectedRole.id` at call site; null-safety guard added (session 40)
+- [x] **TC-TEAM-006** ✅ FIXED — AlertDialog confirmation with `isRemoving` guard + Escape-key protection (session 40)
 - [ ] **DB cleanup** — delete "QA Test Role" (id: fb9b7b29-aaf9-443f-a99a-275e325e12bd) + "QA Test Location" from Supabase
 - [ ] **AI behavior tests** — permanently blocked headlessly; must test via live voice call or "Test with Web Call" button in browser
 
@@ -414,13 +414,8 @@ Phase 6 (v2 — SHIPPED session 38):
 - Full plan: `docs/superpowers/plans/2026-04-28-pre-release-checklist-fixes.md`
 
 ### Future Features — Not Yet Started
-- [ ] **TC-ROLES-002 — Fix permissions stale closure (HIGH — blocks feature/custom-roles-v2 merge)**
-  - `RolesPermissions.tsx` `togglePermission` uses stale `selectedRoleId` from closure; PUT fires to auto-loaded role, not clicked tab
-  - Fix: use `useRef` for `selectedRoleId` OR pass role ID as explicit param to toggle handler
-  - Confirmed in QA Session 7 backend logs: PUT to `5dd0e06d` when `fb9b7b29` tab was active
-- [ ] **TC-TEAM-006 — Add confirmation dialog to Remove User (HIGH — blocks feature/custom-roles-v2 merge)**
-  - `TeamManagement.tsx:375` — Remove User dropdown item fires `handleRemoveUser` immediately, no dialog
-  - Fix: wrap in AlertDialog (already used elsewhere in codebase) before calling `handleRemoveUser`
+- [x] **TC-ROLES-002** ✅ FIXED session 40 — see QA section above
+- [x] **TC-TEAM-006** ✅ FIXED session 40 — see QA section above
 - [ ] **SMS 2FA UI** — method picker + SMS enroll/verify in TwoFactorSetup.tsx + Login.tsx phone challenge. Blocked on client A2P 10DLC approval. ~1 day.
 - [x] **Call Forwarding Option C** — real SIP REFER transfer. Shipped session 32.
 - [x] **Roles & Permissions v2** — custom roles with DB-driven permissions. Shipped session 38. Plan: `docs/superpowers/plans/2026-04-28-custom-roles-v2.md`.
@@ -428,6 +423,13 @@ Phase 6 (v2 — SHIPPED session 38):
 - [x] **Communication Settings save** — wired to `GET/PUT /settings/communication` with location_id. Loads on mount, merges with defaults, Save button works. Page renamed to "Communication Settings".
 - [x] **`.ics` calendar attachment** — confirmation + reschedule emails now include `appointment.ics`. Uses same UID (confirmation ref) so reschedules update the original calendar event.
 - [x] **Call recording** — LiveKit Egress → Supabase Storage S3. Agent starts/stops egress per call, writes `recordings` row. Frontend audio player wired with real `<audio>` element, progress bar (seekable), download button. Signed URL via `supabase_admin`. Shipped session 34.
+- [ ] **Merge `feature/strip-integration` → main** (both repos) — all TC fixes + Stripe + booking validation ready
+- [ ] **Update BILLING_SUCCESS_URL + BILLING_CANCEL_URL** in `backend/.env` on server → `http://116.202.210.102:20252/...`
+- [ ] **`docker compose up --build -d`** after backend merge
+- [ ] **Fix Resend DNS on Hostinger** — recurring; Sam deletes TXT records when editing MX; SPF must include Google + Resend; re-add DKIM/SPF/DMARC
+- [ ] **Billing UI update** — new pricing table (5 tiers, minutes-based, overage section). Project: `docs/projects/billing-ui-update/`
+- [ ] **New Stripe price IDs** — Growth ($149) + Professional ($299) need new Stripe prices; update `PLAN_KEY_MAP` in `billing.py`
+- [ ] **Per-agent billing** — future sprint. Project: `docs/projects/per-agent-billing/`
 - [ ] **HTTPS / domain setup** for production mic access (getUserMedia requires secure context). Ops task.
 - [ ] **Backend appointment/service API endpoints** — frontend queries Supabase directly; backend is unaware. ~1 day.
 - [x] **Business authorization check** — `verify_business_access` + `require_business_access()` enforced across 7 routers (session 29)
