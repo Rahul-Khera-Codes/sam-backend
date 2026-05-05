@@ -19,8 +19,8 @@
 
 ## Project Overview
 AI voice agent SaaS — multi-tenant, multi-location. Two repos:
-- `sam-backend/` — FastAPI backend + LiveKit agent (`agent/agent.py`)
-- `ai-employees-app/` — React/TypeScript frontend (sibling directory)
+- `C:\Users\asus\sam-backend` — FastAPI backend + LiveKit agent (`agent/agent.py`)
+- `C:\Users\asus\ai-employees-app` — React/TypeScript frontend (sibling directory)
 
 Active agent: `agent/agent.py` (`USE_LIVEKIT_AGENT=1`). Legacy worker in `backend/worker/` is bypassed.
 

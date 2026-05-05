@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     stripe_starter_price_id: str = ""
     stripe_growth_price_id: str = ""
     stripe_pro_price_id: str = ""
+    stripe_enterprise_price_id: str = ""
+    
     billing_success_url: str = "http://localhost:8080/dashboard/settings/billing?success=true"
     billing_cancel_url: str = "http://localhost:8080/dashboard/settings/billing"
 
