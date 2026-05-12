@@ -28,10 +28,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/billing", tags=["billing"])
 
 PLAN_KEY_MAP = {
-    "starter":    ("stripe_starter_price_id",    "Starter",    150),
-    "growth":     ("stripe_growth_price_id",     "Growth",     400),
-    "pro":        ("stripe_pro_price_id",        "Pro",        800),
-    "enterprise": ("stripe_enterprise_price_id", "Enterprise", 1300),
+    "starter":      ("stripe_starter_price_id",    "Starter",      150),
+    "growth":       ("stripe_growth_price_id",     "Growth",       400),
+    "professional": ("stripe_pro_price_id",        "Professional", 800),
+    "enterprise":   ("stripe_enterprise_price_id", "Enterprise",   1300),
 }
 
 
@@ -120,7 +120,7 @@ async def create_checkout_session(
 
     plan_key = body.plan.lower()
     if plan_key not in PLAN_KEY_MAP:
-        raise HTTPException(status_code=400, detail="Invalid plan. Must be starter, growth, pro, or enterprise.")
+        raise HTTPException(status_code=400, detail="Invalid plan. Must be starter, growth, professional, or enterprise.")
 
     price_attr, plan_name, call_limit = PLAN_KEY_MAP[plan_key]
     price_id = getattr(settings, price_attr, "")

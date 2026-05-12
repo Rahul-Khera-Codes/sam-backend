@@ -16,7 +16,7 @@ class SubscriptionResponse(BaseModel):
 
 class CreateCheckoutSessionRequest(BaseModel):
     business_id: str
-    plan: str  # "starter" | "growth" | "pro"
+    plan: str  # "starter" | "growth" | "professional" | "enterprise"
 
 
 class CreateCheckoutSessionResponse(BaseModel):
