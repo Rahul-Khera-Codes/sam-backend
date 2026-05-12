@@ -28,10 +28,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/billing", tags=["billing"])
 
 PLAN_KEY_MAP = {
-    "starter":      ("stripe_starter_price_id",    "Starter",      150),
-    "growth":       ("stripe_growth_price_id",     "Growth",       400),
-    "professional": ("stripe_pro_price_id",        "Professional", 800),
-    "enterprise":   ("stripe_enterprise_price_id", "Enterprise",   1300),
+    "starter":      ("stripe_starter_price_id",    "Starter",      200),
+    "growth":       ("stripe_growth_price_id",     "Growth",       600),
+    "professional": ("stripe_pro_price_id",        "Professional", 1500),
+    "enterprise":   ("stripe_enterprise_price_id", "Enterprise",   4000),
 }
 
 
@@ -59,7 +59,7 @@ def _get_business(business_id: str) -> dict:
     return r.data[0]
 
 
-def _count_calls_in_period(
+def _count_minutes_in_period(
     business_id: str,
     period_start: Optional[str],
     period_end: Optional[str],
@@ -68,13 +68,14 @@ def _count_calls_in_period(
         return 0
     r = (
         supabase_admin.table("calls")
-        .select("id", count="exact")
+        .select("duration_seconds")
         .eq("business_id", business_id)
         .gte("created_at", period_start)
         .lte("created_at", period_end)
         .execute()
     )
-    return r.count or 0
+    total_seconds = sum((row.get("duration_seconds") or 0) for row in (r.data or []))
+    return total_seconds // 60
 
 
 # ── GET /billing/subscription ─────────────────────────────────────────────────
@@ -91,7 +92,7 @@ async def get_subscription(
         return SubscriptionResponse(has_subscription=False)
 
     plan_info = _plan_by_price_id(biz.get("stripe_price_id") or "")
-    calls_used = _count_calls_in_period(
+    minutes_used = _count_minutes_in_period(
         business_id,
         biz.get("subscription_period_start"),
         biz.get("subscription_period_end"),
@@ -102,8 +103,8 @@ async def get_subscription(
         status=biz.get("stripe_subscription_status"),
         plan_name=plan_info.get("name"),
         price_id=biz.get("stripe_price_id"),
-        call_limit=biz.get("subscription_call_limit") or plan_info.get("call_limit"),
-        calls_used=calls_used,
+        minute_limit=biz.get("subscription_call_limit") or plan_info.get("call_limit"),
+        minutes_used=minutes_used,
         period_start=biz.get("subscription_period_start"),
         period_end=biz.get("subscription_period_end"),
     )

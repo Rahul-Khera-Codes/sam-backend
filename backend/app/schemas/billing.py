@@ -8,8 +8,8 @@ class SubscriptionResponse(BaseModel):
     status: Optional[str] = None
     plan_name: Optional[str] = None
     price_id: Optional[str] = None
-    call_limit: Optional[int] = None
-    calls_used: Optional[int] = None
+    minute_limit: Optional[int] = None
+    minutes_used: Optional[int] = None
     period_start: Optional[str] = None
     period_end: Optional[str] = None
 
