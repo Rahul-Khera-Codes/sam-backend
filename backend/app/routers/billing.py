@@ -1,6 +1,6 @@
 """
 Stripe billing endpoints.
-- GET  /billing/subscription             → current plan + call usage
+- GET  /billing/subscription             → current plan + minute usage
 - POST /billing/create-checkout-session  → Stripe Checkout redirect URL
 - POST /billing/customer-portal          → Stripe Customer Portal redirect URL
 - POST /billing/webhook                  → Stripe webhook receiver
@@ -38,7 +38,7 @@ PLAN_KEY_MAP = {
 def _plan_by_price_id(price_id: str) -> dict:
     for plan_key, (attr, name, limit) in PLAN_KEY_MAP.items():
         if getattr(settings, attr, "") == price_id:
-            return {"name": name, "call_limit": limit}
+            return {"name": name, "minute_limit": limit}
     return {}
 
 
@@ -72,6 +72,7 @@ def _count_minutes_in_period(
         .eq("business_id", business_id)
         .gte("created_at", period_start)
         .lte("created_at", period_end)
+        .range(0, 9999)
         .execute()
     )
     total_seconds = sum((row.get("duration_seconds") or 0) for row in (r.data or []))
@@ -103,7 +104,7 @@ async def get_subscription(
         status=biz.get("stripe_subscription_status"),
         plan_name=plan_info.get("name"),
         price_id=biz.get("stripe_price_id"),
-        minute_limit=biz.get("subscription_call_limit") or plan_info.get("call_limit"),
+        minute_limit=biz.get("subscription_call_limit") or plan_info.get("minute_limit"),
         minutes_used=minutes_used,
         period_start=biz.get("subscription_period_start"),
         period_end=biz.get("subscription_period_end"),
@@ -267,8 +268,8 @@ def _handle_subscription_upsert(sub) -> None:
         "subscription_period_start": _ts(period_start),
         "subscription_period_end": _ts(period_end),
     }
-    if plan_info.get("call_limit"):
-        update["subscription_call_limit"] = plan_info["call_limit"]
+    if plan_info.get("minute_limit"):
+        update["subscription_call_limit"] = plan_info["minute_limit"]
 
     r = supabase_admin.table("businesses").select("id").eq("stripe_customer_id", customer_id).limit(1).execute()
     if not r.data:
