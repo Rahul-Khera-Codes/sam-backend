@@ -124,7 +124,7 @@ async def create_checkout_session(
     if plan_key not in PLAN_KEY_MAP:
         raise HTTPException(status_code=400, detail="Invalid plan. Must be starter, growth, professional, or enterprise.")
 
-    price_attr, plan_name, call_limit = PLAN_KEY_MAP[plan_key]
+    price_attr, plan_name, _minute_limit = PLAN_KEY_MAP[plan_key]
     price_id = getattr(settings, price_attr, "")
     if not price_id:
         raise HTTPException(status_code=503, detail=f"Stripe price ID for {plan_name} is not configured")
