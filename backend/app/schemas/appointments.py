@@ -14,7 +14,7 @@ class CreateAppointmentRequest(BaseModel):
     service: Optional[str] = None
     appointment_date: str   # YYYY-MM-DD
     appointment_time: str   # HH:MM 24h
-    duration: int = 60
+    duration: Optional[int] = None
     notes: Optional[str] = None
 
 

@@ -280,11 +280,11 @@ async def create_appointment(
         "created_by": created_by,
     }
 
-    r = supabase_admin.table("appointments").insert(row).select().single().execute()
+    r = supabase_admin.table("appointments").insert(row).execute()
     if not r.data:
         raise HTTPException(status_code=500, detail="Failed to save appointment.")
 
-    appt = r.data
+    appt = r.data[0]
     appt_id: str = appt["id"]
     short_id = appt_id[:8].upper()
 
