@@ -20,6 +20,7 @@ from app.routers import (
     custom_schedules,
     roles as roles_router,
     billing as billing_router,
+    appointments as appointments_router,
 )
 from app.services.scheduler_service import start_scheduler, stop_scheduler
 
@@ -62,6 +63,7 @@ app.include_router(locations.router)
 app.include_router(custom_schedules.router)
 app.include_router(roles_router.router)
 app.include_router(billing_router.router)
+app.include_router(appointments_router.router)
 
 
 # ── Health check ──────────────────────────────
