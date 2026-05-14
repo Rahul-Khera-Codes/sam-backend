@@ -1,6 +1,6 @@
 import logging
-from fastapi import APIRouter, Depends
-from app.core.auth import get_user_id, require_business_access
+from fastapi import APIRouter, Depends, HTTPException
+from app.core.auth import get_user_id, verify_business_access, require_business_access
 from app.schemas.appointments import (
     CreateAppointmentRequest,
     UpdateAppointmentRequest,
@@ -18,8 +18,8 @@ router = APIRouter(prefix="/appointments", tags=["appointments"])
 async def create_appointment(
     body: CreateAppointmentRequest,
     user_id: str = Depends(get_user_id),
-    _: str = Depends(require_business_access()),
 ):
+    verify_business_access(user_id, body.business_id)
     return await booking_service.create_appointment(body, created_by=user_id)
 
 
@@ -27,9 +27,9 @@ async def create_appointment(
 async def update_appointment(
     appointment_id: str,
     body: UpdateAppointmentRequest,
-    _: str = Depends(get_user_id),
-    __: str = Depends(require_business_access()),
+    user_id: str = Depends(get_user_id),
 ):
+    verify_business_access(user_id, body.business_id)
     return await booking_service.update_appointment(appointment_id, body)
 
 
@@ -37,7 +37,7 @@ async def update_appointment(
 async def cancel_appointment(
     appointment_id: str,
     business_id: str,
-    _: str = Depends(get_user_id),
-    __: str = Depends(require_business_access()),
+    _: str = Depends(require_business_access()),
+    user_id: str = Depends(get_user_id),
 ):
     return await booking_service.cancel_appointment(appointment_id, business_id)
