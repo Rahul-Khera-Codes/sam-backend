@@ -388,3 +388,199 @@ async def send_appointment_confirmation(
     except Exception as e:
         logger.error("Failed to send confirmation email: %s", e)
         return False
+
+
+async def send_staff_notification(
+    supabase,
+    business_id: str,
+    location_id,
+    business_name: str,
+    staff_email: str,
+    staff_name: str,
+    client_name: str,
+    client_phone: str,
+    client_email: str,
+    service: str,
+    location: str,
+    date: str,
+    time: str,
+    duration_minutes: int,
+    confirmation_ref: str,
+    client_id: str = "",
+    client_secret: str = "",
+) -> bool:
+    access_token = await get_valid_access_token(supabase, business_id, client_id, client_secret, location_id=location_id)
+    if not access_token:
+        return False
+    token_row = get_token_row(supabase, business_id, location_id=location_id)
+    sender = token_row["google_email"] if token_row else "noreply@example.com"
+    time_display = _fmt_time_12h(time)
+    subject = f"New Appointment: {client_name} — {service} on {date}"
+    html_body = f"""<p>Hi {staff_name},</p><p>A new appointment has been booked for you.</p><ul>
+      <li><strong>Client:</strong> {client_name}</li>
+      <li><strong>Phone:</strong> {client_phone or '—'}</li>
+      <li><strong>Email:</strong> {client_email or '—'}</li>
+      <li><strong>Service:</strong> {service}</li>
+      <li><strong>Date:</strong> {date} at {time_display}</li>
+      <li><strong>Duration:</strong> {duration_minutes} minutes</li>
+      <li><strong>Location:</strong> {location}</li>
+      <li><strong>Ref:</strong> {confirmation_ref}</li>
+    </ul><p>— {business_name}</p>"""
+    plain_body = f"New appointment: {client_name} | {service} | {date} {time_display} | Phone: {client_phone} | Ref: {confirmation_ref}"
+    try:
+        return await send_email(access_token=access_token, sender=f"{business_name} <{sender}>",
+            to=staff_email, subject=subject, html_body=html_body, plain_body=plain_body)
+    except Exception:
+        return False
+
+
+async def send_reschedule_confirmation(
+    supabase,
+    business_id: str,
+    location_id,
+    business_name: str,
+    business_phone: str,
+    client_name: str,
+    client_email: str,
+    service: str,
+    staff_name: str,
+    location: str,
+    new_date: str,
+    new_time: str,
+    duration_minutes: int,
+    confirmation_ref: str,
+    client_id: str = "",
+    client_secret: str = "",
+) -> bool:
+    access_token = await get_valid_access_token(supabase, business_id, client_id, client_secret, location_id=location_id)
+    if not access_token:
+        return False
+    token_row = get_token_row(supabase, business_id, location_id=location_id)
+    sender = token_row["google_email"] if token_row else "noreply@example.com"
+    time_display = _fmt_time_12h(new_time)
+    subject = f"Appointment Rescheduled — {service} on {new_date}"
+    html_body = f"""<p>Hi {client_name},</p><p>Your appointment has been rescheduled.</p><ul>
+      <li><strong>Service:</strong> {service}</li>
+      <li><strong>Staff:</strong> {staff_name}</li>
+      <li><strong>New Date:</strong> {new_date} at {time_display}</li>
+      <li><strong>Duration:</strong> {duration_minutes} minutes</li>
+      <li><strong>Location:</strong> {location}</li>
+      <li><strong>Ref:</strong> {confirmation_ref}</li>
+    </ul><p>Questions? Call us at {business_phone}.</p><p>— {business_name}</p>"""
+    plain_body = f"Rescheduled: {service} on {new_date} at {time_display} | Ref: {confirmation_ref} | {business_phone}"
+    try:
+        return await send_email(access_token=access_token, sender=f"{business_name} <{sender}>",
+            to=client_email, subject=subject, html_body=html_body, plain_body=plain_body)
+    except Exception:
+        return False
+
+
+async def send_staff_reschedule_notification(
+    supabase,
+    business_id: str,
+    location_id,
+    business_name: str,
+    staff_email: str,
+    staff_name: str,
+    client_name: str,
+    client_phone: str,
+    service: str,
+    location: str,
+    new_date: str,
+    new_time: str,
+    duration_minutes: int,
+    confirmation_ref: str,
+    client_id: str = "",
+    client_secret: str = "",
+) -> bool:
+    access_token = await get_valid_access_token(supabase, business_id, client_id, client_secret, location_id=location_id)
+    if not access_token:
+        return False
+    token_row = get_token_row(supabase, business_id, location_id=location_id)
+    sender = token_row["google_email"] if token_row else "noreply@example.com"
+    time_display = _fmt_time_12h(new_time)
+    subject = f"Appointment Rescheduled: {client_name} — {new_date}"
+    html_body = f"""<p>Hi {staff_name},</p><p>An appointment has been rescheduled.</p><ul>
+      <li><strong>Client:</strong> {client_name} ({client_phone or '—'})</li>
+      <li><strong>Service:</strong> {service}</li>
+      <li><strong>New Date:</strong> {new_date} at {time_display}</li>
+      <li><strong>Duration:</strong> {duration_minutes} minutes</li>
+      <li><strong>Location:</strong> {location}</li>
+      <li><strong>Ref:</strong> {confirmation_ref}</li>
+    </ul><p>— {business_name}</p>"""
+    plain_body = f"Rescheduled: {client_name} | {service} | {new_date} {time_display} | Ref: {confirmation_ref}"
+    try:
+        return await send_email(access_token=access_token, sender=f"{business_name} <{sender}>",
+            to=staff_email, subject=subject, html_body=html_body, plain_body=plain_body)
+    except Exception:
+        return False
+
+
+async def send_cancellation_confirmation(
+    supabase,
+    business_id: str,
+    location_id,
+    business_name: str,
+    business_phone: str,
+    client_name: str,
+    client_email: str,
+    service: str,
+    date: str,
+    time: str,
+    confirmation_ref: str,
+    client_id: str = "",
+    client_secret: str = "",
+) -> bool:
+    access_token = await get_valid_access_token(supabase, business_id, client_id, client_secret, location_id=location_id)
+    if not access_token:
+        return False
+    token_row = get_token_row(supabase, business_id, location_id=location_id)
+    sender = token_row["google_email"] if token_row else "noreply@example.com"
+    subject = f"Appointment Cancelled — {service} on {date}"
+    html_body = f"""<p>Hi {client_name},</p><p>Your appointment has been cancelled.</p><ul>
+      <li><strong>Service:</strong> {service}</li>
+      <li><strong>Was scheduled:</strong> {date} at {_fmt_time_12h(time)}</li>
+      <li><strong>Ref:</strong> {confirmation_ref}</li>
+    </ul><p>To rebook, call us at {business_phone}.</p><p>— {business_name}</p>"""
+    plain_body = f"Cancelled: {service} on {date}. Ref: {confirmation_ref}. Call {business_phone} to rebook."
+    try:
+        return await send_email(access_token=access_token, sender=f"{business_name} <{sender}>",
+            to=client_email, subject=subject, html_body=html_body, plain_body=plain_body)
+    except Exception:
+        return False
+
+
+async def send_staff_cancellation_notification(
+    supabase,
+    business_id: str,
+    location_id,
+    business_name: str,
+    staff_email: str,
+    staff_name: str,
+    client_name: str,
+    client_phone: str,
+    service: str,
+    date: str,
+    time: str,
+    confirmation_ref: str,
+    client_id: str = "",
+    client_secret: str = "",
+) -> bool:
+    access_token = await get_valid_access_token(supabase, business_id, client_id, client_secret, location_id=location_id)
+    if not access_token:
+        return False
+    token_row = get_token_row(supabase, business_id, location_id=location_id)
+    sender = token_row["google_email"] if token_row else "noreply@example.com"
+    subject = f"Appointment Cancelled: {client_name} — {date}"
+    html_body = f"""<p>Hi {staff_name},</p><p>The following appointment has been cancelled.</p><ul>
+      <li><strong>Client:</strong> {client_name} ({client_phone or '—'})</li>
+      <li><strong>Service:</strong> {service}</li>
+      <li><strong>Was scheduled:</strong> {date} at {_fmt_time_12h(time)}</li>
+      <li><strong>Ref:</strong> {confirmation_ref}</li>
+    </ul><p>— {business_name}</p>"""
+    plain_body = f"Cancelled: {client_name} | {service} | {date}. Ref: {confirmation_ref}"
+    try:
+        return await send_email(access_token=access_token, sender=f"{business_name} <{sender}>",
+            to=staff_email, subject=subject, html_body=html_body, plain_body=plain_body)
+    except Exception:
+        return False
