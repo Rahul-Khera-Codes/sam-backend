@@ -178,8 +178,8 @@ def _check_double_booking(
                 return True
         return False
     except Exception as e:
-        logger.warning("Double-booking check failed: %s", e)
-        return False
+        logger.warning("Double-booking check failed, treating as taken: %s", e)
+        return True
 
 
 def _get_superadmin_id(business_id: str) -> Optional[str]:
@@ -203,6 +203,20 @@ def _get_staff_email(user_id: str) -> Optional[str]:
         return result.user.email if result and result.user else None
     except Exception:
         return None
+
+
+def _get_staff_name(user_id: str) -> str:
+    try:
+        r = (
+            supabase_admin.table("profiles")
+            .select("full_name")
+            .eq("id", user_id)
+            .limit(1)
+            .execute()
+        )
+        return (r.data[0].get("full_name") or "") if r.data else ""
+    except Exception:
+        return ""
 
 
 def _get_business(business_id: str) -> dict:
@@ -351,7 +365,7 @@ async def create_appointment(
                 location_id=req.location_id,
                 business_name=biz_name,
                 staff_email=staff_email_addr,
-                staff_name=staff_email_addr,
+                staff_name=_get_staff_name(req.assigned_user_id),
                 client_name=req.client_name,
                 client_phone=req.client_phone or "",
                 client_email=req.client_email or "",
@@ -369,16 +383,9 @@ async def create_appointment(
 
     if req.client_phone and settings.twilio_account_sid and settings.twilio_auth_token:
         try:
-            from_r = (
-                supabase_admin.table("business_phone_numbers")
-                .select("phone_number")
-                .eq("business_id", req.business_id)
-                .eq("is_active", True)
-                .limit(1)
-                .execute()
-            )
+            from_number = None
             if req.location_id:
-                from_r = (
+                loc_r = (
                     supabase_admin.table("business_phone_numbers")
                     .select("phone_number")
                     .eq("business_id", req.business_id)
@@ -387,7 +394,19 @@ async def create_appointment(
                     .limit(1)
                     .execute()
                 )
-            from_number = from_r.data[0]["phone_number"] if from_r.data else None
+                if loc_r.data:
+                    from_number = loc_r.data[0]["phone_number"]
+            if not from_number:
+                biz_r = (
+                    supabase_admin.table("business_phone_numbers")
+                    .select("phone_number")
+                    .eq("business_id", req.business_id)
+                    .eq("is_active", True)
+                    .limit(1)
+                    .execute()
+                )
+                if biz_r.data:
+                    from_number = biz_r.data[0]["phone_number"]
             if from_number:
                 twilio = TwilioClient(settings.twilio_account_sid, settings.twilio_auth_token)
                 body = (
@@ -523,7 +542,7 @@ async def update_appointment(
                 location_id=location_id,
                 business_name=biz_name,
                 staff_email=staff_email_addr,
-                staff_name=staff_email_addr,
+                staff_name=_get_staff_name(assigned_uid),
                 client_name=appt.get("client_name", ""),
                 client_phone=appt.get("client_phone") or "",
                 service=updated_appt.get("service") or "Appointment",
@@ -634,7 +653,7 @@ async def cancel_appointment(
                     location_id=location_id,
                     business_name=biz_name,
                     staff_email=staff_email_addr,
-                    staff_name=staff_email_addr,
+                    staff_name=_get_staff_name(assigned_uid),
                     client_name=appt.get("client_name", ""),
                     client_phone=appt.get("client_phone") or "",
                     service=appt.get("service") or "Appointment",
