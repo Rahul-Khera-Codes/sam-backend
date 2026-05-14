@@ -1,7 +1,7 @@
 # backend/app/schemas/appointments.py
 from __future__ import annotations
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class CreateAppointmentRequest(BaseModel):
@@ -14,7 +14,7 @@ class CreateAppointmentRequest(BaseModel):
     service: Optional[str] = None
     appointment_date: str   # YYYY-MM-DD
     appointment_time: str   # HH:MM 24h
-    duration: Optional[str] = "60"
+    duration: int = 60
     notes: Optional[str] = None
 
 
@@ -24,11 +24,12 @@ class UpdateAppointmentRequest(BaseModel):
     appointment_time: Optional[str] = None   # HH:MM 24h
     assigned_user_id: Optional[str] = None
     service: Optional[str] = None
-    duration: Optional[str] = None
+    duration: Optional[int] = None
     notes: Optional[str] = None
 
 
 class AppointmentResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     id: str
     business_id: str
     location_id: Optional[str] = None
@@ -39,7 +40,7 @@ class AppointmentResponse(BaseModel):
     service: Optional[str] = None
     appointment_date: str
     appointment_time: str
-    duration: Optional[str] = None
+    duration: Optional[int] = None
     notes: Optional[str] = None
     status: Optional[str] = None
     confirmation_ref: Optional[str] = None
