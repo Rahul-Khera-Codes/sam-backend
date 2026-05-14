@@ -209,7 +209,7 @@ def _get_staff_name(user_id: str) -> str:
     try:
         r = (
             supabase_admin.table("profiles")
-            .select("first_name, last_name, name")
+            .select("first_name, last_name")
             .eq("id", user_id)
             .limit(1)
             .execute()
@@ -217,8 +217,7 @@ def _get_staff_name(user_id: str) -> str:
         if not r.data:
             return ""
         row = r.data[0]
-        full = f"{row.get('first_name') or ''} {row.get('last_name') or ''}".strip()
-        return full or row.get("name") or ""
+        return f"{row.get('first_name') or ''} {row.get('last_name') or ''}".strip()
     except Exception:
         return ""
 
