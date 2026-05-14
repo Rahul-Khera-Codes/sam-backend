@@ -310,8 +310,11 @@ async def create_appointment(
             )
             if staff_event_id:
                 gcal_updates["google_event_id"] = staff_event_id
-        except Exception:
-            pass
+                logger.info("GCal staff event created: %s", staff_event_id)
+            else:
+                logger.warning("GCal staff event returned None for user %s", req.assigned_user_id)
+        except Exception as e:
+            logger.warning("GCal staff event failed: %s", e)
 
     admin_id = _get_superadmin_id(req.business_id)
     if admin_id and admin_id != req.assigned_user_id:
@@ -327,8 +330,11 @@ async def create_appointment(
                 )
                 if admin_event_id:
                     gcal_updates["google_event_id_admin"] = admin_event_id
-            except Exception:
-                pass
+                    logger.info("GCal admin event created: %s", admin_event_id)
+                else:
+                    logger.warning("GCal admin event returned None for user %s", admin_id)
+            except Exception as e:
+                logger.warning("GCal admin event failed: %s", e)
 
     if gcal_updates:
         try:
