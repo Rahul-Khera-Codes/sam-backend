@@ -346,17 +346,18 @@ async def send_appointment_confirmation(
     business_phone: str = "",
     client_id: str = "",
     client_secret: str = "",
+    location_id: Optional[str] = None,
 ) -> bool:
     """
     High-level helper: get token, build email, send.
     Returns True if sent, False if Gmail not connected or send failed.
     """
-    access_token = await get_valid_access_token(supabase, business_id, client_id, client_secret)
+    access_token = await get_valid_access_token(supabase, business_id, client_id, client_secret, location_id=location_id)
     if not access_token:
         logger.info("Gmail not connected for business %s — skipping confirmation email", business_id)
         return False
 
-    token_row = get_token_row(supabase, business_id)
+    token_row = get_token_row(supabase, business_id, location_id=location_id)
     sender = token_row["google_email"] if token_row else "noreply@example.com"
 
     subject, html_body, plain_body = build_appointment_confirmation_email(
@@ -393,7 +394,7 @@ async def send_appointment_confirmation(
 async def send_staff_notification(
     supabase,
     business_id: str,
-    location_id,
+    location_id: Optional[str],
     business_name: str,
     staff_email: str,
     staff_name: str,
@@ -437,7 +438,7 @@ async def send_staff_notification(
 async def send_reschedule_confirmation(
     supabase,
     business_id: str,
-    location_id,
+    location_id: Optional[str],
     business_name: str,
     business_phone: str,
     client_name: str,
@@ -478,7 +479,7 @@ async def send_reschedule_confirmation(
 async def send_staff_reschedule_notification(
     supabase,
     business_id: str,
-    location_id,
+    location_id: Optional[str],
     business_name: str,
     staff_email: str,
     staff_name: str,
@@ -519,7 +520,7 @@ async def send_staff_reschedule_notification(
 async def send_cancellation_confirmation(
     supabase,
     business_id: str,
-    location_id,
+    location_id: Optional[str],
     business_name: str,
     business_phone: str,
     client_name: str,
@@ -553,7 +554,7 @@ async def send_cancellation_confirmation(
 async def send_staff_cancellation_notification(
     supabase,
     business_id: str,
-    location_id,
+    location_id: Optional[str],
     business_name: str,
     staff_email: str,
     staff_name: str,
