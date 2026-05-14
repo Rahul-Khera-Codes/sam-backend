@@ -209,12 +209,16 @@ def _get_staff_name(user_id: str) -> str:
     try:
         r = (
             supabase_admin.table("profiles")
-            .select("full_name")
+            .select("first_name, last_name, name")
             .eq("id", user_id)
             .limit(1)
             .execute()
         )
-        return (r.data[0].get("full_name") or "") if r.data else ""
+        if not r.data:
+            return ""
+        row = r.data[0]
+        full = f"{row.get('first_name') or ''} {row.get('last_name') or ''}".strip()
+        return full or row.get("name") or ""
     except Exception:
         return ""
 
