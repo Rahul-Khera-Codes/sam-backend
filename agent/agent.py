@@ -54,6 +54,7 @@ from supabase_helpers import (
     _is_feature_enabled_for_location,
     _get_feature_config_value,
     _fetch_active_custom_schedule,
+    _fetch_agent_state,
     _is_within_available_hours,
     _validate_booking_datetime,
     _validate_booking_date,
@@ -1454,6 +1455,20 @@ async def voice_agent(ctx: agents.JobContext):
                     _cs.get("name"),
                 )
 
+    # Check agent ON/OFF toggle (agent_state.is_active)
+    agent_inactive = False
+    if business_id and location_id and not disabled_by_schedule:
+        if supabase is None:
+            supabase = _get_supabase()
+        if supabase is not None:
+            state = _fetch_agent_state(supabase, business_id, location_id)
+            if state is not None and not state.get("is_active", True):
+                agent_inactive = True
+                logger.info(
+                    "Agent is toggled OFF for business %s location %s — disconnecting",
+                    business_id, location_id,
+                )
+
     if business_id:
         if supabase is None:
             supabase = _get_supabase()
@@ -1564,6 +1579,18 @@ async def voice_agent(ctx: agents.JobContext):
         )
         # Give the TTS ~6 seconds to speak before tearing down the room
         await asyncio.sleep(6)
+        await ctx.room.disconnect()
+        return
+
+    if agent_inactive:
+        await session.generate_reply(
+            instructions=(
+                "Immediately tell the caller: 'Thank you for calling. Our AI assistant is "
+                "currently unavailable. Please call back later or contact us directly.' "
+                "Then do not say anything else."
+            )
+        )
+        await asyncio.sleep(5)
         await ctx.room.disconnect()
         return
 
