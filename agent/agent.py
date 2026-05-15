@@ -57,6 +57,7 @@ from supabase_helpers import (
     _is_within_available_hours,
     _validate_booking_datetime,
     _validate_booking_date,
+    _find_next_slots,
 )
 from sms_helpers import (
     send_appointment_confirmation_sms,
@@ -356,6 +357,92 @@ class Assistant(Agent):
         formatted = ", ".join(_fmt_time_12h(s) for s in slots[:8])
         more = f" (and {len(slots) - 8} more)" if len(slots) > 8 else ""
         return f"{staff['name']} is available on {date} at: {formatted}{more}."
+
+    @function_tool()
+    async def find_next_available_slot(
+        self,
+        context: RunContext,
+        service_name: str,
+        staff_name: str = "",
+        from_date: str = "",
+    ) -> str:
+        """
+        Find the next available appointment slot, scanning forward from today (or from_date).
+        Use this proactively when a caller asks "when is next available?", "when can I book?",
+        or "who is free soonest?" — do NOT ask the caller to pick a date first.
+        If staff_name is given, searches only that person.
+        If staff_name is empty, searches all staff qualified for the service.
+        from_date is optional YYYY-MM-DD; defaults to today.
+        """
+        if not self._supabase:
+            return "Availability check is unavailable right now."
+
+        # Resolve service for slot duration
+        slot_minutes = 60
+        svc = self._resolve_service(service_name) if service_name else None
+        if svc and svc.get("duration_minutes"):
+            slot_minutes = svc["duration_minutes"]
+
+        # Build list of staff to search
+        if staff_name:
+            staff = self._resolve_staff(staff_name)
+            if not staff:
+                return f"Staff member '{staff_name}' not found."
+            user_entries = [{"user_id": staff["user_id"], "name": staff["name"]}]
+        else:
+            service_id = svc.get("id") if svc else None
+            candidates = []
+            for s in self._staff:
+                if not s.get("user_id"):
+                    continue
+                if service_id:
+                    offered = self._user_service_ids.get(s["user_id"], [])
+                    if service_id not in offered:
+                        continue
+                candidates.append({"user_id": s["user_id"], "name": s["name"]})
+            if not candidates:
+                service_label = svc["name"] if svc else service_name
+                return f"No staff at this location offer {service_label}."
+            user_entries = candidates
+
+        start = from_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        slots = _find_next_slots(
+            supabase=self._supabase,
+            business_id=self._business_id,
+            location_id=self._location_id,
+            user_entries=user_entries,
+            slot_minutes=slot_minutes,
+            from_date=start,
+            max_days=30,
+        )
+
+        if not slots:
+            search_desc = f"with {staff_name}" if staff_name else "with any available staff"
+            return (
+                f"I couldn't find any available slots {search_desc} "
+                f"in the next 30 days. You may want to call back or check with the team directly."
+            )
+
+        # Group by staff name for a natural spoken response
+        by_staff: dict[str, list[str]] = {}
+        date_str = slots[0]["date"]
+        for s in slots:
+            by_staff.setdefault(s["staff_name"], []).append(_fmt_time_12h(s["time"]))
+
+        # Format date as "Wednesday May 21"
+        try:
+            d = datetime.strptime(date_str, "%Y-%m-%d")
+            date_label = d.strftime("%A %B %-d")
+        except Exception:
+            date_label = date_str
+
+        parts = []
+        for name, times in by_staff.items():
+            time_list = ", ".join(times)
+            parts.append(f"{name} is available at {time_list}")
+
+        return f"The next available is {date_label}. {'. '.join(parts)}."
 
     @function_tool()
     async def book_appointment(
