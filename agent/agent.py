@@ -390,6 +390,8 @@ class Assistant(Agent):
                 return f"Staff member '{staff_name}' not found."
             user_entries = [{"user_id": staff["user_id"], "name": staff["name"]}]
         else:
+            if service_name and svc is None:
+                return f"I don't recognise the service '{service_name}'. Please use get_services to list available services."
             service_id = svc.get("id") if svc else None
             candidates = []
             for s in self._staff:
@@ -433,7 +435,7 @@ class Assistant(Agent):
         # Format date as "Wednesday May 21"
         try:
             d = datetime.strptime(date_str, "%Y-%m-%d")
-            date_label = d.strftime("%A %B %-d")
+            date_label = d.strftime(f"%A %B {d.day}")
         except Exception:
             date_label = date_str
 
