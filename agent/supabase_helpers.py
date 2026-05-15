@@ -444,6 +444,66 @@ def _validate_booking_date(
     return _validate_booking_datetime(supabase, business_id, location_id, date, time=None)
 
 
+def _find_next_slots(
+    supabase,
+    business_id: str,
+    location_id: str | None,
+    user_entries: list[dict],
+    slot_minutes: int,
+    from_date: str,
+    max_days: int = 30,
+) -> list[dict]:
+    """
+    Scan forward from from_date (YYYY-MM-DD) for the next day that has available slots.
+    user_entries: list of {"user_id": str, "name": str}
+    Returns list of {"date": str, "time": str, "staff_name": str, "staff_user_id": str}.
+    Returns at most 3 slots per staff member for the first available day.
+    Returns [] if no availability found within max_days.
+    """
+    try:
+        start = datetime.strptime(from_date, "%Y-%m-%d").date()
+    except ValueError:
+        return []
+
+    today = datetime.now(timezone.utc).date()
+    if start < today:
+        start = today
+
+    for i in range(max_days):
+        check_date = start + timedelta(days=i)
+        date_str = check_date.strftime("%Y-%m-%d")
+
+        if _validate_booking_date(supabase, business_id, location_id, date_str):
+            continue  # closed day — skip
+
+        day_slots: list[dict] = []
+        for entry in user_entries:
+            user_id = entry["user_id"]
+            name = entry["name"]
+            try:
+                availability = _fetch_user_availability(supabase, user_id)
+                overrides = _fetch_user_overrides(supabase, user_id, date_str)
+                booked = _fetch_appointments_on_date(supabase, user_id, date_str)
+                slots = _compute_available_slots(
+                    availability, overrides, booked, date_str, slot_minutes
+                )
+                for slot in slots[:3]:  # cap at 3 per staff member
+                    day_slots.append({
+                        "date": date_str,
+                        "time": slot,
+                        "staff_name": name,
+                        "staff_user_id": user_id,
+                    })
+            except Exception as e:
+                logger.warning("_find_next_slots: error for user %s on %s: %s", user_id, date_str, e)
+                continue
+
+        if day_slots:
+            return day_slots  # return first day that has any slots
+
+    return []
+
+
 def _is_feature_enabled_for_location(
     supabase,
     business_id: str,

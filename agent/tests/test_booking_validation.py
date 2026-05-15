@@ -201,3 +201,77 @@ def test_validate_booking_date_does_not_check_time():
         # The fix: date-only check passes for the same open day
         fixed = _validate_booking_date(None, "biz", "loc", future_monday)
         assert fixed is None, f"date-only check should pass for an open day, got: {fixed}"
+
+
+from supabase_helpers import _find_next_slots
+
+
+def test_find_next_slots_returns_empty_when_all_days_closed():
+    """If all days are closed, returns empty list."""
+    with patch("supabase_helpers._validate_booking_date", return_value="closed"), \
+         patch("supabase_helpers._fetch_user_availability", return_value=[]):
+        result = _find_next_slots(
+            supabase=None,
+            business_id="biz",
+            location_id="loc",
+            user_entries=[{"user_id": "u1", "name": "Rahul"}],
+            slot_minutes=60,
+            from_date="2099-01-06",
+            max_days=5,
+        )
+    assert result == []
+
+
+def test_find_next_slots_skips_closed_days_and_finds_open():
+    """Skips a closed Monday and finds slots on Tuesday."""
+    monday = _future_date(0)
+    tuesday = (datetime.strptime(monday, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    def date_validator(supabase, business_id, location_id, date):
+        return "closed" if date == monday else None
+
+    with patch("supabase_helpers._validate_booking_date", side_effect=date_validator), \
+         patch("supabase_helpers._fetch_user_availability", return_value=[
+             {"day_of_week": "tuesday", "is_available": True,
+              "start_time": "09:00", "end_time": "17:00"}
+         ]), \
+         patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
+         patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
+        result = _find_next_slots(
+            supabase=None,
+            business_id="biz",
+            location_id="loc",
+            user_entries=[{"user_id": "u1", "name": "Rahul"}],
+            slot_minutes=60,
+            from_date=monday,
+            max_days=5,
+        )
+
+    assert len(result) > 0
+    assert all(r["date"] == tuesday for r in result)
+    assert all(r["staff_name"] == "Rahul" for r in result)
+
+
+def test_find_next_slots_returns_max_3_per_staff():
+    """Returns at most 3 slots per staff member per day."""
+    future_monday = _future_date(0)
+
+    with patch("supabase_helpers._validate_booking_date", return_value=None), \
+         patch("supabase_helpers._fetch_user_availability", return_value=[
+             {"day_of_week": "monday", "is_available": True,
+              "start_time": "09:00", "end_time": "17:00"}
+         ]), \
+         patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
+         patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
+        result = _find_next_slots(
+            supabase=None,
+            business_id="biz",
+            location_id="loc",
+            user_entries=[{"user_id": "u1", "name": "Rahul"}],
+            slot_minutes=60,
+            from_date=future_monday,
+            max_days=5,
+        )
+
+    rahul_slots = [r for r in result if r["staff_name"] == "Rahul"]
+    assert 1 <= len(rahul_slots) <= 3
