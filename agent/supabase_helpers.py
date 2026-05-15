@@ -742,3 +742,29 @@ def _fetch_active_custom_schedule(
                 return row
 
     return None
+
+
+def _fetch_agent_state(
+    supabase,
+    business_id: str,
+    location_id: str | None,
+) -> dict | None:
+    """
+    Returns the agent_state row for this business/location, or None if not found.
+    A missing row means the agent is active by default — callers must treat None as is_active=True.
+    """
+    try:
+        q = (
+            supabase.table("agent_state")
+            .select("is_active, toggled_at, toggled_by")
+            .eq("business_id", business_id)
+        )
+        if location_id:
+            q = q.eq("location_id", location_id)
+        else:
+            q = q.is_("location_id", "null")
+        r = q.limit(1).execute()
+        return r.data[0] if r.data else None
+    except Exception as e:
+        logger.warning("Failed to fetch agent_state: %s", e)
+        return None
