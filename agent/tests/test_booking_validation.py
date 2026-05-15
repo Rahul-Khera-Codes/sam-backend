@@ -216,7 +216,7 @@ def test_find_next_slots_returns_empty_when_all_days_closed():
             location_id="loc",
             user_entries=[{"user_id": "u1", "name": "Rahul"}],
             slot_minutes=60,
-            from_date="2099-01-06",
+            from_date="2099-01-06",  # far-future date; all days mocked as closed
             max_days=5,
         )
     assert result == []

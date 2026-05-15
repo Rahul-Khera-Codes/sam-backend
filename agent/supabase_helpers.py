@@ -469,6 +469,16 @@ def _find_next_slots(
     if start < today:
         start = today
 
+    # Pre-fetch weekly availability for all users — this doesn't change per day
+    availability_cache: dict[str, list[dict]] = {}
+    for entry in user_entries:
+        uid = entry["user_id"]
+        try:
+            availability_cache[uid] = _fetch_user_availability(supabase, uid)
+        except Exception as e:
+            logger.warning("_find_next_slots: failed to fetch availability for %s: %s", uid, e)
+            availability_cache[uid] = []
+
     for i in range(max_days):
         check_date = start + timedelta(days=i)
         date_str = check_date.strftime("%Y-%m-%d")
@@ -481,7 +491,7 @@ def _find_next_slots(
             user_id = entry["user_id"]
             name = entry["name"]
             try:
-                availability = _fetch_user_availability(supabase, user_id)
+                availability = availability_cache.get(user_id, [])
                 overrides = _fetch_user_overrides(supabase, user_id, date_str)
                 booked = _fetch_appointments_on_date(supabase, user_id, date_str)
                 slots = _compute_available_slots(
