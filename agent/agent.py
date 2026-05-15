@@ -56,6 +56,7 @@ from supabase_helpers import (
     _fetch_active_custom_schedule,
     _is_within_available_hours,
     _validate_booking_datetime,
+    _validate_booking_date,
 )
 from sms_helpers import (
     send_appointment_confirmation_sms,
@@ -329,9 +330,9 @@ class Assistant(Agent):
         if not staff:
             return f"Staff member '{staff_name}' not found."
 
-        # Reject past dates and closed days before computing slots
-        date_err = _validate_booking_datetime(
-            self._supabase, self._business_id, self._location_id, date, "00:00"
+        # Reject past dates and closed days before computing slots (no time check needed)
+        date_err = _validate_booking_date(
+            self._supabase, self._business_id, self._location_id, date
         )
         if date_err:
             return date_err
