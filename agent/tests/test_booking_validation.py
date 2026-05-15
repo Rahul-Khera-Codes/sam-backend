@@ -181,12 +181,23 @@ def test_validate_booking_date_accepts_custom_schedule_with_hours():
 
 
 def test_validate_booking_date_does_not_check_time():
-    """Key difference: an open day must pass even if no time is given."""
+    """
+    Regression test: _validate_booking_datetime("00:00") was used in get_available_slots,
+    which rejected midnight as outside business hours (9am–5pm) and broke slot retrieval.
+    _validate_booking_date must pass for the same open day without being tripped by a time.
+    """
     future_monday = _future_date(0)
+    mock_hours = [{"day_of_week": "monday", "is_open": True,
+                   "open_time": "09:00:00", "close_time": "17:00:00"}]
+
     with patch("supabase_helpers._fetch_active_custom_schedule", return_value=None), \
-         patch("supabase_helpers._fetch_business_hours_for_location", return_value=[
-             {"day_of_week": "monday", "is_open": True,
-              "open_time": "09:00:00", "close_time": "17:00:00"}
-         ]):
-        result = _validate_booking_date(None, "biz", "loc", future_monday)
-    assert result is None
+         patch("supabase_helpers._fetch_business_hours_for_location", return_value=mock_hours):
+
+        # The old broken approach: passes midnight, which is outside 9am-5pm
+        broken = _validate_booking_datetime(None, "biz", "loc", future_monday, "00:00")
+        assert broken is not None, "midnight should be outside business hours"
+        assert "outside" in broken.lower()
+
+        # The fix: date-only check passes for the same open day
+        fixed = _validate_booking_date(None, "biz", "loc", future_monday)
+        assert fixed is None, f"date-only check should pass for an open day, got: {fixed}"
