@@ -489,7 +489,7 @@ def build_instructions(business_id: str | None, location_id: str | None) -> str:
         ]
     active_location_block = _format_called_location_context(_loc_to_use, active_location_staff)
     if _loc_to_use:
-        parts = [_loc_to_use.get("name"), _loc_to_use.get("city"), _loc_to_use.get("state"), _loc_to_use.get("country")]
+        parts = [_loc_to_use.get("city"), _loc_to_use.get("state"), _loc_to_use.get("country")]
         spoken = ", ".join(p for p in parts if p)
         if spoken:
             location_phrase = f" in {spoken}"
