@@ -427,6 +427,54 @@ def _validate_booking_datetime(
     return None
 
 
+def _validate_booking_date(
+    supabase,
+    business_id: str,
+    location_id: str | None,
+    date: str,
+) -> str | None:
+    """
+    Returns None if the date is valid for booking (not past, business open that day).
+    Returns an agent-readable error string if not.
+    Unlike _validate_booking_datetime, does NOT check whether a specific time is within hours.
+    Use this when computing available slots for a full day.
+    """
+    try:
+        appt_date = datetime.strptime(date, "%Y-%m-%d").date()
+    except ValueError:
+        return f"Invalid date format '{date}'. Please use YYYY-MM-DD."
+
+    today = datetime.now(timezone.utc).date()
+    if appt_date < today:
+        return (
+            f"Cannot book appointments in the past. "
+            f"Today is {today.strftime('%Y-%m-%d')}."
+        )
+
+    day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    day_name = day_names[appt_date.weekday()]
+
+    appt_dt = datetime(appt_date.year, appt_date.month, appt_date.day, tzinfo=timezone.utc)
+    custom = _fetch_active_custom_schedule(supabase, business_id, location_id, now=appt_dt)
+    if custom is not None:
+        if custom.get("is_agent_disabled"):
+            return (
+                f"The business is closed on {date} due to a special schedule. "
+                f"Please choose a different date."
+            )
+        return None  # custom schedule exists and agent is not disabled — day is valid
+
+    hours = _fetch_business_hours_for_location(supabase, business_id, location_id)
+    day_hours = next((h for h in hours if h.get("day_of_week") == day_name), None)
+    if day_hours is not None and not day_hours.get("is_open"):
+        return (
+            f"The business is closed on {day_name.capitalize()}s. "
+            f"Please choose a day when the business is open."
+        )
+
+    return None
+
+
 def _is_feature_enabled_for_location(
     supabase,
     business_id: str,

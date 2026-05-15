@@ -122,3 +122,71 @@ def test_custom_schedule_rejects_outside_special_hours():
         result = _validate_booking_datetime(None, "b", "l", future, "14:00")
     assert result is not None
     assert "outside" in result.lower() or "hours" in result.lower()
+
+
+from supabase_helpers import _validate_booking_date
+
+
+def test_validate_booking_date_rejects_past():
+    result = _validate_booking_date(None, "biz-1", "loc-1", "2020-01-01")
+    assert result is not None
+    assert "past" in result.lower()
+
+
+def test_validate_booking_date_rejects_bad_format():
+    result = _validate_booking_date(None, "b", "l", "20-05-2026")
+    assert result is not None
+    assert "format" in result.lower()
+
+
+def test_validate_booking_date_accepts_open_day():
+    future_monday = _future_date(0)
+    with patch("supabase_helpers._fetch_active_custom_schedule", return_value=None), \
+         patch("supabase_helpers._fetch_business_hours_for_location", return_value=[
+             {"day_of_week": "monday", "is_open": True,
+              "open_time": "09:00:00", "close_time": "17:00:00"}
+         ]):
+        result = _validate_booking_date(None, "biz", "loc", future_monday)
+    assert result is None
+
+
+def test_validate_booking_date_rejects_closed_day():
+    future_monday = _future_date(0)
+    with patch("supabase_helpers._fetch_active_custom_schedule", return_value=None), \
+         patch("supabase_helpers._fetch_business_hours_for_location", return_value=[
+             {"day_of_week": "monday", "is_open": False,
+              "open_time": None, "close_time": None}
+         ]):
+        result = _validate_booking_date(None, "biz", "loc", future_monday)
+    assert result is not None
+    assert "closed" in result.lower()
+
+
+def test_validate_booking_date_rejects_agent_disabled_schedule():
+    future_monday = _future_date(0)
+    with patch("supabase_helpers._fetch_active_custom_schedule",
+               return_value={"is_agent_disabled": True}):
+        result = _validate_booking_date(None, "biz", "loc", future_monday)
+    assert result is not None
+    assert "closed" in result.lower()
+
+
+def test_validate_booking_date_accepts_custom_schedule_with_hours():
+    future_monday = _future_date(0)
+    with patch("supabase_helpers._fetch_active_custom_schedule",
+               return_value={"is_agent_disabled": False,
+                             "open_time": "10:00", "close_time": "15:00"}):
+        result = _validate_booking_date(None, "biz", "loc", future_monday)
+    assert result is None
+
+
+def test_validate_booking_date_does_not_check_time():
+    """Key difference: an open day must pass even if no time is given."""
+    future_monday = _future_date(0)
+    with patch("supabase_helpers._fetch_active_custom_schedule", return_value=None), \
+         patch("supabase_helpers._fetch_business_hours_for_location", return_value=[
+             {"day_of_week": "monday", "is_open": True,
+              "open_time": "09:00:00", "close_time": "17:00:00"}
+         ]):
+        result = _validate_booking_date(None, "biz", "loc", future_monday)
+    assert result is None
