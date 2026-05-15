@@ -421,10 +421,12 @@ class Assistant(Agent):
 
         if not slots:
             search_desc = f"with {staff_name}" if staff_name else "with any available staff"
-            return (
+            msg = (
                 f"I couldn't find any available slots {search_desc} "
                 f"in the next 30 days. You may want to call back or check with the team directly."
             )
+            logger.info("find_next_available_slot: no slots found — service=%s staff=%s", service_name, staff_name)
+            return msg
 
         # Group by staff name for a natural spoken response
         by_staff: dict[str, list[str]] = {}
@@ -444,7 +446,9 @@ class Assistant(Agent):
             time_list = ", ".join(times)
             parts.append(f"{name} is available at {time_list}")
 
-        return f"The next available is {date_label}. {'. '.join(parts)}."
+        result = f"The next available is {date_label}. {'. '.join(parts)}."
+        logger.info("find_next_available_slot: → %s", result)
+        return result
 
     @function_tool()
     async def book_appointment(
