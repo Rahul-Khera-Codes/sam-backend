@@ -28,6 +28,14 @@ class UpdateAppointmentRequest(BaseModel):
     notes: Optional[str] = None
 
 
+VALID_APPOINTMENT_STATUSES = {"confirmed", "checked_in", "no_show", "cancelled"}
+
+
+class UpdateAppointmentStatusRequest(BaseModel):
+    business_id: str
+    status: str
+
+
 class AppointmentResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str
