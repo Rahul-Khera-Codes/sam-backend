@@ -293,6 +293,94 @@ async def run_reschedule_calls() -> None:
     logger.info("Scheduler: reschedule calls check finished")
 
 
+async def run_noshow_calls() -> None:
+    """
+    Trigger follow-up calls for appointments marked no_show N days ago.
+    Reads per-location config from agent_settings (feature_key=noshow_followup).
+    """
+    logger.info("Scheduler: no-show calls check started")
+    today = date.today()
+
+    try:
+        cfg_rows = (
+            supabase_admin.table("agent_settings")
+            .select("business_id, location_id, config_value")
+            .eq("feature_key", "noshow_followup")
+            .eq("is_enabled", True)
+            .execute()
+        )
+    except Exception as e:
+        logger.error("Scheduler: failed to fetch no-show call configs: %s", e)
+        return
+
+    for cfg in (cfg_rows.data or []):
+        business_id = cfg["business_id"]
+        location_id = cfg["location_id"]
+        config = cfg.get("config_value") or {}
+        days = int(config.get("days") or 1)
+        template = config.get("message_template") or (
+            "Hi, we noticed you missed your recent appointment. "
+            "We'd love to help you reschedule — would any of our available times work for you?"
+        )
+
+        target_date = (today - timedelta(days=days)).isoformat()
+
+        try:
+            appts = (
+                supabase_admin.table("appointments")
+                .select("id, client_phone, client_name, service, appointment_date")
+                .eq("business_id", business_id)
+                .eq("location_id", location_id)
+                .eq("status", "no_show")
+                .eq("appointment_date", target_date)
+                .is_("noshow_called_at", "null")
+                .execute()
+            )
+        except Exception as e:
+            logger.error(
+                "Scheduler: no-show query failed for location %s: %s", location_id, e
+            )
+            continue
+
+        for appt in (appts.data or []):
+            phone = (appt.get("client_phone") or "").strip()
+            if not phone:
+                logger.info(
+                    "Scheduler: skipping no-show call for appointment %s — no client phone", appt["id"]
+                )
+                continue
+
+            # Mark immediately to prevent double-calling on restart/overlap
+            try:
+                supabase_admin.table("appointments").update({
+                    "noshow_called_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("id", appt["id"]).execute()
+            except Exception as e:
+                logger.error("Scheduler: failed to mark noshow_called_at for %s: %s", appt["id"], e)
+                continue
+
+            call_id = await _trigger_outbound_call(
+                business_id=business_id,
+                location_id=location_id,
+                to_phone=phone,
+                call_purpose="noshow_followup",
+                message_template=template,
+                appointment_id=appt["id"],
+            )
+
+            if call_id:
+                logger.info(
+                    "Scheduler: no-show call triggered — appointment=%s call=%s client=%s date=%s",
+                    appt["id"], call_id, appt.get("client_name"), target_date,
+                )
+            else:
+                logger.warning(
+                    "Scheduler: no-show call failed — appointment=%s", appt["id"]
+                )
+
+    logger.info("Scheduler: no-show calls check finished")
+
+
 # ── Scheduler lifecycle ───────────────────────────────────────────────────────
 
 def start_scheduler() -> None:
@@ -312,8 +400,16 @@ def start_scheduler() -> None:
         replace_existing=True,
         misfire_grace_time=300,
     )
+    scheduler.add_job(
+        run_noshow_calls,
+        trigger="interval",
+        hours=1,
+        id="noshow_calls",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
     scheduler.start()
-    logger.info("Scheduler started — reminder + reschedule calls run every hour")
+    logger.info("Scheduler started — reminder + reschedule + no-show calls run every hour")
 
 
 def stop_scheduler() -> None:
