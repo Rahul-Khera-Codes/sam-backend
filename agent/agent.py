@@ -1472,7 +1472,9 @@ async def voice_agent(ctx: agents.JobContext):
     if business_id:
         if supabase is None:
             supabase = _get_supabase()
-        instructions = build_instructions(business_id, location_id)
+        _inbound_cfg = _get_feature_config_value(supabase, business_id, location_id, "inbound_calling") if supabase else {}
+        _custom_greeting = (_inbound_cfg.get("greeting_message") or "").strip() or None
+        instructions = build_instructions(business_id, location_id, custom_greeting=_custom_greeting)
         if supabase:
             locations = _fetch_locations(supabase, business_id)
             services = _fetch_services_for_location(supabase, business_id, location_id)
