@@ -47,3 +47,11 @@ def test_build_instructions_empty_custom_greeting_uses_default():
         result = build_instructions("biz-123", None, custom_greeting="")
     assert "Always start the call" in result
     assert "Thank you for calling" in result
+
+
+def test_build_instructions_whitespace_custom_greeting_uses_default():
+    """Whitespace-only custom_greeting falls back to default behaviour."""
+    with patch("prompt_builder._get_supabase", return_value=_mock_supabase_minimal()):
+        result = build_instructions("biz-123", None, custom_greeting="   ")
+    assert "Always start the call" in result
+    assert "Thank you for calling" in result

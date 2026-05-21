@@ -498,7 +498,7 @@ def build_instructions(
         if spoken:
             location_phrase = f" in {spoken}"
 
-    if custom_greeting:
+    if custom_greeting and custom_greeting.strip():
         welcome = (
             f"You are the AI phone receptionist for {company_name}{location_phrase}.\n"
             f'Start the call with this greeting: "{custom_greeting}"\n'
