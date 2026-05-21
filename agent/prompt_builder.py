@@ -366,7 +366,11 @@ def _fetch_brand_voice(supabase, business_id: str) -> dict | None:
         return None
 
 
-def build_instructions(business_id: str | None, location_id: str | None) -> str:
+def build_instructions(
+    business_id: str | None,
+    location_id: str | None,
+    custom_greeting: str | None = None,
+) -> str:
     """
     Build the full agent system prompt from all business data in Supabase:
     welcome · global settings · business details · hours · services ·
@@ -494,17 +498,24 @@ def build_instructions(business_id: str | None, location_id: str | None) -> str:
         if spoken:
             location_phrase = f" in {spoken}"
 
-    welcome = (
-        f"You are the AI phone receptionist for {company_name}{location_phrase}. "
-        "Always start the call with a short, friendly welcome that includes the business name"
-    )
-    if location_phrase:
-        welcome += " and the location"
-    welcome += (
-        ". Example: \"Thank you for calling "
-        f"{company_name}{location_phrase}, how can I help you today?\" "
-        "Then continue the conversation following these rules:\n\n"
-    )
+    if custom_greeting:
+        welcome = (
+            f"You are the AI phone receptionist for {company_name}{location_phrase}.\n"
+            f'Start the call with this greeting: "{custom_greeting}"\n'
+            "Then continue the conversation following these rules:\n\n"
+        )
+    else:
+        welcome = (
+            f"You are the AI phone receptionist for {company_name}{location_phrase}. "
+            "Always start the call with a short, friendly welcome that includes the business name"
+        )
+        if location_phrase:
+            welcome += " and the location"
+        welcome += (
+            ". Example: \"Thank you for calling "
+            f"{company_name}{location_phrase}, how can I help you today?\" "
+            "Then continue the conversation following these rules:\n\n"
+        )
 
     return (
         welcome
