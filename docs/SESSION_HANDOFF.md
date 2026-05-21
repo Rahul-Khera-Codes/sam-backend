@@ -1,4 +1,4 @@
-# Session Handoff — 2026-05-05 (Session 41)
+# Session Handoff — 2026-05-21 (Session 44)
 
 Read this at the start of every session. It captures the full current state so you can pick up immediately.
 
@@ -23,15 +23,14 @@ Always check `TODO.md` in sam-backend for full task status.
 
 ## Current Branch
 
-`feature/strip-integration` (sam-backend) — Stripe billing complete, not yet merged to main.
+- **sam-backend:** `feature/available-slots-tools` — 10 commits ahead of main (session 43 + 44 work). Ready to merge.
+- **ai-employees-app:** `main` — all session 44 frontend work committed directly to main and live.
 
-`feature/custom-roles-v2` (both repos) — QA done, 2 bugs must be fixed before merge.
-
-`feature/location-scoped-architecture` (sam-backend) — **ready to merge to main**, not yet merged.
+**Pending: merge `feature/available-slots-tools` → main in sam-backend.**
 
 ---
 
-## System Status (2026-04-29)
+## System Status (2026-05-21)
 
 ### Working end-to-end ✅
 - Inbound SIP call → agent answers → books appointment → transcript + summary → emails → shows in UI
@@ -176,14 +175,16 @@ Key env files:
 - [ ] **Deploy edge functions** — `supabase functions deploy invite-location-admin accept-invitation` — still needed for customRoleId in invites
 - [ ] Resend DNS on Hostinger — add DKIM/SPF/DMARC for `aiemployeesinc.com`
 - [x] **Apply Stripe migration** — `20260430000001_businesses_stripe.sql` — applied ✅
-- [ ] **Merge `feature/strip-integration` → main (both repos)** — all TC fixes + Stripe + booking validation ready
-- [ ] **Update billing URLs in `backend/.env` on server** — `BILLING_SUCCESS_URL=http://116.202.210.102:20252/dashboard/settings/billing?success=true` and `BILLING_CANCEL_URL=http://116.202.210.102:20252/dashboard/settings/billing`
-- [ ] **`docker compose up --build -d`** after backend merge
-- [ ] **Fix Resend DNS on Hostinger** — re-add DKIM/SPF/DMARC; domain verification failed, email verification broken
+- [x] **Merge `feature/billing-section` → main** (both repos) ✅ 2026-05-14
+- [x] **Merge `feature/appointment-pipeline` → main** (both repos) ✅ 2026-05-14
+- [x] **Merge `feature/strip-integration`, `feature/custom-roles-v2`, `feature/location-scoped-architecture`** ✅ previously merged
+- [ ] **Create Stripe price IDs** — Growth ($149) + Professional ($299) in Stripe dashboard → add `STRIPE_GROWTH_PRICE_ID` + `STRIPE_PRO_PRICE_ID` to `backend/.env`
+- [ ] **Update billing URLs in `backend/.env` on server** — `BILLING_SUCCESS_URL=http://116.202.210.102:20252/dashboard/settings/billing?success=true`
+- [ ] **`docker compose up --build -d`** — run after any server .env changes
+- [ ] **Fix Resend DNS on Hostinger** — re-add DKIM/SPF/DMARC for `aiemployeesinc.com`
 - [ ] **Update Stripe webhook URL** to prod domain when HTTPS is set up
-- [ ] Merge `feature/custom-roles-v2` → main (both repos) — after TC-ROLES-002 + TC-TEAM-006 fixed
 - [ ] **`POST /phone-numbers/sync-dispatch`** — re-stamp existing dispatch rules with `location_id`
-- [ ] E2E test Option C: make real SIP call → ask to transfer → confirm `status=forwarded` in DB
+- [ ] **Deploy edge functions** — `supabase functions deploy invite-location-admin accept-invitation`
 
 ## Applied Migrations (all done)
 - `20260430000001` — businesses Stripe columns ✅ applied
@@ -203,21 +204,88 @@ Key env files:
 - `20260428000000` — forwarding_contacts available_start/available_end ✅
 
 ## Pending Migrations (not yet applied)
-- `20260428000001` — custom_roles + role_page_permissions tables + seed
-- `20260428000002` — custom_roles policy fixes + index
-- `20260428000003` — user_roles.custom_role_id + location_invitations.custom_role_id
+- `20260428000001` — custom_roles + role_page_permissions tables + seed *(already applied per session 38 — verify)*
+- `20260428000002` — custom_roles policy fixes + index *(already applied per session 38 — verify)*
+- `20260428000003` — user_roles.custom_role_id + location_invitations.custom_role_id *(already applied per session 38 — verify)*
 
 ---
 
-## What Was Done This Session (Session 41, 2026-05-05)
+## What Was Done This Session (Session 44, 2026-05-21)
 
-**Project planning started for billing UI update; code analysis complete.**
+**Sam client feedback session. 5 feature items implemented. Branch `feature/available-slots-tools` still pending merge.**
 
-1. **Client comms logged** — `docs/CLIENT_COMMS_LOG.md` created; Sam's pricing table, per-agent billing decision, DNS root cause all logged
-2. **Project folder structure** — `docs/projects/` created with `billing-ui-update/` and `per-agent-billing/` subfolders (overview → analysis → plan → specs)
-3. **`billing-ui-update/00-overview.md`** — high-level theory doc complete: 5-tier structure, architecture decisions, risks, scope
-4. **`billing-ui-update/01-analysis.md`** — code analysis complete: all exact touch points identified across 4 files; no DB migration needed; Stripe dashboard prereqs documented
-5. **Next:** `02-plan.md` — detailed implementation steps (pending)
+### Feature 1: Custom Greeting Message for Inbound Calling (sam-backend + ai-employees-app)
+
+- `agent/prompt_builder.py` — `custom_greeting: str | None = None` param added to `build_instructions`. When set, replaces the hardcoded welcome block with `Start the call with this greeting: "..."`. Whitespace-only treated as unset. 4 tests in `agent/tests/test_prompt_builder.py`.
+- `agent/agent.py` — reads `inbound_calling.config_value.greeting_message` before calling `build_instructions`, passes as `custom_greeting`.
+- `AgentSettings.tsx` — pencil icon on Inbound Calling row → Custom Greeting Message dialog. Saves to `config_value.greeting_message`. Clears to null reverts to default.
+
+### Feature 2: Appointment Status Buttons — Checked In / No Show / Cancelled (sam-backend + ai-employees-app)
+
+- **DB migration** `20260521000000_appointments_noshow_called_at.sql` — `noshow_called_at TIMESTAMPTZ DEFAULT NULL` added (applied, TS types regenerated).
+- `backend/app/schemas/appointments.py` — `VALID_APPOINTMENT_STATUSES` set + `UpdateAppointmentStatusRequest` schema.
+- `backend/app/routers/appointments.py` — `PATCH /appointments/{id}/status` lightweight endpoint (no GCal/email pipeline). Auth-guarded, validates status value.
+- `backend/app/services/scheduler_service.py` — `run_noshow_calls()` added. Queries `status=no_show AND noshow_called_at IS NULL AND appointment_date = today - N days`. Registered in `start_scheduler()` on 1h interval. Reads `noshow_followup` config for days + template.
+- `voiceAgentApi.ts` — `updateAppointmentStatus()` function. PATCH with `business_id` in body.
+- `Calendar.tsx` — `status` field added to `AppointmentForm`. 3 status buttons (green/amber/red) at top of Edit dialog. Click saves immediately + closes modal. Label "— saves immediately" added to avoid confusion with Save Changes button.
+
+### UI Fixes
+
+- **CS Scheduler** — Regular Hours green box removed from sidebar (`CustomScheduleSidebar.tsx`)
+- **Edit Appointment dialog** — `max-h-[90vh] overflow-y-auto` — no longer overflows screen
+- **Inbound Calling ↔ Quick Agent Control sync** — toggling either one now updates both `agent_state.is_active` AND `agent_settings.inbound_calling.is_enabled`
+
+### sam-backend commits (feature/available-slots-tools)
+`42511cb` → `49e4ccd` → `1a796c2` → `97f61e3` → `cae15c7` → `11dfa61`
+
+### ai-employees-app commits (main)
+`9086e87` → `5b58a46` → `c9f1738` → `dcd0a09` → `e486bcd` → `5f3c7c0` → `7cf1515` → `2c88063` → `a745475` → `8660ff5` → `b2278f2`
+
+### Still Pending
+- **Merge `feature/available-slots-tools` → main** (sam-backend) — 28 tests passing, ready.
+- **Deploy to Hostinger VPS** — Sam confirmed urgent (competitors in Canada). Not started.
+- **Scheduler sync caveat** — `handleAgentToggle` in Scheduler.tsx sends `config_value: {}` when syncing inbound_calling, which overwrites any saved custom greeting. Fix: fetch existing config_value before sending update.
+
+## What Was Done Previous Session (Session 42, 2026-05-14)
+
+**Billing section fixed. Appointment pipeline built, tested, and working end-to-end.**
+
+1. **Billing section fixes** (`feature/billing-section`, both repos) — 5 commits:
+   - Pro/Professional naming mismatch fixed
+   - `.env.example` Stripe var names corrected
+   - Billing metric switched from call count to minutes (PLAN_KEY_MAP limits 200/600/1500/4000)
+   - Supabase row cap guard added to `_count_minutes_in_period`
+   - Unused `call_limit` variable renamed
+   - All verified: 8 backend logic tests + TypeScript clean
+
+2. **Appointment booking pipeline** (`feature/appointment-pipeline`, both repos) — tested live in Docker, working end-to-end:
+   - `backend/app/schemas/appointments.py` — 4 Pydantic schemas
+   - `backend/app/services/email_service.py` — 5 new email helpers
+   - `backend/app/services/booking_service.py` — full pipeline: validation (hours + custom schedules + double-booking), DB insert/update/soft-cancel, GCal (staff+admin), Gmail (customer+staff), SMS
+   - `backend/app/routers/appointments.py` — `POST/PUT/DELETE /appointments`
+   - `ai-employees-app/src/lib/voiceAgentApi.ts` + `useAppointments.ts` — wired to backend
+   - **Bugs fixed during live testing:** `.single()` AttributeError on insert, `duration: null` 422, `Number("30 min")` = NaN, 12h→24h time conversion, `full_name` column doesn't exist in profiles, GCal 403 (Google Calendar API not enabled in GCP — user fixed), silent GCal failures now logged
+   - `feature/appointment-pipeline` is **stacked on `feature/billing-section`** — merge billing-section first
+
+3. **Client comms logged** — Sam reported AI Scheduler vs Business Hours confusion. Root cause confirmed: both use same `business_hours` table. Awaiting demo videos.
+
+4. **Confirmed merged branches** — feature/strip-integration, feature/custom-roles-v2, feature/location-scoped-architecture all 0 commits ahead of main.
+
+5. **DEV_TRACKING.md** created at `docs/DEV_TRACKING.md` explaining the full session tracking system.
+
+## What Was Done Previous Session (Session 42 earlier, 2026-05-12)
+
+**Code review of `feature/billing-section` branch (both repos). 3 critical issues found — not ready to merge.**
+
+1. **Branch reviewed** — `feature/billing-section` exists in both repos (sam-backend: 1 commit, ai-employees-app: 1 commit)
+2. **Backend changes** — `billing.py` PLAN_KEY_MAP adds Enterprise tier (key `enterprise`, limit 1300, display "Enterprise"); `config.py` adds `stripe_enterprise_price_id`
+3. **Frontend changes** — `Billing.tsx` fully rewritten: old 3-card grid replaced with 5-column comparison table (Free Trial / Starter / Growth / Professional / Enterprise) with 13 feature rows
+4. **Critical issues found (must fix before merge):**
+   - **Pro vs Professional name mismatch** — frontend sends `plan: "pro"` for Professional column; backend display name is "Pro"; subscribed users will see "Pro Plan" not "Professional Plan"
+   - **`.env.example` wrong variable names** — `STRIPE_STARTER_PLAN_PRICE_ID`, `STRIPE_STARTER_PLAN_GROWTH_ID`, `STRIPE_STARTER_PLAN_PRO_ID` don't match what Pydantic reads (`STRIPE_STARTER_PRICE_ID`, `STRIPE_GROWTH_PRICE_ID`, `STRIPE_PRO_PRICE_ID`); `STRIPE_ENTERPRISE_PRICE_ID` is correct
+   - **Billing metric mismatch** — backend counts call rows; client spec is minutes-based (200/600/1500/4000 min); PLAN_KEY_MAP limits still use old call counts (150/400/800/1300); active subscription panel shows "calls/month" not "minutes/month"
+5. **What's good** — table renders correctly, Free Trial button properly disabled, per-column spinner works, webhook handlers intact, Enterprise wired correctly end-to-end
+6. **Next:** fix the 3 critical issues, then merge
 
 ---
 

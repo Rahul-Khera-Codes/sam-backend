@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-05-05 (Session 41 — project structure created; billing UI update + per-agent billing in planning)
+Last updated: 2026-05-21 (Session 44 — custom greeting, appointment status buttons, noshow scheduler, UI fixes, toggle sync)
 
 ---
 
@@ -427,12 +427,31 @@ Phase 6 (v2 — SHIPPED session 38):
 - [ ] **Update BILLING_SUCCESS_URL + BILLING_CANCEL_URL** in `backend/.env` on server → `http://116.202.210.102:20252/...`
 - [ ] **`docker compose up --build -d`** after backend merge
 - [ ] **Fix Resend DNS on Hostinger** — recurring; Sam deletes TXT records when editing MX; SPF must include Google + Resend; re-add DKIM/SPF/DMARC
-- [ ] **Billing UI update** — new pricing table (5 tiers, minutes-based, overage section). Project: `docs/projects/billing-ui-update/`
-- [ ] **New Stripe price IDs** — Growth ($149) + Professional ($299) need new Stripe prices; update `PLAN_KEY_MAP` in `billing.py`
+- [x] **Billing UI update** — 5-tier pricing table (minutes-based) implemented in `feature/billing-section`. 4 critical bugs fixed (session 42). Ready to merge.
+- [ ] **New Stripe price IDs** — Growth ($149) + Professional ($299) need new Stripe prices created in Stripe dashboard; update `.env` with new IDs before merging billing branch
 - [ ] **Per-agent billing** — future sprint. Project: `docs/projects/per-agent-billing/`
 - [ ] **HTTPS / domain setup** for production mic access (getUserMedia requires secure context). Ops task.
-- [ ] **Backend appointment/service API endpoints** — frontend queries Supabase directly; backend is unaware. ~1 day.
+- [x] **Backend appointment/service API endpoints** — `POST/PUT/DELETE /appointments` built in `feature/appointment-pipeline` (session 42). Full validation + GCal + email + SMS pipeline. Frontend wired.
 - [x] **Business authorization check** — `verify_business_access` + `require_business_access()` enforced across 7 routers (session 29)
+- [x] **Scheduler vs Business Hours bug** — RESOLVED in 2026-05-15 meeting. Decision: remove weekly grid from CS Scheduler entirely. Always-on by default. Custom schedules for exceptions only.
+
+### From 2026-05-15 Meeting (Sam testing Monday 2026-05-19)
+- [x] **CRITICAL: Fix `get_available_slots`** — replaced `_validate_booking_datetime("00:00")` with `_validate_booking_date`. Branch: `feature/available-slots-tools`
+- [x] **New tool: `find_next_available_slot`** — proactive slot discovery; scans 30 days forward. Branch: `feature/available-slots-tools`
+- [x] **UI: Remove weekly schedule grid from CS Scheduler** — done. `main` commit `9c4ecfa`
+- [x] **UI: Rename "Danger Zone" → "Deactivate"** — done. `main` commit `9c4ecfa`
+- [x] **Prompt: Fix greeting double name** — city/province only, no location name. Branch: `feature/available-slots-tools` commit `ea603db`
+- [x] **Prompt: Always respond in English** — added to DEFAULT_INSTRUCTIONS. Branch: `feature/available-slots-tools`
+- [x] **BUG: Quick Agent Control toggle does NOT actually disable the agent** — Fixed session 43. `_fetch_agent_state` added; agent disconnects at call start if `is_active=false`.
+- [x] **Custom Greeting Message** — Pencil icon on Inbound Calling in Agent Settings. Saves to `config_value.greeting_message`. Agent reads it at call start via `build_instructions(custom_greeting=...)`. Session 44.
+- [x] **Appointment Status Buttons** — Checked In / No Show / Cancelled in Edit Appointment dialog. `PATCH /appointments/{id}/status`. `noshow_called_at` migration applied. `run_noshow_calls()` scheduler job added. Session 44.
+- [x] **UI: Remove Regular Hours green box from CS Scheduler** — Session 44.
+- [x] **Inbound Calling ↔ Quick Agent Control sync** — Both toggles now update both `agent_state.is_active` and `inbound_calling.is_enabled`. Session 44.
+- [ ] **Ops: Deploy to Hostinger VPS** — Sam confirmed urgent. Competitors in Canada. Buy VPS, subdomain, deploy both repos.
+- [ ] **BUG: Scheduler toggle overwrites custom greeting** — `handleAgentToggle` in Scheduler.tsx sends `config_value: {}` when syncing inbound_calling, wiping saved greeting. Fix: fetch existing config_value first.
+- [ ] **Merge `feature/available-slots-tools` → main** (sam-backend) — 28 tests passing, ready.
+- [x] **Merge `feature/billing-section` → main** (both repos) ✅ 2026-05-14 — live
+- [x] **Merge `feature/appointment-pipeline` → main** (both repos) ✅ 2026-05-14 — live
 
 ---
 
