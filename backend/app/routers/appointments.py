@@ -36,7 +36,7 @@ async def update_appointment(
     return await booking_service.update_appointment(appointment_id, body)
 
 
-@router.patch("/{appointment_id}/status")
+@router.patch("/{appointment_id}/status", response_model=AppointmentResponse)
 async def update_appointment_status(
     appointment_id: str,
     body: UpdateAppointmentStatusRequest,
