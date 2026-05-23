@@ -59,6 +59,7 @@ from supabase_helpers import (
     _validate_booking_datetime,
     _validate_booking_date,
     _find_next_slots,
+    _fetch_documents_for_location,
 )
 from sms_helpers import (
     send_appointment_confirmation_sms,
@@ -149,6 +150,12 @@ class Assistant(Agent):
             user_ids = [s["user_id"] for s in self._staff if s.get("user_id")]
             if user_ids:
                 self._user_service_ids = _fetch_user_service_ids(supabase, user_ids)
+
+        # Preload documents for email_document tool
+        self._documents = _fetch_documents_for_location(supabase, business_id, location_id) if supabase else []
+        self._doc_by_name: dict[str, dict] = {
+            d["name"].lower(): d for d in self._documents if d.get("name")
+        }
 
     def _resolve_location(self, name: str) -> dict | None:
         """Resolve location by exact or partial name match, defaulting to the anchored location."""
@@ -701,6 +708,118 @@ class Assistant(Agent):
         except Exception as e:
             logger.error("Failed to find appointments: %s", e)
             return "Could not look up appointments at this time."
+
+    @function_tool()
+    async def email_document(
+        self,
+        context: RunContext,
+        document_name: str,
+        customer_email: str,
+    ) -> str:
+        """
+        Email a document from the business document library to the customer.
+
+        Args:
+            document_name: Name of the document to send (must match a document in the library).
+            customer_email: Customer's email address to send the document to.
+
+        Returns:
+            Confirmation message or error.
+        """
+        import httpx as _httpx
+
+        from gmail_helpers import _gmail_get_valid_token
+
+        # Find the document
+        doc = self._doc_by_name.get(document_name.lower())
+        if not doc:
+            # Fuzzy match
+            for k, v in self._doc_by_name.items():
+                if document_name.lower() in k or k in document_name.lower():
+                    doc = v
+                    break
+        if not doc:
+            available = ", ".join(self._doc_by_name.keys()) or "none"
+            return f"Document '{document_name}' not found. Available documents: {available}"
+
+        # Get Gmail token
+        access_token, sender_email = await _gmail_get_valid_token(
+            self._supabase, self._business_id, self._location_id
+        )
+        if not access_token:
+            return "Cannot send documents — Gmail is not connected for this location."
+
+        # Generate signed URL for the file
+        try:
+            signed = self._supabase.storage.from_("business-documents").create_signed_url(
+                doc["file_path"], 300
+            )
+            # Handle different response shapes from supabase-py versions
+            if isinstance(signed, dict):
+                file_url = (
+                    signed.get("signedURL")
+                    or signed.get("signedUrl")
+                    or (signed.get("data") or {}).get("signedUrl")
+                    or ""
+                )
+            else:
+                file_url = getattr(signed, "signed_url", None) or ""
+            if not file_url:
+                return "Failed to generate download link for the document."
+            # Download PDF bytes
+            async with _httpx.AsyncClient(timeout=30) as http_client:
+                resp = await http_client.get(file_url)
+                resp.raise_for_status()
+                pdf_bytes = resp.content
+        except Exception as e:
+            logger.error("Failed to fetch document %s: %s", doc["name"], e)
+            return f"Failed to retrieve document '{doc['name']}'. Please try again."
+
+        # Build MIME message with attachment
+        import base64
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        from email.mime.base import MIMEBase
+        from email import encoders
+        from constants import GMAIL_SEND_URL
+
+        subject = f"Document from {self._business_name}: {doc['name']}"
+        html_body = (
+            f"<p>Hello,</p>"
+            f"<p>Please find attached the document you requested: <strong>{doc['name']}</strong>.</p>"
+            f"<p>— {self._business_name}</p>"
+        )
+
+        msg = MIMEMultipart("mixed")
+        msg["From"] = f"{self._business_name} <{sender_email}>"
+        msg["To"] = customer_email
+        msg["Subject"] = subject
+        msg.attach(MIMEText(html_body, "html"))
+
+        part = MIMEBase("application", "pdf")
+        part.set_payload(pdf_bytes)
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", f'attachment; filename="{doc["file_name"]}"')
+        msg.attach(part)
+
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+
+        try:
+            async with _httpx.AsyncClient() as http_client:
+                resp = await http_client.post(
+                    GMAIL_SEND_URL,
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    json={"raw": raw},
+                )
+                if resp.status_code in (200, 201):
+                    logger.info("Document '%s' emailed to %s", doc["name"], customer_email)
+                    return f"Done! I've emailed '{doc['name']}' to {customer_email}."
+                else:
+                    logger.error("Gmail doc send failed %s: %s", resp.status_code, resp.text[:200])
+                    return "Failed to send the document. Please try again or contact us directly."
+        except Exception as e:
+            logger.error("email_document error: %s", e)
+            return "An error occurred while sending the document."
 
     @function_tool()
     async def update_appointment(

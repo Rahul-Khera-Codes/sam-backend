@@ -639,6 +639,31 @@ def _fetch_knowledge_base_for_location(
         return []
 
 
+def _fetch_documents_for_location(
+    supabase,
+    business_id: str,
+    location_id: str | None,
+) -> list[dict]:
+    """Fetch uploaded documents for a specific location."""
+    if not supabase or not business_id:
+        return []
+    try:
+        query = (
+            supabase.table("business_documents")
+            .select("id, name, description, file_path, file_name")
+            .eq("business_id", business_id)
+        )
+        if location_id:
+            query = query.eq("location_id", location_id)
+        else:
+            query = query.is_("location_id", "null")
+        r = query.execute()
+        return getattr(r, "data", None) or []
+    except Exception as e:
+        logger.warning("Failed to fetch documents: %s", e)
+        return []
+
+
 def _is_within_available_hours(available_start: str | None, available_end: str | None) -> bool:
     """
     Return True if the current UTC time falls within [available_start, available_end].

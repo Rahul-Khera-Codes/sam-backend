@@ -15,6 +15,7 @@ from supabase_helpers import (
     _fetch_staff_with_ids,
     _fetch_business_hours_for_location,
     _fetch_knowledge_base_for_location,
+    _fetch_documents_for_location,
     _fetch_active_custom_schedule,
     _fetch_forwarding_contacts,
 )
@@ -32,7 +33,7 @@ Booking a new appointment:
 3. Ask if they have a preferred staff member.
 4. Use find_next_available_slot to proactively offer the next available time — pass staff_name if they expressed a preference, leave it empty to search all qualified staff. Offer the caller 2–3 options from the result. Do NOT ask the caller to pick a date before calling this tool.
 5. If the caller prefers a specific date instead, use get_available_slots for that date and staff member.
-6. Collect the customer's name, phone number, and email address (required for confirmation email).
+6. Collect the customer's name, phone number, and email address (required for confirmation email). After the customer gives their phone number, read it back digit-by-digit to confirm (e.g. "Just to confirm, that's 6-1-3-5-5-5-0-1-2-3?"). After they give their email, spell it back letter-by-letter including any dots, underscores, and the domain (e.g. "So that's j-o-h-n dot s-m-i-t-h at g-m-a-i-l dot com — is that right?"). Only proceed once the customer confirms both are correct.
 7. Repeat all details back clearly before calling book_appointment.
 8. Confirm the booking reference once done.
 
@@ -347,6 +348,23 @@ def _format_knowledge_base(entries: list[dict]) -> str:
     return "Additional business information:\n" + "\n\n".join(blocks) + "\n\n"
 
 
+def _format_documents(docs: list[dict]) -> str:
+    """Format business documents list for the agent prompt."""
+    if not docs:
+        return ""
+    lines = []
+    for d in docs:
+        desc = f" — {d['description']}" if d.get("description") else ""
+        lines.append(f"- {d['name']}{desc}")
+    return (
+        "## Available Documents\n"
+        "The following documents can be emailed to customers on request. "
+        "Use the email_document tool to send them.\n"
+        + "\n".join(lines)
+        + "\n\n"
+    )
+
+
 def _fetch_brand_voice(supabase, business_id: str) -> dict | None:
     if not supabase or not business_id:
         return None
@@ -477,6 +495,9 @@ def build_instructions(
     kb_entries = _fetch_knowledge_base_for_location(supabase, business_id, location_id) if business_id else []
     kb_block   = _format_knowledge_base(kb_entries)
 
+    docs = _fetch_documents_for_location(supabase, business_id, location_id) if business_id else []
+    docs_block = _format_documents(docs)
+
     fwd_contacts = _fetch_forwarding_contacts(supabase, business_id, location_id) if business_id else []
     fwd_block    = _format_forwarding_contacts(fwd_contacts)
 
@@ -527,6 +548,7 @@ def build_instructions(
         + brand_block
         + locations_block
         + kb_block
+        + docs_block
         + fwd_block
         + DEFAULT_INSTRUCTIONS.strip()
     )

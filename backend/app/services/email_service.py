@@ -11,8 +11,10 @@ Token refresh is automatic before every send.
 import base64
 import logging
 from datetime import datetime, timezone, timedelta
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email import encoders
 from typing import Optional
 from urllib.parse import urlencode
 
@@ -222,6 +224,43 @@ async def send_email(
         )
         if resp.status_code not in (200, 201):
             logger.error("Gmail send failed %s: %s", resp.status_code, resp.text)
+            return False
+        return True
+
+
+async def send_email_with_attachment(
+    access_token: str,
+    sender: str,
+    to: str,
+    subject: str,
+    html_body: str,
+    attachment_bytes: bytes,
+    attachment_filename: str,
+    attachment_content_type: str = "application/pdf",
+) -> bool:
+    """Send an email with a file attachment via the Gmail API."""
+    msg = MIMEMultipart("mixed")
+    msg["From"] = sender
+    msg["To"] = to
+    msg["Subject"] = subject
+    msg.attach(MIMEText(html_body, "html"))
+
+    mime_main, mime_sub = attachment_content_type.split("/", 1)
+    part = MIMEBase(mime_main, mime_sub)
+    part.set_payload(attachment_bytes)
+    encoders.encode_base64(part)
+    part.add_header("Content-Disposition", f'attachment; filename="{attachment_filename}"')
+    msg.attach(part)
+
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            GMAIL_SEND_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={"raw": raw},
+        )
+        if resp.status_code not in (200, 201):
+            logger.error("Gmail attachment send failed %s: %s", resp.status_code, resp.text)
             return False
         return True
 
