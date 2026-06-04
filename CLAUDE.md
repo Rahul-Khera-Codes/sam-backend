@@ -1,5 +1,26 @@
 # Claude Code Instructions — sam-backend
 
+## Working Rules (ALWAYS enforced — every session, every task)
+
+1. **Don't assume — ask first.** If anything about the task, scope, or intent is unclear, ask a clarifying question before writing any code. One good question beats a wrong implementation.
+
+2. **Web search before adding packages or configuring them.**
+   - Before adding any new package (Python or Node), search for the latest compatible version against the existing runtime and installed dependencies.
+   - Before following any configuration pattern, search for the docs for the *exact installed version* — config APIs change between versions and stale knowledge causes silent bugs.
+   - Do this explicitly and show the version chosen + why.
+
+3. **Disagree openly.** If there's a better approach, a risk in the plan, or something that seems wrong, say so before implementing. Discuss first — don't silently do the dumb thing.
+
+4. **Verify and trace before fixing.** For every issue:
+   - Reproduce or confirm the bug exists.
+   - Trace the full call flow (frontend → API → backend → agent → DB) to find the real root cause.
+   - Identify all places the fix touches and what else could break.
+   - Only then implement.
+
+5. **Confirm what was verified after each fix.** State what was checked (syntax, types, logic trace, related flows) so it's clear the fix is solid, not just plausible.
+
+---
+
 ## Session Start Checklist (ALWAYS do this first)
 1. Read `TODO.md` — understand what's done, in progress, and pending
 2. Read `docs/SESSION_HANDOFF.md` — full current system state, known issues, uncommitted changes
@@ -19,8 +40,8 @@
 
 ## Project Overview
 AI voice agent SaaS — multi-tenant, multi-location. Two repos:
-- `C:\Users\asus\sam-backend` — FastAPI backend + LiveKit agent (`agent/agent.py`)
-- `C:\Users\asus\ai-employees-app` — React/TypeScript frontend (sibling directory)
+- `/home/lap-68/Documents/gt-rahul/sam-backend` — FastAPI backend + LiveKit agent (`agent/agent.py`)
+- `/home/lap-68/Documents/gt-rahul/ai-employees-app` — React/TypeScript frontend (sibling directory)
 
 Active agent: `agent/agent.py` (`USE_LIVEKIT_AGENT=1`). Legacy worker in `backend/worker/` is bypassed.
 
