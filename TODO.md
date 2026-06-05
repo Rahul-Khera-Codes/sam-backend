@@ -450,6 +450,20 @@ Phase 6 (v2 — SHIPPED session 38):
 - [ ] **Ops: Deploy to Hostinger VPS** — Sam confirmed urgent. Competitors in Canada. Buy VPS, subdomain, deploy both repos.
 - [ ] **BUG: Scheduler toggle overwrites custom greeting** — `handleAgentToggle` in Scheduler.tsx sends `config_value: {}` when syncing inbound_calling, wiping saved greeting. Fix: fetch existing config_value first.
 - [ ] **Merge `feature/available-slots-tools` → main** (sam-backend) — 28 tests passing, ready.
+
+### Client Issues (Session 45 — 2026-06-05)
+- [x] **Call Forwarding toggle** — AgentSettings now calls `bulkToggleForwardingContacts` on toggle. `ai-employees-app` main.
+- [x] **PDF document library** — Upload/list/delete docs in Business Settings → Documents tab. Agent `email_document` tool. Migration `20260522000000`. Backend `/documents` router. Supabase Storage bucket `business-documents`.
+- [x] **Booking: confirm phone + email spelling** — Agent now reads phone back digit-by-digit and email letter-by-letter before booking. `prompt_builder.py` step 6.
+- [x] **Agent farewell after booking** — Asks "anything else?" then "Thank you for calling and have a great day!" after any appointment action. `prompt_builder.py`.
+- [x] **No-Show label fix** — "Days before appointment to call" → "Days after appointment to call" in AgentSettings edit dialog. `ai-employees-app` main.
+- [x] **Working rules in CLAUDE.md** — Both repos. Ask first, web search packages, disagree openly, trace before fixing.
+- [x] **Team Management "Unknown User"** — Two fixes: (1) RLS migration `20260522000001` — business members can view each other's profiles. (2) Sam's missing profile row created directly (was added via Supabase admin dashboard, bypassing trigger).
+- [x] **Knowledge Base inline edit** — Pencil icon + inline textarea + Save/Cancel on each text entry. `BusinessSettings.tsx`.
+- [x] **Login text fix** — "Don't you have an account?" → "Don't have an account yet?"
+- [x] **Calendar date off-by-one** — `new Date(e.target.value)` → `parseISO(e.target.value)` in date inputs. Fixes UTC timezone shift for UTC-negative users (Canada).
+- [x] **Date picker click area** — Added `showPicker()` on click to all 4 date inputs. Picker now opens on any click, not just the icon.
+- [ ] **Team Management: unassigned appointments + block removal** — Awaiting client decision on Option A (block + warn) vs Option B (inline reassign). Drafted message in Google Doc.
 - [x] **Merge `feature/billing-section` → main** (both repos) ✅ 2026-05-14 — live
 - [x] **Merge `feature/appointment-pipeline` → main** (both repos) ✅ 2026-05-14 — live
 

@@ -1,4 +1,4 @@
-# Session Handoff — 2026-05-21 (Session 44)
+# Session Handoff — 2026-06-05 (Session 46)
 
 Read this at the start of every session. It captures the full current state so you can pick up immediately.
 
@@ -23,14 +23,14 @@ Always check `TODO.md` in sam-backend for full task status.
 
 ## Current Branch
 
-- **sam-backend:** `feature/available-slots-tools` — 10 commits ahead of main (session 43 + 44 work). Ready to merge.
-- **ai-employees-app:** `main` — all session 44 frontend work committed directly to main and live.
+- **sam-backend:** `feature/available-slots-tools` — ahead of main (sessions 43–46 work). Ready to merge.
+- **ai-employees-app:** `main` — all session 46 frontend work committed directly to main and live.
 
 **Pending: merge `feature/available-slots-tools` → main in sam-backend.**
 
 ---
 
-## System Status (2026-05-21)
+## System Status (2026-06-05)
 
 ### Working end-to-end ✅
 - Inbound SIP call → agent answers → books appointment → transcript + summary → emails → shows in UI
@@ -210,9 +210,77 @@ Key env files:
 
 ---
 
-## What Was Done This Session (Session 44, 2026-05-21)
+## What Was Done This Session (Session 46, 2026-06-05)
 
-**Sam client feedback session. 5 feature items implemented. Branch `feature/available-slots-tools` still pending merge.**
+**Client issue review session. 12 items fixed across both repos.**
+
+### sam-backend (`feature/available-slots-tools`)
+- **Booking confirmation spelling** — Agent reads phone back digit-by-digit and email letter-by-letter before calling `book_appointment`. `prompt_builder.py` step 6.
+- **Agent farewell** — After booking/reschedule/cancel, agent asks "Is there anything else I can help you with?" then closes with "Thank you for calling and have a great day!" `prompt_builder.py`.
+- **PDF document library** — `backend/app/routers/documents.py` + `schemas/documents.py`: `POST/GET/DELETE /documents`. Supabase Storage bucket `business-documents`. Agent `email_document` tool preloads docs at call start, sends PDF via Gmail attachment. `send_email_with_attachment()` in `email_service.py`. `_fetch_documents_for_location()` in `supabase_helpers.py`. `_format_documents()` in `prompt_builder.py`.
+- **Working rules in CLAUDE.md** — Ask first, web search packages, disagree openly, trace before fixing.
+
+### ai-employees-app (`main`)
+- **Call Forwarding toggle** — `AgentSettings.tsx`: toggle now calls `bulkToggleForwardingContacts`. Commit `d5a59b0` (earlier session, same branch).
+- **Team Management "Unknown User" RLS** — Migration `20260522000001_profiles_team_visibility.sql`: business members can now read each other's profiles. Sam's profile row created directly (was missing — admin-created user bypasses trigger).
+- **Knowledge Base inline edit** — Pencil icon + inline textarea + Save/Cancel per text entry. `BusinessSettings.tsx`.
+- **Login text** — "Don't you have an account?" → "Don't have an account yet?".
+- **Calendar date off-by-one** — `new Date(e.target.value)` → `parseISO()` in both date inputs. Fixes UTC-negative timezone shift (Canada).
+- **Date picker click area** — `showPicker()` on click on all 4 date inputs. Picker opens anywhere on field.
+- **No-Show Follow-Up label** — "Days before appointment to call" → "Days after appointment to call".
+- **CLAUDE.md created** — `ai-employees-app` now has its own CLAUDE.md with working rules.
+
+### Data fixes (direct DB)
+- `sam@aiemployeesinc.com` (`1bc53b7c...`) had no `profiles` row — created it with service role. Team Management now shows "sam" instead of "Unknown User".
+
+### Pending — awaiting client decision
+- **Team Management #18** — Unassigned appointments + block user removal until reassigned. Client choice: Option A (warn + block) or Option B (inline reassign). Drafted message in Google Doc.
+
+### Not bugs (confirmed working)
+- Profile Settings issues — working correctly on live site
+- Calendar date format difference — browser/OS locale rendering, not a code issue
+- Agent can't send PDF — client's Gmail not connected; documents DO exist in DB (`f82203e7` business)
+
+---
+
+## What Was Done This Session (Session 45, 2026-05-28)
+
+**Production fixes session. No code changes. Server `.env` fixes, Stripe webhook setup, Google OAuth debugging, docs written for Sam.**
+
+### Fix 1: Gmail OAuth redirect URI mismatch
+- Server `backend/.env` had `GMAIL_REDIRECT_URL` (wrong name) + `GMAIL_REDIRECT_URI=${GMAIL_REDIRECT_URI}` (self-reference, resolved to empty)
+- Fixed to: `GMAIL_REDIRECT_URI=https://portal.aiemployeesinc.com/integrations/gmail/callback`
+- `GOOGLE_REDIRECT_URI` was already correct on server
+- `BILLING_SUCCESS_URL` / `BILLING_CANCEL_URL` fixed from `api.aiemployeesinc.com` → `portal.aiemployeesinc.com`
+
+### Fix 2: Stripe webhook
+- Webhook endpoint was not configured in Stripe dashboard
+- Added `https://api.aiemployeesinc.com/billing/webhook` with all 5 required events:
+  `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.payment_succeeded`, `invoice.payment_failed`
+- Billing subscription now shows correctly after checkout ✅
+
+### Fix 3: Google OAuth app published
+- Sam's new Google Cloud OAuth app for integrations was in Testing mode
+- Told Sam to publish it: OAuth consent screen → Publish App → Confirm
+
+### Doc: Google OAuth setup guide for Sam
+- Written at `docs/GOOGLE_OAUTH_SETUP.md`
+- Covers: creating Google Cloud project, enabling Gmail + Calendar APIs, OAuth consent screen, credentials, redirect URIs, sending creds to Rahul
+
+### Diagnosed: Google login "Unable to exchange external code" error
+- Error: `Unable to exchange external code: 4/0A` on `/pending-invitations`
+- Root cause: Supabase Auth Google OAuth client in Google Cloud Console is missing `https://hdnwxonrwcnaodjxipll.supabase.co/auth/v1/callback` in authorized redirect URIs
+- Likely happened when Sam was setting up his new Google Cloud project today and accidentally modified the existing one
+- **Fix (Sam's action):** Add `https://hdnwxonrwcnaodjxipll.supabase.co/auth/v1/callback` to the OAuth client used by Supabase Auth in Google Cloud Console
+- Email delivery confirmed working (forgot password email received) — SMTP not the issue
+
+### Confirmed: Two separate Google OAuth setups
+- Supabase Auth Google provider: its own credentials, not ours — controls "Sign in with Google"
+- `backend/.env` GOOGLE_CLIENT_ID/SECRET: currently Rahul's, to be replaced by Sam's — controls Gmail + Calendar integrations
+
+---
+
+## What Was Done Previous Session (Session 44, 2026-05-21)
 
 ### Feature 1: Custom Greeting Message for Inbound Calling (sam-backend + ai-employees-app)
 
