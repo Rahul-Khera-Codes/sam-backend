@@ -451,6 +451,46 @@ Phase 6 (v2 — SHIPPED session 38):
 - [ ] **BUG: Scheduler toggle overwrites custom greeting** — `handleAgentToggle` in Scheduler.tsx sends `config_value: {}` when syncing inbound_calling, wiping saved greeting. Fix: fetch existing config_value first.
 - [ ] **Merge `feature/available-slots-tools` → main** (sam-backend) — 28 tests passing, ready.
 
+### From 2026-06-06 Client Call (Sam + Charles + Rahul) — Pre-Launch Fix List
+
+**Context:** Sam has 2 clients waiting to onboard. These fixes need to ship before public launch. Rahul committed to finishing today (2026-06-06) so Sam can test tomorrow.
+
+#### Must-Do Before Launch
+
+- [ ] **BUG: Services cannot be removed in appointment form** — When creating/editing an appointment manually in the Calendar, selected services have no X/delete button. If a wrong service is chosen, user is stuck. Need a remove button per selected service chip/tag.
+  - File: `ai-employees-app/src/pages/dashboard/Calendar.tsx` — service selection in new/edit appointment form
+
+- [ ] **BUG: PDF sending fails on production server** — Agent says "it looks like there was an issue sending the document" on the live server. Sam reconnected Gmail on 2026-06-05. Likely cause: `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` in `backend/.env` on server are stale/mismatched with the newly connected OAuth app. Also: appointment confirmation emails may have the same root cause.
+  - Action: SSH to server, verify env vars match the new Google Cloud OAuth client Sam created. Restart docker. Test PDF send on prod.
+
+- [ ] **BUG: Forgot password email flagged as spam** — Password reset email from `mail@aiemployeesinc.com` via Resend is marked as spam by Gmail. Root cause: minimal content, no branding. Fix: update Supabase Auth email template (Auth → Email Templates in Supabase dashboard) to include AI Employees logo, address, social links. Also verify SPF/DKIM/DMARC alignment.
+
+- [ ] **BUG: Double-booking not blocked by appointment duration** — Manual calendar booking ignores duration in conflict check. Staff booked at 11 AM for 60 min can still be booked at 11:15 AM. Overlap check must use: `new_start < existing_end AND new_end > existing_start` where `existing_end = existing_start + duration_minutes`.
+  - Affects both: manual Calendar booking AND AI agent `get_available_slots` / `book_appointment` validation
+  - Files: `ai-employees-app/src/pages/dashboard/Calendar.tsx` + `agent/supabase_helpers.py`
+
+- [ ] **BUG: Change password does not validate current password** — Profile Settings → Change Password accepts any value in "Current Password" field. Supabase `updatePassword()` only needs a valid session, not the old password. Fix: call `supabase.auth.signInWithPassword({email, password: currentPassword})` before `updatePassword` to re-verify; reject on failure.
+  - File: `ai-employees-app/src/pages/dashboard/AccountSettings.tsx` — `handleUpdatePassword()`
+  - **Security severity: HIGH** — logged-in user can change password without knowing current one
+
+- [ ] **BUG: App crashes when manually typing in date field** — Typing a partial date (e.g. "08") instead of using the picker crashes the app; requires page reload. Root cause: `parseISO("")` / `parseISO("invalid")` returns `Invalid Date` → `format()` throws → React crash. Fix: guard with `isValid()` from date-fns before setting state; fall back to current date if invalid.
+  - File: `ai-employees-app/src/pages/dashboard/Calendar.tsx` — both `onChange` handlers on date inputs (~lines 1213, 1355)
+
+- [ ] **UI: Remove "Pro Feature" badges from Agent Settings** — Remove badge from "Outbound Calling" and "Multi-Language Support". All features available to all users at launch.
+  - File: `ai-employees-app/src/pages/dashboard/customer-service/AgentSettings.tsx` — `featureSections` array, remove `badge`/`badgeVariant` on those two entries
+
+- [ ] **Team Management Option B: block removal until appointments reassigned** — Confirmed by Sam on call. On remove click: query upcoming appointments for that user, show warning dialog with list + dropdown to pick replacement. Bulk-reassign all to replacement, then remove.
+  - Files: `TeamManagement.tsx`, `useTeamManagement.ts`
+  - Query: `appointments WHERE assigned_user_id = userId AND appointment_date >= today AND status != 'cancelled'`
+
+#### Deferred (not blocking launch)
+
+- [ ] **Manual appointment confirmation button** — "Send Confirmation" button on Calendar to manually trigger SMS + email to client after manual booking. Sam prefers manual (not auto) to avoid spamming test appointments. Add post-launch.
+
+- [ ] **Agent toggle-off behavior** — When agent toggled off, it answers, greets, then goes silent. Options discussed: (1) remove toggle, use custom schedules only, (2) forward to business number, (3) take voicemail message. Sam will research — likely remove the toggle. Defer post-launch.
+
+- [ ] **Platform super admin portal** — Internal portal to manage all businesses/users. Auth user deletion requires direct Supabase dashboard access. Deferred by Sam — not blocking launch.
+
 ### Client Issues (Session 45 — 2026-06-05)
 - [x] **Call Forwarding toggle** — AgentSettings now calls `bulkToggleForwardingContacts` on toggle. `ai-employees-app` main.
 - [x] **PDF document library** — Upload/list/delete docs in Business Settings → Documents tab. Agent `email_document` tool. Migration `20260522000000`. Backend `/documents` router. Supabase Storage bucket `business-documents`.
