@@ -730,12 +730,20 @@ class Assistant(Agent):
 
         from gmail_helpers import _gmail_get_valid_token
 
-        # Find the document
+        # Find the document — exact match first, then substring, then word-level
         doc = self._doc_by_name.get(document_name.lower())
         if not doc:
-            # Fuzzy match
+            req_lower = document_name.lower()
             for k, v in self._doc_by_name.items():
-                if document_name.lower() in k or k in document_name.lower():
+                if req_lower in k or k in req_lower:
+                    doc = v
+                    break
+        if not doc:
+            # Word-level match: any significant word in request matches any word in doc name
+            req_words = {w for w in document_name.lower().split() if len(w) > 3}
+            for k, v in self._doc_by_name.items():
+                doc_words = set(k.split())
+                if req_words & doc_words:
                     doc = v
                     break
         if not doc:

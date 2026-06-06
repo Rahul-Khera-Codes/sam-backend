@@ -361,7 +361,7 @@ def _format_documents(docs: list[dict]) -> str:
     return (
         "## Available Documents\n"
         "The following documents can be emailed to customers on request. "
-        "Use the email_document tool to send them.\n"
+        "When calling email_document, use the EXACT document name as listed below — do not paraphrase or invent a name.\n"
         + "\n".join(lines)
         + "\n\n"
     )
