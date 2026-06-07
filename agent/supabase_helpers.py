@@ -277,11 +277,16 @@ def _compute_available_slots(
                 dur_min = int(dur_digits) if dur_digits else slot_minutes
             except (ValueError, AttributeError):
                 dur_min = slot_minutes
-            try:
-                s = datetime.strptime(at[:5], "%H:%M")
-                busy.append((s, s + timedelta(minutes=dur_min)))
-            except ValueError:
-                pass
+            # Parse both 24h ("16:00") and 12h ("9:00 AM") formats
+            appt_dt = None
+            for fmt in ("%H:%M", "%I:%M %p", "%I:%M%p"):
+                try:
+                    appt_dt = datetime.strptime(at.strip(), fmt)
+                    break
+                except ValueError:
+                    pass
+            if appt_dt:
+                busy.append((appt_dt, appt_dt + timedelta(minutes=dur_min)))
 
     for ov in overrides:
         if ov.get("is_unavailable") and ov.get("start_time") and ov.get("end_time"):
