@@ -1,4 +1,4 @@
-# Session Handoff — 2026-06-05 (Session 46)
+# Session Handoff — 2026-06-08 (Session 47)
 
 Read this at the start of every session. It captures the full current state so you can pick up immediately.
 
@@ -23,10 +23,8 @@ Always check `TODO.md` in sam-backend for full task status.
 
 ## Current Branch
 
-- **sam-backend:** `feature/available-slots-tools` — ahead of main (sessions 43–46 work). Ready to merge.
-- **ai-employees-app:** `main` — all session 46 frontend work committed directly to main and live.
-
-**Pending: merge `feature/available-slots-tools` → main in sam-backend.**
+- **sam-backend:** `main` — all work committed to main. No pending feature branches.
+- **ai-employees-app:** `main` — all frontend work committed directly to main and live.
 
 ---
 
@@ -207,6 +205,32 @@ Key env files:
 - `20260428000001` — custom_roles + role_page_permissions tables + seed *(already applied per session 38 — verify)*
 - `20260428000002` — custom_roles policy fixes + index *(already applied per session 38 — verify)*
 - `20260428000003` — user_roles.custom_role_id + location_invitations.custom_role_id *(already applied per session 38 — verify)*
+
+---
+
+## What Was Done This Session (Session 47, 2026-06-08)
+
+**Gmail document sending broken — diagnosed and fixed. OAuth credential hardening across all Google integrations.**
+
+### Root cause: agent had wrong Google OAuth credentials
+- `agent/.env.local` still had the OLD Google Cloud project (`902808969705`) and a truncated `GOOGLE_CLIENT_SECRET=GOCSPX-` (cut off at the dash)
+- Backend was updated to the new project (`870924190939`) when Sam switched OAuth apps
+- Every Gmail token refresh attempt by the agent failed with `401 invalid_client` — silently, with no log
+- Fix: updated `agent/.env.local` GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET to match `backend/.env`
+
+### Fixes committed (4 commits, all on main)
+1. **`agent/gmail_helpers.py`** — added `logger.warning` on token refresh failure so the exact Google error (`invalid_client`, `token_revoked`, etc.) is now visible in logs
+2. **`agent/gcal_helpers.py`** — same silent-failure fix; also fixed null `token_expiry` being skipped (was returning stale token instead of refreshing)
+3. **`agent/gmail_helpers.py`** — null `token_expiry` now treated as expired → triggers refresh (matches backend pattern)
+4. **`backend/email_service.py` + `backend/google_calendar_service.py`** — log response body before `raise_for_status()` so the Google error detail isn't lost
+
+### Key lesson
+When switching Google Cloud projects: update BOTH `backend/.env` AND `agent/.env.local` — they are separate credential stores. The backend creates OAuth tokens; the agent refreshes them. Mismatched credentials = silent hourly failure.
+
+### Current state
+- Document sending working ✅ (confirmed by Sam)
+- All 4 Google OAuth token refresh paths now log exact error on failure
+- `agent/.env.local` GOOGLE_CLIENT_ID/SECRET = matches backend (not committed — env file is gitignored)
 
 ---
 
