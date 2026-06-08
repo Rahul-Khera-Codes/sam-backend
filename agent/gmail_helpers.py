@@ -57,6 +57,10 @@ async def _gmail_get_valid_token(
                         "grant_type": "refresh_token",
                     })
                     if resp.status_code != 200:
+                        logger.warning(
+                            "Gmail token refresh failed for business %s loc %s: %s %s",
+                            business_id, location_id, resp.status_code, resp.text[:300],
+                        )
                         return None, ""
                     refreshed = resp.json()
                 new_expiry = datetime.now(timezone.utc) + timedelta(seconds=refreshed.get("expires_in", 3600) - 60)
