@@ -1712,15 +1712,13 @@ async def voice_agent(ctx: agents.JobContext):
         return
 
     if agent_inactive:
-        # Fetch business phone + name for forwarding / unavailability message
+        # Fetch business phone for forwarding / unavailability message
         _biz_phone = ""
-        _biz_name = ""
         if business_id and supabase:
             try:
-                _biz_row = supabase.table("businesses").select("phone,name").eq("id", business_id).limit(1).execute()
+                _biz_row = supabase.table("businesses").select("phone").eq("id", business_id).limit(1).execute()
                 if _biz_row.data:
                     _biz_phone = _biz_row.data[0].get("phone") or ""
-                    _biz_name = _biz_row.data[0].get("name") or ""
             except Exception:
                 pass
 
@@ -1728,14 +1726,9 @@ async def voice_agent(ctx: agents.JobContext):
 
         # If this is a real SIP call and the business has a phone number, forward it
         if is_sip_call and _biz_phone_e164:
-            _caller_name = _biz_name or "us"
-            await session.generate_reply(
-                instructions=(
-                    f"Immediately say: 'Thank you for calling {_caller_name}. "
-                    f"Please hold while we connect you.' Then do not say anything else."
-                )
-            )
-            await asyncio.sleep(2)
+            # Silent transfer — skip LLM reply (it fights the system prompt).
+            # Brief pause lets the SIP media channel stabilise before the REFER.
+            await asyncio.sleep(1)
             try:
                 from livekit.api import LiveKitAPI
                 from livekit.protocol.sip import TransferSIPParticipantRequest
