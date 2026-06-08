@@ -1712,15 +1712,66 @@ async def voice_agent(ctx: agents.JobContext):
         return
 
     if agent_inactive:
-        # Fetch business phone to include in the unavailability message
+        # Fetch business phone + name for forwarding / unavailability message
         _biz_phone = ""
+        _biz_name = ""
         if business_id and supabase:
             try:
                 _biz_row = supabase.table("businesses").select("phone,name").eq("id", business_id).limit(1).execute()
                 if _biz_row.data:
                     _biz_phone = _biz_row.data[0].get("phone") or ""
+                    _biz_name = _biz_row.data[0].get("name") or ""
             except Exception:
                 pass
+
+        _biz_phone_e164 = _normalize_phone_e164(_biz_phone) if _biz_phone else ""
+
+        # If this is a real SIP call and the business has a phone number, forward it
+        if is_sip_call and _biz_phone_e164:
+            _caller_name = _biz_name or "us"
+            await session.generate_reply(
+                instructions=(
+                    f"Immediately say: 'Thank you for calling {_caller_name}. "
+                    f"Please hold while we connect you.' Then do not say anything else."
+                )
+            )
+            await asyncio.sleep(2)
+            try:
+                from livekit.api import LiveKitAPI
+                from livekit.protocol.sip import TransferSIPParticipantRequest
+                _lk_api = LiveKitAPI(
+                    url=os.getenv("LIVEKIT_URL"),
+                    api_key=os.getenv("LIVEKIT_API_KEY"),
+                    api_secret=os.getenv("LIVEKIT_API_SECRET"),
+                )
+                try:
+                    await _lk_api.sip.transfer_sip_participant(
+                        TransferSIPParticipantRequest(
+                            room_name=ctx.room.name,
+                            participant_identity=participant.identity,
+                            transfer_to=f"tel:{_biz_phone_e164}",
+                        )
+                    )
+                    logger.info(
+                        "Agent inactive — forwarded SIP call to business phone %s",
+                        _biz_phone_e164,
+                    )
+                finally:
+                    await _lk_api.aclose()
+            except Exception as e:
+                logger.warning("Agent inactive — SIP REFER to %s failed: %s", _biz_phone_e164, e)
+                # Fall back to unavailability message with the phone number
+                await session.generate_reply(
+                    instructions=(
+                        f"Immediately tell the caller: 'Our AI assistant is currently unavailable. "
+                        f"You can reach us directly at {_biz_phone}.' Then do not say anything else."
+                    )
+                )
+                await asyncio.sleep(5)
+            await ctx.room.disconnect()
+            return
+
+        # Non-SIP call or no business phone — play unavailability message
         _phone_msg = f" You can reach us directly at {_biz_phone}." if _biz_phone else " Please call back later or contact us directly."
         await session.generate_reply(
             instructions=(
