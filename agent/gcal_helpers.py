@@ -28,6 +28,10 @@ async def _gcal_refresh_token(refresh_token: str) -> dict | None:
             })
             if r.status_code == 200:
                 return r.json()
+            logger.warning(
+                "Google Calendar token refresh failed: %s %s",
+                r.status_code, r.text[:300],
+            )
     except Exception as e:
         logger.warning("Google token refresh failed: %s", e)
     return None

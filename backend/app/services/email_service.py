@@ -79,6 +79,8 @@ async def refresh_access_token(
                 "grant_type": "refresh_token",
             },
         )
+        if not resp.is_success:
+            logger.error("Gmail token refresh failed %s: %s", resp.status_code, resp.text[:300])
         resp.raise_for_status()
         return resp.json()
 
