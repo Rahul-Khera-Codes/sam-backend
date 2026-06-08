@@ -208,7 +208,7 @@ Key env files:
 
 ---
 
-## What Was Done This Session (Session 47, 2026-06-08)
+## What Was Done This Session (Session 47, 2026-06-08 — updated)
 
 **Gmail document sending broken — diagnosed and fixed. OAuth credential hardening across all Google integrations.**
 
@@ -227,10 +227,18 @@ Key env files:
 ### Key lesson
 When switching Google Cloud projects: update BOTH `backend/.env` AND `agent/.env.local` — they are separate credential stores. The backend creates OAuth tokens; the agent refreshes them. Mismatched credentials = silent hourly failure.
 
+### Also done this session: Agent OFF → forward call to business phone
+- When agent is OFF via Quick Agent Control + real SIP call + business phone set in Company Info:
+  agent fires a silent SIP REFER (1s pause → REFER to `businesses.phone`) — confirmed working
+- Non-SIP calls / no business phone: falls back to unavailability message
+- Spec: `docs/superpowers/specs/2026-06-08-agent-off-call-forwarding.md`
+- Commits: `f6ac2b1` (initial), `8a90d98` (silent transfer fix — removed LLM hold message that fought system prompt)
+
 ### Current state
 - Document sending working ✅ (confirmed by Sam)
 - All 4 Google OAuth token refresh paths now log exact error on failure
 - `agent/.env.local` GOOGLE_CLIENT_ID/SECRET = matches backend (not committed — env file is gitignored)
+- Agent OFF call forwarding working ✅ (confirmed live test)
 
 ---
 
