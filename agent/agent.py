@@ -1712,10 +1712,20 @@ async def voice_agent(ctx: agents.JobContext):
         return
 
     if agent_inactive:
+        # Fetch business phone to include in the unavailability message
+        _biz_phone = ""
+        if business_id and supabase:
+            try:
+                _biz_row = supabase.table("businesses").select("phone,name").eq("id", business_id).limit(1).execute()
+                if _biz_row.data:
+                    _biz_phone = _biz_row.data[0].get("phone") or ""
+            except Exception:
+                pass
+        _phone_msg = f" You can reach us directly at {_biz_phone}." if _biz_phone else " Please call back later or contact us directly."
         await session.generate_reply(
             instructions=(
-                "Immediately tell the caller: 'Thank you for calling. Our AI assistant is "
-                "currently unavailable. Please call back later or contact us directly.' "
+                f"Immediately tell the caller: 'Thank you for calling. Our AI assistant is "
+                f"currently unavailable.{_phone_msg}' "
                 "Then do not say anything else."
             )
         )
