@@ -55,9 +55,11 @@ async def _gcal_get_valid_token(supabase, staff_id: str) -> str | None:
                 expiry = datetime.fromisoformat(str(expiry_raw).replace("Z", "+00:00"))
             except ValueError:
                 expiry = datetime.now(timezone.utc)
-            if expiry.tzinfo is None:
-                expiry = expiry.replace(tzinfo=timezone.utc)
-            if datetime.now(timezone.utc) >= expiry:
+        else:
+            expiry = datetime.now(timezone.utc)  # null expiry → treat as expired
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) >= expiry:
                 refreshed = await _gcal_refresh_token(row["refresh_token"])
                 if not refreshed:
                     return None

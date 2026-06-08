@@ -41,9 +41,11 @@ async def _gmail_get_valid_token(
                 expiry = datetime.fromisoformat(str(expiry_raw).replace("Z", "+00:00"))
             except ValueError:
                 expiry = datetime.now(timezone.utc)
-            if expiry.tzinfo is None:
-                expiry = expiry.replace(tzinfo=timezone.utc)
-            if datetime.now(timezone.utc) >= expiry:
+        else:
+            expiry = datetime.now(timezone.utc)  # null expiry → treat as expired
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) >= expiry:
                 import httpx
                 client_id = os.getenv("GOOGLE_CLIENT_ID", "")
                 client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
