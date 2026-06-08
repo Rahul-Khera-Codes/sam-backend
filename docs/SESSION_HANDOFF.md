@@ -28,7 +28,7 @@ Always check `TODO.md` in sam-backend for full task status.
 
 ---
 
-## System Status (2026-06-05)
+## System Status (2026-06-08)
 
 ### Working end-to-end ✅
 - Inbound SIP call → agent answers → books appointment → transcript + summary → emails → shows in UI
@@ -58,9 +58,15 @@ Always check `TODO.md` in sam-backend for full task status.
 - **TC-ROLES-002** — `togglePermission` now receives `roleId` explicitly from `selectedRole.id`; null-safety guard added
 - **TC-TEAM-006** — AlertDialog confirmation before Remove User; `isRemoving` guard; Escape-key protection
 
+### Also Working ✅ (added session 47)
+- **Gmail document sending** — agent `email_document` tool sends PDF from Supabase Storage via Gmail attachment. Fixed OAuth credential mismatch in `agent/.env.local`.
+- **Agent OFF → SIP REFER to business phone** — when Quick Agent Control is OFF + real SIP call + `businesses.phone` set: silent 1s pause then SIP REFER to business phone. Falls back to unavailability message for web calls / no phone set.
+- **Google OAuth token refresh logging** — all 4 paths (agent gmail/gcal, backend email/calendar) now log exact Google error on failure. Null `token_expiry` treated as expired in agent helpers.
+
 ### Blocked / Waiting
 - **SMS 2FA** — blocked on client A2P 10DLC campaign approval
 - **Resend DNS** — domain verification failed on Hostinger; email verification emails broken; re-add DKIM/SPF/DMARC in Hostinger DNS zone
+- **Delete old test accounts** — Sam asked to delete his old test emails from Supabase auth so he can re-register. Pending: Sam to send list of emails to delete.
 
 ---
 
@@ -208,37 +214,46 @@ Key env files:
 
 ---
 
-## What Was Done This Session (Session 47, 2026-06-08 — updated)
+## What Was Done This Session (Session 47, 2026-06-08)
 
-**Gmail document sending broken — diagnosed and fixed. OAuth credential hardening across all Google integrations.**
+**5 bug fixes, 1 new feature, 1 feature deferred. Sam's pre-launch Q&A doc reviewed.**
 
-### Root cause: agent had wrong Google OAuth credentials
-- `agent/.env.local` still had the OLD Google Cloud project (`902808969705`) and a truncated `GOOGLE_CLIENT_SECRET=GOCSPX-` (cut off at the dash)
-- Backend was updated to the new project (`870924190939`) when Sam switched OAuth apps
-- Every Gmail token refresh attempt by the agent failed with `401 invalid_client` — silently, with no log
+### 1. Gmail document sending — diagnosed and fixed
+- Root cause: `agent/.env.local` had old Google Cloud project ID (`902808969705`) + truncated secret (`GOCSPX-` only). Backend was already on new project (`870924190939`). Every token refresh failed with `401 invalid_client` — silently.
 - Fix: updated `agent/.env.local` GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET to match `backend/.env`
+- Confirmed working by Sam ✅
 
-### Fixes committed (4 commits, all on main)
-1. **`agent/gmail_helpers.py`** — added `logger.warning` on token refresh failure so the exact Google error (`invalid_client`, `token_revoked`, etc.) is now visible in logs
-2. **`agent/gcal_helpers.py`** — same silent-failure fix; also fixed null `token_expiry` being skipped (was returning stale token instead of refreshing)
-3. **`agent/gmail_helpers.py`** — null `token_expiry` now treated as expired → triggers refresh (matches backend pattern)
-4. **`backend/email_service.py` + `backend/google_calendar_service.py`** — log response body before `raise_for_status()` so the Google error detail isn't lost
+### 2. Google OAuth token refresh hardening (all 4 paths)
+- `agent/gmail_helpers.py` — log exact Google error on refresh failure (was silent `return None`)
+- `agent/gcal_helpers.py` — same fix; null `token_expiry` now treated as expired (was skipped → stale token returned)
+- `agent/gmail_helpers.py` — null `token_expiry` treated as expired → triggers refresh
+- `backend/email_service.py` + `backend/google_calendar_service.py` — log response body before `raise_for_status()` so Google error detail isn't lost in exception
+- **Key rule:** when switching Google Cloud projects, update BOTH `backend/.env` AND `agent/.env.local` — backend creates tokens, agent refreshes them, mismatched = silent hourly failure
 
-### Key lesson
-When switching Google Cloud projects: update BOTH `backend/.env` AND `agent/.env.local` — they are separate credential stores. The backend creates OAuth tokens; the agent refreshes them. Mismatched credentials = silent hourly failure.
-
-### Also done this session: Agent OFF → forward call to business phone
-- When agent is OFF via Quick Agent Control + real SIP call + business phone set in Company Info:
-  agent fires a silent SIP REFER (1s pause → REFER to `businesses.phone`) — confirmed working
-- Non-SIP calls / no business phone: falls back to unavailability message
+### 3. Agent OFF → silent SIP REFER to business phone (new feature, Sam Q5)
+- When Quick Agent Control is OFF + real SIP call + `businesses.phone` set: 1s pause → `TransferSIPParticipantRequest` to business phone → caller forwarded
+- Non-SIP (web test) or no business phone: falls back to unavailability message
+- Initially tried LLM hold message — LLM ignored instructions, said normal greeting. Fixed to silent transfer.
 - Spec: `docs/superpowers/specs/2026-06-08-agent-off-call-forwarding.md`
-- Commits: `f6ac2b1` (initial), `8a90d98` (silent transfer fix — removed LLM hold message that fought system prompt)
+- Confirmed working live ✅
 
-### Current state
-- Document sending working ✅ (confirmed by Sam)
-- All 4 Google OAuth token refresh paths now log exact error on failure
-- `agent/.env.local` GOOGLE_CLIENT_ID/SECRET = matches backend (not committed — env file is gitignored)
-- Agent OFF call forwarding working ✅ (confirmed live test)
+### 4. Sam Q6 — background office noise (deferred)
+- Request: play ambient office noise during calls
+- Decision: deferred to v2 — STT could pick up noise → false speech triggers → agent interrupts itself
+- Logged in `docs/CLIENT_COMMS_LOG.md`
+
+### 5. Sam Q2 (Developer 2) — delete old test accounts
+- Sam wants old email accounts deleted from Supabase auth so he can re-register with same emails
+- Pending: Sam to send list of email addresses → delete via Supabase admin dashboard
+- Logged in `docs/CLIENT_COMMS_LOG.md`
+
+### Commits this session
+- `15d1d67` — log Gmail token refresh errors
+- `d7942db` — log Google refresh errors across all 4 OAuth helpers
+- `ae0ee08` — treat null token_expiry as expired in agent helpers
+- `f6ac2b1` — feat: forward SIP calls to business phone when agent OFF
+- `8a90d98` — fix: silent REFER (remove LLM hold message)
+- `0613cdf`, `ad85abf`, `919e030` — docs/handoff updates
 
 ---
 
