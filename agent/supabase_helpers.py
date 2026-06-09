@@ -297,10 +297,20 @@ def _compute_available_slots(
             except ValueError:
                 pass
 
+    # For today, exclude slots that start at or before the current time
+    now_cutoff: datetime | None = None
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if target_date == today_str:
+        _now = datetime.now(timezone.utc)
+        now_cutoff = datetime(1900, 1, 1, _now.hour, _now.minute)
+
     slots: list[str] = []
     current = work_start
     while current + timedelta(minutes=slot_minutes) <= work_end:
         slot_end = current + timedelta(minutes=slot_minutes)
+        if now_cutoff is not None and current <= now_cutoff:
+            current += timedelta(minutes=slot_minutes)
+            continue
         if not any(current < b_end and slot_end > b_start for b_start, b_end in busy):
             slots.append(current.strftime("%H:%M"))
         current += timedelta(minutes=slot_minutes)
@@ -378,6 +388,16 @@ def _validate_booking_datetime(
             appt_time = datetime.strptime(time[:5], "%H:%M").time()
         except ValueError:
             return f"Invalid time format '{time}'. Please use HH:MM (24-hour)."
+
+        # Reject same-day bookings at or before the current time
+        if appt_date == today:
+            current_time = datetime.now(timezone.utc).time()
+            if appt_time <= current_time:
+                return (
+                    f"Cannot book at {_fmt_time_12h(time[:5])} — "
+                    f"that time has already passed today. "
+                    f"Please choose a time after {_fmt_time_12h(current_time.strftime('%H:%M'))}."
+                )
 
     day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
     day_name = day_names[appt_date.weekday()]
