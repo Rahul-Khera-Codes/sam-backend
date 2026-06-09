@@ -752,3 +752,90 @@ body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSy
                 logger.warning("Staff cancel notify failed %s: %s", resp.status_code, resp.text[:200])
     except Exception as e:
         logger.warning("Failed to send staff cancellation notification: %s", e)
+
+
+async def _gmail_send_document_notification(
+    supabase,
+    business_id: str,
+    location_id: str | None,
+    business_name: str,
+    customer_name: str,
+    customer_email: str,
+    customer_phone: str,
+    document_name: str,
+    sent_at: str,
+) -> None:
+    """Notify the business Gmail (self-email) when a document is sent to a customer (best-effort)."""
+    import base64
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    import httpx
+
+    access_token, sender_email = await _gmail_get_valid_token(supabase, business_id, location_id)
+    if not access_token:
+        return
+
+    subject = f"Document Sent: {document_name} → {customer_name or customer_email}"
+
+    plain = (
+        f"Hi {business_name},\n\n"
+        f"A document was sent to a customer during a call.\n\n"
+        f"Document:  {document_name}\n"
+        f"Customer:  {customer_name or '—'}\n"
+        f"Email:     {customer_email}\n"
+        f"Phone:     {customer_phone or '—'}\n"
+        f"Sent at:   {sent_at}\n\n"
+        f"You can follow up with this customer directly.\n\n"
+        f"— AI Employees"
+    )
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"/>
+<style>
+body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;}}
+.w{{max-width:560px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.08);}}
+.h{{background:#18181b;padding:28px 32px;}}.h h1{{margin:0;color:#fff;font-size:20px;}}.h p{{margin:4px 0 0;color:#a1a1aa;font-size:13px;}}
+.badge{{display:inline-block;background:#3b82f6;color:#fff;font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;margin-top:12px;}}
+.b{{padding:28px 32px;}}.g{{font-size:16px;color:#18181b;margin:0 0 20px;}}
+.card{{background:#f9f9f9;border:1px solid #e4e4e7;border-radius:8px;padding:20px 24px;margin-bottom:24px;}}
+.row{{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #e4e4e7;}}
+.row:last-child{{border-bottom:none;}}.lbl{{color:#71717a;font-size:13px;}}.val{{color:#18181b;font-size:13px;font-weight:500;}}
+.foot{{padding:20px 32px;background:#f4f4f5;font-size:12px;color:#71717a;text-align:center;}}
+</style></head>
+<body><div class="w">
+<div class="h"><h1>{business_name}</h1><p>Document Sent Notification</p><span class="badge">DOCUMENT SENT</span></div>
+<div class="b">
+<p class="g">A document was sent to a customer during a call.</p>
+<div class="card">
+<div class="row"><span class="lbl">Document</span><span class="val">{document_name}</span></div>
+<div class="row"><span class="lbl">Customer</span><span class="val">{customer_name or '—'}</span></div>
+<div class="row"><span class="lbl">Email</span><span class="val">{customer_email}</span></div>
+<div class="row"><span class="lbl">Phone</span><span class="val">{customer_phone or '—'}</span></div>
+<div class="row"><span class="lbl">Sent at</span><span class="val">{sent_at}</span></div>
+</div>
+<p style="color:#71717a;font-size:13px;margin:0">You can follow up with this customer directly.</p>
+</div>
+<div class="foot">&copy; {business_name} &bull; AI Employees automated notification</div>
+</div></body></html>"""
+
+    msg = MIMEMultipart("alternative")
+    msg["From"] = f"{business_name} <{sender_email}>"
+    msg["To"] = sender_email
+    msg["Subject"] = subject
+    msg.attach(MIMEText(plain, "plain"))
+    msg.attach(MIMEText(html, "html"))
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+
+    try:
+        async with httpx.AsyncClient() as http:
+            resp = await http.post(
+                GMAIL_SEND_URL,
+                headers={"Authorization": f"Bearer {access_token}"},
+                json={"raw": raw},
+            )
+            if resp.status_code in (200, 201):
+                logger.info("Document notification sent to business %s", sender_email)
+            else:
+                logger.warning("Document notification failed %s: %s", resp.status_code, resp.text[:200])
+    except Exception as e:
+        logger.warning("Failed to send document notification: %s", e)

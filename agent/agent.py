@@ -821,6 +821,32 @@ class Assistant(Agent):
                 )
                 if resp.status_code in (200, 201):
                     logger.info("Document '%s' emailed to %s", doc["name"], customer_email)
+                    # Notify the business (self-email) — best-effort
+                    try:
+                        from gmail_helpers import _gmail_send_document_notification
+                        from datetime import datetime as _dt, timezone as _tz
+                        # Fetch caller phone from the calls record
+                        _caller_phone = ""
+                        if self._call_id and self._supabase:
+                            try:
+                                _cr = self._supabase.table("calls").select("caller_phone").eq("id", self._call_id).limit(1).execute()
+                                if _cr.data:
+                                    _caller_phone = _cr.data[0].get("caller_phone") or ""
+                            except Exception:
+                                pass
+                        await _gmail_send_document_notification(
+                            supabase=self._supabase,
+                            business_id=self._business_id,
+                            location_id=self._location_id,
+                            business_name=self._business_name or "",
+                            customer_name="",
+                            customer_email=customer_email,
+                            customer_phone=_caller_phone,
+                            document_name=doc["name"],
+                            sent_at=_dt.now(_tz.utc).strftime("%Y-%m-%d %H:%M UTC"),
+                        )
+                    except Exception as _e:
+                        logger.warning("Document business notification failed: %s", _e)
                     return f"Done! I've emailed '{doc['name']}' to {customer_email}."
                 else:
                     logger.error("Gmail doc send failed %s: %s", resp.status_code, resp.text[:200])
