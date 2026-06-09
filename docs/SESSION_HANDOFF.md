@@ -216,7 +216,7 @@ Key env files:
 
 ## What Was Done This Session (Session 47, 2026-06-08)
 
-**5 bug fixes, 1 new feature, 1 feature deferred. Sam's pre-launch Q&A doc reviewed.**
+**Full day session — 8 items shipped, 1 deferred, full DB wiped clean for fresh start.**
 
 ### 1. Gmail document sending — diagnosed and fixed
 - Root cause: `agent/.env.local` had old Google Cloud project ID (`902808969705`) + truncated secret (`GOCSPX-` only). Backend was already on new project (`870924190939`). Every token refresh failed with `401 invalid_client` — silently.
@@ -242,18 +242,45 @@ Key env files:
 - Decision: deferred to v2 — STT could pick up noise → false speech triggers → agent interrupts itself
 - Logged in `docs/CLIENT_COMMS_LOG.md`
 
-### 5. Sam Q2 (Developer 2) — delete old test accounts
-- Sam wants old email accounts deleted from Supabase auth so he can re-register with same emails
-- Pending: Sam to send list of email addresses → delete via Supabase admin dashboard
-- Logged in `docs/CLIENT_COMMS_LOG.md`
+### 5. Database wiped clean
+- Sam confirmed full cleanup — all table data + all auth users deleted
+- Scripts: `scripts/cleanup_tables.sql` (run in Supabase SQL Editor) + `scripts/cleanup_database.py` (auth users)
+- Database is now empty and ready for fresh businesses/users
 
-### Commits this session
-- `15d1d67` — log Gmail token refresh errors
-- `d7942db` — log Google refresh errors across all 4 OAuth helpers
-- `ae0ee08` — treat null token_expiry as expired in agent helpers
-- `f6ac2b1` — feat: forward SIP calls to business phone when agent OFF
-- `8a90d98` — fix: silent REFER (remove LLM hold message)
-- `0613cdf`, `ad85abf`, `919e030` — docs/handoff updates
+### 6. Team Management Option B — reassign before remove
+- Clicking Remove on a team member now checks for upcoming appointments first
+- If none → existing confirm dialog (unchanged)
+- If any → reassign dialog: table with one row per appointment, per-row replacement dropdown
+- Validates replacement availability (overlap check) before enabling "Reassign & Remove"
+- Conflict shown in red with exact clash time; green when clear
+- Files: `ai-employees-app/src/pages/dashboard/TeamManagement.tsx`
+- Spec: `docs/superpowers/specs/2026-06-08-team-management-option-b.md`
+- Fixed bugs: wrong `.not()` syntax `("cancelled","no_show")` → `(cancelled,no_show)`, error swallowed, `duration_minutes` column doesn't exist
+
+### 7. Same-day past time restriction
+- Agent no longer suggests or accepts appointment times that have already passed today
+- `_compute_available_slots` — skips slots at/before current UTC time when date is today
+- `_validate_booking_datetime` — rejects same-day times ≤ current time with clear error message
+- `prompt_builder.py` DEFAULT_INSTRUCTIONS — explicit rule added to reinforce at LLM level
+- Spec: `docs/superpowers/specs/2026-06-08-same-day-past-time-restriction.md`
+
+### 8. Business notification when agent sends PDF
+- After emailing PDF to customer, business Gmail receives self-notification with: customer email, phone, document name, timestamp
+- New `_gmail_send_document_notification()` in `agent/gmail_helpers.py`
+- Called best-effort from `email_document` tool in `agent/agent.py` after successful send
+- Spec: `docs/superpowers/specs/2026-06-08-document-send-business-notification.md`
+
+### Deferred
+- Sam Q6: background office noise — deferred to v2 (STT interference risk)
+
+### All commits this session
+- `15d1d67`, `d7942db`, `ae0ee08` — Google OAuth hardening
+- `f6ac2b1`, `8a90d98` — agent OFF call forwarding
+- `c4c7b16`, `8b0c482`, `82c2f6c` — Team Management Option B
+- `f9d53d7` — same-day past time restriction
+- `ee366fe` — document business notification
+- `3a458bb` — cleanup scripts
+- `92296e5`, `caa6dcb`, `f44ba1a` — specs/docs
 
 ---
 
