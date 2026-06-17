@@ -5,6 +5,27 @@ Most recent entry at top.
 
 ---
 
+## 2026-06-16 — Chat messages (Executive Assistant idea + PDF bug)
+
+**From:** Sam Maisuria
+**Context:** Sam answered the Heygen clarification question + reported a new bug.
+
+**Executive Assistant — new product idea**
+- Sam wants a LIVE AI avatar (not pre-recorded video) — separate from the Voice Agent
+- Concept: a browser-based conversational AI assistant that connects to services (Gmail, Google Calendar, etc.) and takes actions via voice commands
+- Example: "Send an email to...", "Check my calendar for today's appointments"
+- This is a **major new product scope** — not a feature, a second AI product line
+- Status: ⏳ Logged for future scoping — do NOT build until properly scoped and agreed
+
+**Bug: PDF send — "Email is not configured correctly"**
+- Status: ⚠️ NOT VERIFIED FIXED
+- Sam getting this error when agent tries to send a PDF
+- Most likely cause: Gmail not connected for the new business account (info@canadastopdjs.com) set up after the database wipe
+- Could also be a code bug — needs investigation
+- Developer replied "I will fix all of them till tomorrow" (Jun 16, 11:02 PM) — not confirmed fixed
+
+---
+
 ## 2026-06-15 — Email thread (Google OAuth + Calendar timezone bug)
 
 **From:** Sam Maisuria
