@@ -791,7 +791,7 @@ class Assistant(Agent):
         from email import encoders
         from constants import GMAIL_SEND_URL
 
-        subject = f"Document from {self._business_name}: {doc['name']}"
+        subject = doc["name"]
         html_body = (
             f"<p>Hello,</p>"
             f"<p>Please find attached the document you requested: <strong>{doc['name']}</strong>.</p>"
