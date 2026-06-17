@@ -5,6 +5,26 @@ Most recent entry at top.
 
 ---
 
+## 2026-06-15 — Email thread (Google OAuth + Calendar timezone bug)
+
+**From:** Sam Maisuria
+**Context:** Following up on Google OAuth verification response + new bug found during testing.
+
+**Google OAuth reply sent ✅**
+- Sam sent the detailed reply to Google on Jun 15 using our drafted response
+- Test credentials provided: info@canadastopdjs.com / Sanjeev123#@!
+- Testing instructions included for both gmail.send and calendar.events
+- Waiting on Google's response
+
+**Bug: Google Calendar events created at wrong timezone**
+- Status: ⚠️ NOT YET FIXED
+- Sam booked 9 AM MDT appointment → Google Calendar showed 3 AM (6 hours off)
+- Root cause: appointment time is stored as local time but calendar event is created treating it as UTC
+- Edmonton = MDT = UTC-6 → 9 AM local written as 9 AM UTC → displays as 3 AM locally
+- Fix needed in `backend/app/services/google_calendar_service.py` — event datetime must include correct timezone
+
+---
+
 ## 2026-06-08 — Pre-Launch Q&A (written doc)
 
 **From:** Sam Maisuria
