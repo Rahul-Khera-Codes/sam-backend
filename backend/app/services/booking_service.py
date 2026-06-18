@@ -226,7 +226,7 @@ def _get_business(business_id: str) -> dict:
     try:
         r = (
             supabase_admin.table("businesses")
-            .select("name, phone, email")
+            .select("name, phone, email, timezone")
             .eq("id", business_id)
             .limit(1)
             .execute()
@@ -294,6 +294,7 @@ async def create_appointment(
     biz = _get_business(req.business_id)
     biz_name = biz.get("name") or "Your Business"
     biz_phone = biz.get("phone") or ""
+    biz_tz = biz.get("timezone") or "America/Toronto"
     location_name = _get_location_name(req.location_id)
     duration_min = req.duration or 60
 
@@ -307,6 +308,7 @@ async def create_appointment(
                 client_id=settings.google_client_id,
                 client_secret=settings.google_client_secret,
                 supabase=supabase_admin,
+                timezone=biz_tz,
             )
             if staff_event_id:
                 gcal_updates["google_event_id"] = staff_event_id
@@ -327,6 +329,7 @@ async def create_appointment(
                     client_id=settings.google_client_id,
                     client_secret=settings.google_client_secret,
                     supabase=supabase_admin,
+                    timezone=biz_tz,
                 )
                 if admin_event_id:
                     gcal_updates["google_event_id_admin"] = admin_event_id
@@ -483,6 +486,7 @@ async def update_appointment(
     biz = _get_business(req.business_id)
     biz_name = biz.get("name") or "Your Business"
     biz_phone = biz.get("phone") or ""
+    biz_tz = biz.get("timezone") or "America/Toronto"
     location_id = appt.get("location_id")
     location_name = _get_location_name(location_id)
     duration_min = int(str(updated_appt.get("duration") or "60").split()[0])
@@ -498,6 +502,7 @@ async def update_appointment(
                     client_id=settings.google_client_id,
                     client_secret=settings.google_client_secret,
                     supabase=supabase_admin,
+                    timezone=biz_tz,
                 )
             except Exception:
                 pass
@@ -514,6 +519,7 @@ async def update_appointment(
                     client_id=settings.google_client_id,
                     client_secret=settings.google_client_secret,
                     supabase=supabase_admin,
+                    timezone=biz_tz,
                 )
             except Exception:
                 pass

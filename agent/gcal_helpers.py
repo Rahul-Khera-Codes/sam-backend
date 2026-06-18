@@ -76,7 +76,7 @@ async def _gcal_get_valid_token(supabase, staff_id: str) -> str | None:
         return None
 
 
-def _gcal_build_event(appointment: dict) -> dict:
+def _gcal_build_event(appointment: dict, timezone: str = "UTC") -> dict:
     """Build a Google Calendar event body from an appointment dict."""
     date = appointment.get("appointment_date", "")
     time_str = appointment.get("appointment_time", "00:00")
@@ -99,12 +99,12 @@ def _gcal_build_event(appointment: dict) -> dict:
     return {
         "summary": f"{appointment.get('client_name', 'Client')} — {appointment.get('service', 'Appointment')}",
         "description": "\n".join(description_parts),
-        "start": {"dateTime": f"{date}T{time_str}:00", "timeZone": "UTC"},
-        "end": {"dateTime": f"{date}T{end_hour:02d}:{end_minute:02d}:00", "timeZone": "UTC"},
+        "start": {"dateTime": f"{date}T{time_str}:00", "timeZone": timezone},
+        "end": {"dateTime": f"{date}T{end_hour:02d}:{end_minute:02d}:00", "timeZone": timezone},
     }
 
 
-async def _gcal_create_event(supabase, staff_id: str, appointment: dict) -> str | None:
+async def _gcal_create_event(supabase, staff_id: str, appointment: dict, timezone: str = "UTC") -> str | None:
     """Create a Google Calendar event. Returns google_event_id or None."""
     access_token = await _gcal_get_valid_token(supabase, staff_id)
     if not access_token:
@@ -115,7 +115,7 @@ async def _gcal_create_event(supabase, staff_id: str, appointment: dict) -> str 
             r = await http.post(
                 f"{GOOGLE_CALENDAR_BASE}/calendars/primary/events",
                 headers={"Authorization": f"Bearer {access_token}"},
-                json=_gcal_build_event(appointment),
+                json=_gcal_build_event(appointment, timezone=timezone),
             )
             if r.status_code == 200:
                 return r.json().get("id")
@@ -124,7 +124,7 @@ async def _gcal_create_event(supabase, staff_id: str, appointment: dict) -> str 
     return None
 
 
-async def _gcal_update_event(supabase, staff_id: str, google_event_id: str, appointment: dict) -> bool:
+async def _gcal_update_event(supabase, staff_id: str, google_event_id: str, appointment: dict, timezone: str = "UTC") -> bool:
     """Update an existing Google Calendar event."""
     access_token = await _gcal_get_valid_token(supabase, staff_id)
     if not access_token:
@@ -135,7 +135,7 @@ async def _gcal_update_event(supabase, staff_id: str, google_event_id: str, appo
             r = await http.patch(
                 f"{GOOGLE_CALENDAR_BASE}/calendars/primary/events/{google_event_id}",
                 headers={"Authorization": f"Bearer {access_token}"},
-                json=_gcal_build_event(appointment),
+                json=_gcal_build_event(appointment, timezone=timezone),
             )
             return r.status_code == 200
     except Exception as e:
