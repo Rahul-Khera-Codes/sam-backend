@@ -1,4 +1,4 @@
-# Session Handoff — 2026-06-08 (Session 47)
+# Session Handoff — 2026-06-18 (Session 48)
 
 Read this at the start of every session. It captures the full current state so you can pick up immediately.
 
@@ -211,6 +211,46 @@ Key env files:
 - `20260428000001` — custom_roles + role_page_permissions tables + seed *(already applied per session 38 — verify)*
 - `20260428000002` — custom_roles policy fixes + index *(already applied per session 38 — verify)*
 - `20260428000003` — user_roles.custom_role_id + location_invitations.custom_role_id *(already applied per session 38 — verify)*
+
+---
+
+## What Was Done This Session (Session 48, 2026-06-17/18)
+
+**Production debugging + PDF send verification. Real client businesses now live.**
+
+### 1. PDF send failure diagnosed and verified working
+- Sam connected `info@canadastopdjs.com` Gmail for Divinity DJs
+- Diagnosed: token was expired + UI showing stale "Connect" state on fetch error
+- Ran full pipeline replication script: Gmail token → signed URL → PDF download → Gmail send ✅
+- Ran 3-round refresh stress test (forced expiry each round): 3/3 passed, refresh takes ~410ms
+- PDF email subject line fixed: was `"Document from Divinity DJs: Divinity Packages Prices"` → now just `"Divinity Packages Prices"`
+
+### 2. IntegrationsTab Gmail status fix
+- Bug: `fetchGmailStatus()` error handler silently kept UI at `connected: false` initial state
+- Fix: changed comment to clarify intent — don't override known state on fetch errors
+- `ai-employees-app` commit: `110d909`
+
+### 3. Google OAuth reply sent to Google
+- Sam sent the detailed reply on Jun 15 using our draft
+- Test credentials: `info@canadastopdjs.com` / Sanjeev123#@!
+- Waiting on Google's response
+
+### 4. Google Calendar timezone bug — logged, not yet fixed
+- Sam booked 9 AM MDT → Google Calendar showed 3 AM (6 hours off)
+- Root cause: event datetime created as UTC instead of business local time
+- Fix needed: `backend/app/services/google_calendar_service.py`
+
+### 5. Real clients now in DB
+After database wipe, Sam set up fresh businesses:
+- **Divinity DJs** (`9ae4cf35`) — Gmail: `info@canadastopdjs.com`, 1 document
+- **Mirage Banquet** (`5b8e077d`) — Gmail: `info@mirageedmonton.ca` (expired), 7 documents
+- **AI Employees inc.** (`e45c5ffd`) — Sam's account
+
+### Commits this session
+- `b8584a5` — fix PDF email subject line
+- `f326e65`, `af904e5` — client comms log updates
+- `94e02fb` — Google OAuth verification guide
+- `110d909` (ai-employees-app) — IntegrationsTab fetch error fix
 
 ---
 
