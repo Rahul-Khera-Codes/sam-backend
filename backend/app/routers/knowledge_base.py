@@ -3,7 +3,9 @@ Knowledge Base router — website scraping endpoint.
 POST /knowledge-base/scrape: crawl a business website via Jina AI Reader,
 extract 8 structured sections via GPT-4o, write to knowledge_base table.
 """
+import ipaddress
 import logging
+import socket
 from typing import Optional
 import httpx
 import defusedxml.ElementTree as ET
@@ -69,6 +71,48 @@ class ScrapeResponse(BaseModel):
     skipped_empty: int
 
 
+def _validate_url_is_public(url: str) -> None:
+    """
+    Resolve the hostname in *url* and raise HTTP 400 if it maps to any
+    private / reserved IP range (SSRF prevention).
+
+    Only call this for URLs we fetch **directly** with httpx.
+    Jina AI Reader URLs (r.jina.ai/…) do not need this check — we fetch
+    the Jina service, not the target host directly.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        raise HTTPException(status_code=400, detail="Invalid URL: could not parse hostname.")
+
+    try:
+        results = socket.getaddrinfo(hostname, None)
+    except socket.gaierror as exc:
+        raise HTTPException(status_code=400, detail=f"URL hostname could not be resolved: {exc}")
+
+    for family, _type, _proto, _canonname, sockaddr in results:
+        raw_ip = sockaddr[0]
+        try:
+            addr = ipaddress.ip_address(raw_ip)
+        except ValueError:
+            continue
+
+        if (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_reserved
+            or addr.is_multicast
+            or addr.is_unspecified
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="URL resolves to a private/internal address",
+            )
+
+
 def _same_domain(base: str, href: str) -> bool:
     """Check if href is on the same domain as base."""
     try:
@@ -122,7 +166,8 @@ async def _get_page_urls(base_url: str, client: httpx.AsyncClient) -> list[str]:
     # Try sitemap
     sitemap_url = urljoin(base_url, "/sitemap.xml")
     try:
-        r = await client.get(sitemap_url, timeout=10.0)
+        _validate_url_is_public(sitemap_url)
+        r = await client.get(sitemap_url, timeout=10.0, follow_redirects=False)
         if r.status_code == 200 and "<?xml" in r.text[:100]:
             try:
                 root = ET.fromstring(r.text)
@@ -135,6 +180,11 @@ async def _get_page_urls(base_url: str, client: httpx.AsyncClient) -> list[str]:
                 for loc in locs:
                     loc_url = (loc.text or "").strip()
                     if loc_url and urlparse(loc_url).netloc == base_host:
+                        try:
+                            _validate_url_is_public(loc_url)
+                        except HTTPException:
+                            logger.warning("Skipping sitemap URL that resolves to private address: %s", loc_url)
+                            continue
                         if loc_url not in urls:
                             urls.append(loc_url)
                 logger.info("Sitemap found %d URLs", len(urls))
@@ -189,6 +239,9 @@ async def scrape_website(
     # If custom URL provided, save it to businesses.website
     if req.url:
         supabase_admin.table("businesses").update({"website": url}).eq("id", req.business_id).execute()
+
+    # Validate the URL resolves to a public address before any network fetch (SSRF prevention)
+    _validate_url_is_public(url)
 
     # Crawl
     async with httpx.AsyncClient(follow_redirects=True) as client:
