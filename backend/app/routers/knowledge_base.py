@@ -236,12 +236,12 @@ async def scrape_website(
     if not url.startswith("http"):
         url = "https://" + url
 
+    # Validate the URL resolves to a public address before any network fetch (SSRF prevention)
+    _validate_url_is_public(url)
+
     # If custom URL provided, save it to businesses.website
     if req.url:
         supabase_admin.table("businesses").update({"website": url}).eq("id", req.business_id).execute()
-
-    # Validate the URL resolves to a public address before any network fetch (SSRF prevention)
-    _validate_url_is_public(url)
 
     # Crawl
     async with httpx.AsyncClient(follow_redirects=True) as client:
