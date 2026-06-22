@@ -1,4 +1,4 @@
-# Session Handoff — 2026-06-18 (Session 48)
+# Session Handoff — 2026-06-20 (Session 49)
 
 Read this at the start of every session. It captures the full current state so you can pick up immediately.
 
@@ -17,11 +17,11 @@ Two repos:
 - **Backend + Agent:** `/home/lap-68/Documents/gt-rahul/sam-backend`
 - **Frontend:** `/home/lap-68/Documents/gt-rahul/ai-employees-app`
 
-Both repos are on `main`, in sync with origin. No pending feature branches.
+Both repos are on `feature/google-calendar-timezone`, deployed to VPS. Ready to merge to main.
 
 ---
 
-## System Status (2026-06-18)
+## System Status (2026-06-20)
 
 ### Core — Working end-to-end ✅
 - Inbound SIP call → agent answers → books appointment → transcript + summary → emails → shows in UI
@@ -35,7 +35,7 @@ Both repos are on `main`, in sync with origin. No pending feature branches.
 - Call Forwarding contacts + rules — full CRUD
 - Custom Schedules — create/edit/toggle/delete; agent applies active schedule
 - Gmail OAuth per location — confirmation + cancellation + reschedule emails to customer + staff
-- Google Calendar per staff — creates/updates/deletes events on booking/reschedule/cancel
+- Google Calendar per staff — creates/updates/deletes events on booking/reschedule/cancel (**now uses business timezone**)
 - SMS — confirmation on booking, missed call text-back (Twilio)
 - Phone Numbers page — search/provision/release US + Canadian numbers
 - Team Management — invite by email, role assignment, location assignment, Option B (reassign before remove)
@@ -47,8 +47,8 @@ Both repos are on `main`, in sync with origin. No pending feature branches.
 - Agent OFF → silent SIP REFER to business phone
 - Google OAuth token refresh logging — all 4 paths log exact error on failure
 
-### Known Bug — NOT YET FIXED ⚠️
-- **Google Calendar timezone** — events created in UTC instead of business local time. Edmonton (UTC-6): 9 AM shows as 3 AM in Google Calendar. Spec written: `docs/superpowers/specs/2026-06-18-business-timezone.md`. Fix: add `timezone` column to `businesses` table, use in calendar event creation.
+### Known Bugs — None ✅
+All previously tracked bugs resolved this session.
 
 ### Blocked / Waiting
 - **Google OAuth app verification** — reply sent to Google Jun 15 with test credentials. Waiting on Google's response.
@@ -147,7 +147,9 @@ Key env files:
 
 ## Pending Manual Steps
 
-- [ ] **Google Calendar timezone fix** — implement spec `docs/superpowers/specs/2026-06-18-business-timezone.md`
+- [ ] **Merge `feature/google-calendar-timezone` → main** on both repos (both deployed to VPS, ready to merge)
+- [ ] **Deploy scheduler fix to VPS** — `git pull && docker compose restart sam-backend` (fixes hourly 400 errors in logs)
+- [ ] **Sam sets business timezone** — Business Settings → Company Info → Business Timezone dropdown → Save
 - [ ] **Forgot password email spam** — improve Supabase Auth email template + Resend DKIM alignment
 - [ ] **Deploy edge functions** — `supabase functions deploy invite-location-admin accept-invitation`
 - [ ] **Resend DNS on Hostinger** — re-add DKIM/SPF/DMARC for `aiemployeesinc.com`
@@ -165,9 +167,83 @@ Key env files:
 - `20260522000000` — business_documents table ✅
 
 ## Pending Migrations (not yet applied)
-- `YYYYMMDD_businesses_timezone.sql` — add `timezone TEXT DEFAULT 'America/Toronto'` to businesses (part of calendar timezone fix — not yet created)
+- `20260618000000_businesses_timezone.sql` — add `timezone TEXT DEFAULT 'America/Toronto'` to businesses. File exists in `ai-employees-app/supabase/migrations/`. Run `supabase db push`.
 
 ---
+
+## What Was Done This Session (Session 50, 2026-06-22)
+
+**Website KB scraper complete (both backend + frontend). Two security fixes. Executive Agent plan written.**
+
+### 1. Website KB Scraper — backend security fixes
+- `knowledge_base.py`: replaced direct sitemap fetch with Jina AI Reader fetch — eliminates SSRF DNS-rebinding TOCTOU window
+- Removed `defusedxml` dependency (no longer parsing XML directly)
+- Added `location_id` ownership validation against `business_id` before delete/insert — prevents IDOR cross-business writes
+- Commit: `52ab917` on `feature/google-calendar-timezone` (sam-backend)
+
+### 2. Website KB Scraper — frontend (Task 2)
+- `ai-employees-app/src/lib/voiceAgentApi.ts`: added `scrapeWebsiteToKB()` function (POST /knowledge-base/scrape)
+- `ai-employees-app/src/pages/dashboard/BusinessSettings.tsx`: "Generate from Website" card added above file upload in KB tab
+  - If `business.website` set → button scrapes immediately, shows URL as hint
+  - If not set → opens dialog to enter URL (saves to Company Info + scrapes)
+  - Loading spinner + "Generating…" text + "20–30 seconds" note
+  - On success: toast with entry count + KB list auto-refreshes
+  - Imports: Globe + Loader2 icons added
+- Commit: `efdb03d` on `feature/google-calendar-timezone` (ai-employees-app)
+- Tested by user: scraping works, data saves and renders ✅
+
+### 3. Sales Agent — put on HOLD
+- Sam confirmed 2026-06-22: legal concerns about outbound cold-calling
+- Meeting lawyer this week — do NOT build until Sam gives green light
+- Sam sent 7 UI mockup screenshots (saved locally at `/home/lap-68/Downloads/Screen 1-7.png`)
+- Mockups show: Dashboard, Lead Generator (CSV upload + built-in lead DB search), Call Lists, Scheduler, Recordings + Transcripts, Call Results, Settings (call goal, objection handling, forwarding)
+- Much more detailed than originally scoped — includes built-in lead database, scheduler with sessions, objection handling config
+
+### 4. Executive Agent — UI layout confirmed, plan locked, ready to build
+- Sam confirmed: "Continue to build the Executive Agent"
+- UI layout confirmed by Rahul — full plan: `docs/superpowers/plans/2026-06-22-executive-agent-plan.md`
+- Layout: split view — left (agent chat interface like Dex sample) + right (collapsible transcript)
+- Left: agent name + animated status header, agent responses in main area, input bar (text + mic toggle + send)
+- Right: full back-and-forth transcript, toggle via ⓘ icon in header
+- Mic: text-only by default; clicking mic enables voice in same LiveKit session via `setMicrophoneEnabled()` — no reconnect
+- States: idle → listening (🎤 pulse) → thinking (··· dots) → speaking (▌▌▌ waveform bars)
+- State driven by LiveKit data messages from agent (not inferred from audio)
+- Also working on a Marketing Agent design (will share separately)
+
+---
+
+## What Was Done This Session (Session 49, 2026-06-20)
+
+**Google Calendar timezone fix shipped, production debugging, Executive Agent doc.**
+
+### 1. Google Calendar timezone fix — fully implemented and deployed
+- Root cause: `timeZone: "UTC"` hardcoded in both `google_calendar_service.py` and `gcal_helpers.py`
+- DB migration `20260618000000_businesses_timezone.sql` — adds `timezone TEXT NOT NULL DEFAULT 'America/Toronto'` to `businesses` table (applied)
+- Backend: `_appointment_to_event`, `create_calendar_event`, `update_calendar_event` accept `timezone` param; `booking_service._get_business` now fetches timezone
+- Agent: `gcal_helpers` all three build/create/update functions accept timezone; `agent.py` loads `business_timezone` from `_fetch_business`, stores as `self._business_timezone`, passes everywhere
+- `.ics` attachments: `ics_helpers.generate_ics` uses `DTSTART;TZID=` format when timezone provided (anchors calendar invite in email clients)
+- `gmail_helpers`: both confirmation and reschedule send functions accept and pass `business_timezone`
+- Frontend: timezone dropdown in Business Settings → Company Info (13 options: full Canada + common US); pre-filled from browser on first load; saves with company info
+- Supabase TS types regenerated; all `as any` casts removed
+- Both repos committed on `feature/google-calendar-timezone`, deployed to VPS
+- **Verified working**: 9 PM Eastern appointment shows as 6:30 AM in India (GMT+05:30) — correct UTC conversion
+
+### 2. Scheduler location_id=None bug fixed (not yet deployed to VPS)
+- `scheduler_service.py`: all 3 scheduler functions (reminder, reschedule, no-show) were passing Python `None` as string `"None"` to Supabase UUID queries → hourly 400 errors in logs
+- Fix: `if not location_id: continue` guard added to all three loops
+- Committed to feature branch — needs `git pull` + `docker compose restart sam-backend` on VPS
+
+### 3. Production debugging — Gmail/Calendar false alarm
+- Sam reported Gmail and Calendar not working on deployed app
+- Verified: all tokens expired but refresh_token valid (confirmed by direct Google API test → got fresh access token)
+- Root cause: tokens were idle 2 days with no activity, auto-refreshed fine on first real use
+- VPS credentials (`backend/.env` and `agent/.env.local`) both verified correct
+- Sam tested and confirmed everything working: PDF send, booking, confirmation email all ✅
+
+### 4. Executive Agent overview doc
+- Created `docs/executive-agent-overview.md` and HTML artifact for Sam
+- Covers: live AI avatar character (3 states), how it works, capabilities, Voice Agent vs Executive Agent comparison, billing integration (add-on model, Stripe line item), two-phase build plan
+- Sam asked for hour estimate — pending meeting
 
 ## What Was Done This Session (Session 48, 2026-06-17/18)
 

@@ -1,0 +1,843 @@
+"""
+Executive Agent — browser-based AI assistant for business owners.
+
+Registered as "executive-agent" with the LiveKit AgentServer.
+Supports both text input (data channel) and voice (WebRTC mic).
+Signals state to the frontend via room data messages.
+
+Tools available:
+  Gmail  — list_emails, read_email, draft_reply (preview → approve → send)
+  Calendar — get_schedule, find_free_slots, create_calendar_event (preview → approve)
+  Appointments — list_appointments, reschedule_appointment, cancel_appointment
+"""
+
+import asyncio
+import json
+import logging
+import os
+from datetime import datetime, timedelta, timezone
+
+from dotenv import load_dotenv
+from livekit import agents, rtc
+from livekit.agents import AgentServer, AgentSession, Agent, function_tool, RunContext, room_io
+from livekit.plugins import openai
+
+import httpx as _httpx
+from constants import GOOGLE_TOKEN_URL, GOOGLE_CALENDAR_BASE, GMAIL_SEND_URL
+from gmail_helpers import _gmail_get_valid_token
+from gcal_helpers import _gcal_get_valid_token, _gcal_refresh_token
+from supabase_helpers import _get_supabase, _fetch_business
+
+load_dotenv(".env.local")
+logger = logging.getLogger("executive-agent")
+
+EXECUTIVE_AGENT_NAME = "executive-agent"
+
+# ── State helpers ─────────────────────────────────────────────────────────────
+
+async def _publish(room, payload: dict) -> None:
+    try:
+        await room.local_participant.publish_data(
+            json.dumps(payload).encode(),
+            reliable=True,
+        )
+    except Exception as e:
+        logger.warning("publish_data failed: %s", e)
+
+
+async def _set_state(room, state: str) -> None:
+    await _publish(room, {"state": state})
+
+
+# ── Google helpers ────────────────────────────────────────────────────────────
+
+async def _gcal_list_events(supabase, business_id: str, time_min: str, time_max: str) -> list[dict]:
+    """Return calendar events for the business owner (superadmin) in [time_min, time_max]."""
+    try:
+        from gcal_helpers import _gcal_get_superadmin_id
+        admin_id = _gcal_get_superadmin_id(supabase, business_id)
+        if not admin_id:
+            return []
+        token = await _gcal_get_valid_token(supabase, admin_id)
+        if not token:
+            return []
+        url = f"{GOOGLE_CALENDAR_BASE}/calendars/primary/events"
+        async with _httpx.AsyncClient(timeout=15) as http:
+            r = await http.get(url, headers={"Authorization": f"Bearer {token}"}, params={
+                "timeMin": time_min,
+                "timeMax": time_max,
+                "singleEvents": "true",
+                "orderBy": "startTime",
+                "maxResults": "20",
+            })
+            if r.status_code == 200:
+                return r.json().get("items", [])
+            logger.warning("gcal list events failed: %s %s", r.status_code, r.text[:200])
+    except Exception as e:
+        logger.warning("_gcal_list_events error: %s", e)
+    return []
+
+
+async def _gmail_list_messages(supabase, business_id: str, location_id: str | None, query: str = "", max_results: int = 10) -> list[dict]:
+    try:
+        token, _ = await _gmail_get_valid_token(supabase, business_id, location_id)
+        if not token:
+            return []
+        async with _httpx.AsyncClient(timeout=15) as http:
+            r = await http.get(
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"q": query or "in:inbox is:unread", "maxResults": str(max_results)},
+            )
+            if r.status_code != 200:
+                return []
+            msgs = r.json().get("messages", [])
+            return msgs
+    except Exception as e:
+        logger.warning("_gmail_list_messages error: %s", e)
+    return []
+
+
+async def _gmail_get_message(supabase, business_id: str, location_id: str | None, message_id: str) -> dict:
+    try:
+        token, _ = await _gmail_get_valid_token(supabase, business_id, location_id)
+        if not token:
+            return {}
+        async with _httpx.AsyncClient(timeout=15) as http:
+            r = await http.get(
+                f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"format": "metadata", "metadataHeaders": ["From", "Subject", "Date"]},
+            )
+            if r.status_code == 200:
+                return r.json()
+    except Exception as e:
+        logger.warning("_gmail_get_message error: %s", e)
+    return {}
+
+
+async def _gmail_get_message_full(supabase, business_id: str, location_id: str | None, message_id: str) -> dict:
+    """Get full message content (headers + plain text body)."""
+    try:
+        token, _ = await _gmail_get_valid_token(supabase, business_id, location_id)
+        if not token:
+            return {}
+        async with _httpx.AsyncClient(timeout=15) as http:
+            r = await http.get(
+                f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}",
+                headers={"Authorization": f"Bearer {token}"},
+                params={"format": "full"},
+            )
+            if r.status_code == 200:
+                return r.json()
+    except Exception as e:
+        logger.warning("_gmail_get_message_full error: %s", e)
+    return {}
+
+
+def _extract_email_body(msg: dict) -> str:
+    """Extract plain text body from a Gmail message dict."""
+    import base64
+
+    def _decode(data: str) -> str:
+        try:
+            return base64.urlsafe_b64decode(data + "==").decode("utf-8", errors="replace")
+        except Exception:
+            return ""
+
+    payload = msg.get("payload", {})
+    mime = payload.get("mimeType", "")
+    if mime == "text/plain":
+        data = payload.get("body", {}).get("data", "")
+        return _decode(data)
+    parts = payload.get("parts", [])
+    for part in parts:
+        if part.get("mimeType") == "text/plain":
+            data = part.get("body", {}).get("data", "")
+            return _decode(data)
+    # nested multipart
+    for part in parts:
+        for inner in part.get("parts", []):
+            if inner.get("mimeType") == "text/plain":
+                data = inner.get("body", {}).get("data", "")
+                return _decode(data)
+    return "(No plain-text body)"
+
+
+def _header_val(msg: dict, name: str) -> str:
+    headers = msg.get("payload", {}).get("headers", [])
+    for h in headers:
+        if h.get("name", "").lower() == name.lower():
+            return h.get("value", "")
+    return ""
+
+
+# ── Executive Agent class ─────────────────────────────────────────────────────
+
+EXECUTIVE_INSTRUCTIONS = """
+You are the Executive Assistant for {business_name}. You help the business owner manage their day-to-day digital operations.
+
+You can:
+- Read, summarise, and draft replies to emails (Gmail)
+- Check the owner's calendar, find free slots, and create events
+- View, reschedule, or cancel customer appointments in the scheduling system
+
+Guidelines:
+- Always confirm before sending emails or creating calendar events — draft first, show a preview, then wait for "yes, go ahead"
+- Be concise and business-like. The owner is busy.
+- When listing emails or events, give a brief summary of each — don't paste full content unless asked
+- If asked to do something you can't do (e.g. complex automations), say so clearly
+- Today is {today}
+
+{context}
+"""
+
+
+class ExecutiveAssistant(Agent):
+    def __init__(
+        self,
+        instructions: str,
+        supabase,
+        business_id: str,
+        user_id: str,
+        business_name: str,
+        business_timezone: str,
+        room,
+        location_id: str | None = None,
+    ) -> None:
+        super().__init__(instructions=instructions)
+        self._supabase = supabase
+        self._business_id = business_id
+        self._user_id = user_id
+        self._business_name = business_name
+        self._business_timezone = business_timezone
+        self._room = room
+        self._location_id = location_id
+        # Pending preview state (awaiting owner approval)
+        self._pending_draft: dict | None = None
+
+    async def _send_preview(self, preview: dict) -> None:
+        """Publish a preview item to the frontend."""
+        self._pending_draft = preview
+        await _publish(self._room, {"type": "preview", **preview})
+
+    async def _clear_preview(self) -> None:
+        self._pending_draft = None
+        await _publish(self._room, {"type": "preview_cleared"})
+
+    # ── Gmail tools ───────────────────────────────────────────────────────────
+
+    @function_tool()
+    async def list_emails(
+        self,
+        context: RunContext,
+        query: str = "in:inbox is:unread",
+        max_results: int = 8,
+    ) -> str:
+        """
+        List recent emails matching a Gmail search query.
+        Default: unread inbox. Returns id, sender, subject, date for each.
+        """
+        await _set_state(self._room, "thinking")
+        msgs = await _gmail_list_messages(
+            self._supabase, self._business_id, self._location_id, query, max_results
+        )
+        if not msgs:
+            return "No emails found matching that query, or Gmail is not connected."
+
+        results = []
+        for m in msgs[:max_results]:
+            meta = await _gmail_get_message(self._supabase, self._business_id, self._location_id, m["id"])
+            if not meta:
+                continue
+            subject = _header_val(meta, "subject") or "(no subject)"
+            sender = _header_val(meta, "from") or "unknown"
+            date = _header_val(meta, "date") or ""
+            results.append(f"ID:{m['id'][:12]} | From: {sender} | {subject} | {date}")
+
+        return "\n".join(results) or "Could not fetch email details."
+
+    @function_tool()
+    async def read_email(
+        self,
+        context: RunContext,
+        email_id: str,
+    ) -> str:
+        """
+        Read the full content of an email by its ID (from list_emails).
+        Returns sender, subject, date, and plain-text body.
+        """
+        await _set_state(self._room, "thinking")
+        msg = await _gmail_get_message_full(
+            self._supabase, self._business_id, self._location_id, email_id
+        )
+        if not msg:
+            return f"Could not fetch email {email_id}. Check the ID is correct."
+        subject = _header_val(msg, "subject") or "(no subject)"
+        sender = _header_val(msg, "from") or "unknown"
+        date = _header_val(msg, "date") or ""
+        body = _extract_email_body(msg)[:2000]
+        return f"From: {sender}\nSubject: {subject}\nDate: {date}\n\n{body}"
+
+    @function_tool()
+    async def draft_reply(
+        self,
+        context: RunContext,
+        email_id: str,
+        reply_body: str,
+        subject: str = "",
+    ) -> str:
+        """
+        Draft a reply to an email. Shows a preview to the owner for approval.
+        Do NOT call send_email_draft until the owner confirms.
+        """
+        await _set_state(self._room, "thinking")
+        msg = await _gmail_get_message(
+            self._supabase, self._business_id, self._location_id, email_id
+        )
+        sender = _header_val(msg, "from") or "unknown"
+        orig_subject = _header_val(msg, "subject") or "(no subject)"
+        reply_subject = subject or (f"Re: {orig_subject}" if not orig_subject.startswith("Re:") else orig_subject)
+
+        preview = {
+            "kind": "email_draft",
+            "emailId": email_id,
+            "to": sender,
+            "subject": reply_subject,
+            "body": reply_body,
+        }
+        await self._send_preview(preview)
+        return (
+            f"I've prepared a reply to {sender} with subject '{reply_subject}'. "
+            "The draft is shown on screen. Say 'yes, go ahead' to send it, or tell me what to change."
+        )
+
+    @function_tool()
+    async def send_email_draft(
+        self,
+        context: RunContext,
+        email_id: str,
+        to: str,
+        subject: str,
+        body: str,
+    ) -> str:
+        """
+        Send the approved email draft. Only call this after the owner explicitly confirms.
+        """
+        import base64
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+
+        await _set_state(self._room, "thinking")
+        token, sender_email = await _gmail_get_valid_token(
+            self._supabase, self._business_id, self._location_id
+        )
+        if not token:
+            return "Cannot send — Gmail is not connected for this business."
+
+        msg = MIMEMultipart("alternative")
+        msg["From"] = f"{self._business_name} <{sender_email}>"
+        msg["To"] = to
+        msg["Subject"] = subject
+        msg.attach(MIMEText(body, "plain"))
+
+        # Thread the reply if we have a message ID
+        if email_id:
+            meta = await _gmail_get_message(self._supabase, self._business_id, self._location_id, email_id)
+            thread_id = meta.get("threadId")
+            if thread_id:
+                msg["In-Reply-To"] = email_id
+                msg["References"] = email_id
+
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+        try:
+            async with _httpx.AsyncClient(timeout=20) as http:
+                r = await http.post(
+                    GMAIL_SEND_URL,
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={"raw": raw},
+                )
+                if r.status_code in (200, 201):
+                    await self._clear_preview()
+                    return f"Email sent to {to}."
+                logger.error("Gmail send failed %s: %s", r.status_code, r.text[:200])
+                return "Failed to send the email. Please try again."
+        except Exception as e:
+            logger.error("send_email_draft error: %s", e)
+            return "An error occurred while sending the email."
+
+    # ── Calendar tools ────────────────────────────────────────────────────────
+
+    @function_tool()
+    async def get_schedule(
+        self,
+        context: RunContext,
+        date: str = "",
+        days_ahead: int = 1,
+    ) -> str:
+        """
+        List calendar events for the owner. date: YYYY-MM-DD (default today).
+        days_ahead: how many days to show (default 1).
+        """
+        await _set_state(self._room, "thinking")
+        from datetime import timezone as _tz
+        import zoneinfo
+
+        tz = zoneinfo.ZoneInfo(self._business_timezone)
+        now = datetime.now(tz)
+        if date:
+            try:
+                start = datetime.fromisoformat(date).replace(tzinfo=tz)
+            except ValueError:
+                start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        end = start + timedelta(days=max(1, days_ahead))
+        time_min = start.isoformat()
+        time_max = end.isoformat()
+
+        events = await _gcal_list_events(self._supabase, self._business_id, time_min, time_max)
+        if not events:
+            period = f"on {date}" if date else "today"
+            return f"No calendar events found {period}."
+
+        lines = []
+        for ev in events:
+            start_t = ev.get("start", {}).get("dateTime") or ev.get("start", {}).get("date", "")
+            title = ev.get("summary", "(no title)")
+            location = ev.get("location", "")
+            loc_str = f" @ {location}" if location else ""
+            lines.append(f"  • {start_t} — {title}{loc_str}")
+        return "\n".join(lines)
+
+    @function_tool()
+    async def find_free_slots(
+        self,
+        context: RunContext,
+        date: str,
+        duration_minutes: int = 30,
+    ) -> str:
+        """
+        Find free time slots on a given date (YYYY-MM-DD) with the given duration.
+        """
+        await _set_state(self._room, "thinking")
+        import zoneinfo
+
+        tz = zoneinfo.ZoneInfo(self._business_timezone)
+        try:
+            day_start = datetime.fromisoformat(date).replace(tzinfo=tz, hour=8, minute=0, second=0)
+        except ValueError:
+            return f"Invalid date format: {date}. Use YYYY-MM-DD."
+        day_end = day_start.replace(hour=18, minute=0)
+
+        events = await _gcal_list_events(
+            self._supabase, self._business_id, day_start.isoformat(), day_end.isoformat()
+        )
+
+        # Build busy intervals
+        busy: list[tuple[datetime, datetime]] = []
+        for ev in events:
+            s = ev.get("start", {}).get("dateTime") or ev.get("start", {}).get("date")
+            e = ev.get("end", {}).get("dateTime") or ev.get("end", {}).get("date")
+            if s and e:
+                try:
+                    busy.append((
+                        datetime.fromisoformat(s).astimezone(tz),
+                        datetime.fromisoformat(e).astimezone(tz),
+                    ))
+                except ValueError:
+                    pass
+
+        # Walk the day in 30-minute increments, skip overlapping busy slots
+        free = []
+        cursor = day_start
+        delta = timedelta(minutes=max(30, duration_minutes))
+        while cursor + delta <= day_end and len(free) < 6:
+            slot_end = cursor + delta
+            conflict = any(not (slot_end <= b[0] or cursor >= b[1]) for b in busy)
+            if not conflict:
+                free.append(f"  • {cursor.strftime('%I:%M %p')} – {slot_end.strftime('%I:%M %p')}")
+            cursor += timedelta(minutes=30)
+
+        if not free:
+            return f"No free {duration_minutes}-minute slots found on {date} between 8am and 6pm."
+        return f"Free {duration_minutes}-min slots on {date}:\n" + "\n".join(free)
+
+    @function_tool()
+    async def create_calendar_event(
+        self,
+        context: RunContext,
+        title: str,
+        date: str,
+        start_time: str,
+        duration_minutes: int = 30,
+        description: str = "",
+    ) -> str:
+        """
+        Propose a new calendar event (shows preview). Owner must approve before it's created.
+        date: YYYY-MM-DD, start_time: HH:MM (24h)
+        """
+        import zoneinfo
+
+        tz = zoneinfo.ZoneInfo(self._business_timezone)
+        try:
+            start_dt = datetime.fromisoformat(f"{date}T{start_time}:00").replace(tzinfo=tz)
+        except ValueError:
+            return f"Invalid date/time: {date} {start_time}. Use YYYY-MM-DD and HH:MM."
+
+        end_dt = start_dt + timedelta(minutes=duration_minutes)
+        preview = {
+            "kind": "calendar_event",
+            "title": title,
+            "date": date,
+            "time": start_dt.strftime("%I:%M %p"),
+            "duration": f"{duration_minutes} min",
+            "description": description,
+            "_start_iso": start_dt.isoformat(),
+            "_end_iso": end_dt.isoformat(),
+        }
+        await self._send_preview(preview)
+        return (
+            f"I've prepared a calendar event '{title}' on {date} at {start_dt.strftime('%I:%M %p')} "
+            f"({duration_minutes} min). It's shown on screen. Say 'yes, go ahead' to create it."
+        )
+
+    @function_tool()
+    async def confirm_create_calendar_event(
+        self,
+        context: RunContext,
+        title: str,
+        start_iso: str,
+        end_iso: str,
+        description: str = "",
+    ) -> str:
+        """
+        Actually create the approved calendar event. Only call after owner confirms.
+        start_iso and end_iso are ISO 8601 datetime strings with timezone.
+        """
+        await _set_state(self._room, "thinking")
+        try:
+            from gcal_helpers import _gcal_get_superadmin_id
+            admin_id = _gcal_get_superadmin_id(self._supabase, self._business_id)
+            if not admin_id:
+                return "Cannot create event — no calendar connected for this business."
+
+            token = await _gcal_get_valid_token(self._supabase, admin_id)
+            if not token:
+                return "Cannot create event — Google Calendar token is not available."
+
+            body = {
+                "summary": title,
+                "description": description,
+                "start": {"dateTime": start_iso},
+                "end": {"dateTime": end_iso},
+            }
+            async with _httpx.AsyncClient(timeout=20) as http:
+                r = await http.post(
+                    f"{GOOGLE_CALENDAR_BASE}/calendars/primary/events",
+                    headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                    json=body,
+                )
+                if r.status_code in (200, 201):
+                    await self._clear_preview()
+                    return f"Done! '{title}' has been added to your calendar."
+                logger.error("gcal create event failed %s: %s", r.status_code, r.text[:200])
+                return "Failed to create the calendar event. Please try again."
+        except Exception as e:
+            logger.error("confirm_create_calendar_event error: %s", e)
+            return "An error occurred while creating the event."
+
+    # ── Appointment tools ─────────────────────────────────────────────────────
+
+    @function_tool()
+    async def list_appointments(
+        self,
+        context: RunContext,
+        date: str = "",
+        days_ahead: int = 7,
+    ) -> str:
+        """
+        List upcoming appointments for the business. date: YYYY-MM-DD (default today).
+        """
+        await _set_state(self._room, "thinking")
+        from datetime import date as _date
+
+        start_date = date or datetime.now().strftime("%Y-%m-%d")
+        try:
+            end = (datetime.fromisoformat(start_date) + timedelta(days=max(1, days_ahead))).strftime("%Y-%m-%d")
+        except ValueError:
+            end = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
+
+        try:
+            r = (
+                self._supabase.table("appointments")
+                .select("appointment_date, appointment_time, client_name, service, assigned_user_id, status, id")
+                .eq("business_id", self._business_id)
+                .gte("appointment_date", start_date)
+                .lte("appointment_date", end)
+                .neq("status", "cancelled")
+                .order("appointment_date")
+                .order("appointment_time")
+                .limit(25)
+                .execute()
+            )
+            rows = getattr(r, "data", None) or []
+        except Exception as e:
+            logger.error("list_appointments DB error: %s", e)
+            return "Failed to fetch appointments."
+
+        if not rows:
+            return f"No appointments found from {start_date} to {end}."
+
+        lines = []
+        for a in rows:
+            ref = a.get("id", "")[:8].upper()
+            lines.append(
+                f"  [{ref}] {a['appointment_date']} {a['appointment_time']} — "
+                f"{a['client_name']} ({a['service']})"
+            )
+        return f"Appointments ({start_date} → {end}):\n" + "\n".join(lines)
+
+    @function_tool()
+    async def cancel_appointment(
+        self,
+        context: RunContext,
+        appointment_ref: str,
+        reason: str = "",
+    ) -> str:
+        """
+        Cancel an appointment by its 8-character reference ID.
+        Always confirm with the owner before calling this tool.
+        """
+        await _set_state(self._room, "thinking")
+        try:
+            r = (
+                self._supabase.table("appointments")
+                .select("id, client_name, appointment_date, appointment_time")
+                .eq("business_id", self._business_id)
+                .gte("appointment_date", datetime.now().strftime("%Y-%m-%d"))
+                .neq("status", "cancelled")
+                .limit(50)
+                .execute()
+            )
+            rows = [x for x in (getattr(r, "data", None) or [])
+                    if x.get("id", "").upper().startswith(appointment_ref.upper())]
+            if not rows:
+                return f"No active appointment found with reference '{appointment_ref}'."
+            appt = rows[0]
+            self._supabase.table("appointments").update({
+                "status": "cancelled",
+                "notes": reason or "Cancelled via Executive Agent",
+            }).eq("id", appt["id"]).execute()
+            return (
+                f"Appointment [{appointment_ref.upper()}] for {appt['client_name']} "
+                f"on {appt['appointment_date']} at {appt['appointment_time']} has been cancelled."
+            )
+        except Exception as e:
+            logger.error("cancel_appointment error: %s", e)
+            return "Failed to cancel the appointment. Please try again."
+
+    @function_tool()
+    async def reschedule_appointment(
+        self,
+        context: RunContext,
+        appointment_ref: str,
+        new_date: str,
+        new_time: str,
+    ) -> str:
+        """
+        Reschedule an appointment to a new date/time.
+        new_date: YYYY-MM-DD, new_time: HH:MM (24h)
+        """
+        await _set_state(self._room, "thinking")
+        try:
+            r = (
+                self._supabase.table("appointments")
+                .select("id, client_name, appointment_date, appointment_time, service")
+                .eq("business_id", self._business_id)
+                .gte("appointment_date", datetime.now().strftime("%Y-%m-%d"))
+                .neq("status", "cancelled")
+                .limit(50)
+                .execute()
+            )
+            rows = [x for x in (getattr(r, "data", None) or [])
+                    if x.get("id", "").upper().startswith(appointment_ref.upper())]
+            if not rows:
+                return f"No active appointment found with reference '{appointment_ref}'."
+            appt = rows[0]
+            self._supabase.table("appointments").update({
+                "appointment_date": new_date,
+                "appointment_time": new_time,
+            }).eq("id", appt["id"]).execute()
+            return (
+                f"Appointment [{appointment_ref.upper()}] for {appt['client_name']} "
+                f"has been rescheduled to {new_date} at {new_time}."
+            )
+        except Exception as e:
+            logger.error("reschedule_appointment error: %s", e)
+            return "Failed to reschedule. Please try again."
+
+
+# ── LiveKit entry point ───────────────────────────────────────────────────────
+
+server = AgentServer()
+
+
+@server.rtc_session(agent_name=EXECUTIVE_AGENT_NAME)
+async def executive_agent(ctx: agents.JobContext):
+    await ctx.connect(auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY)
+    participant = await ctx.wait_for_participant()
+    logger.info("Executive session participant: %s", participant.identity)
+
+    # Read context from participant metadata (set by backend token)
+    business_id: str | None = None
+    user_id: str | None = None
+    location_id: str | None = None
+
+    raw_meta = participant.metadata
+    if isinstance(raw_meta, str) and raw_meta:
+        try:
+            meta = json.loads(raw_meta)
+            business_id = meta.get("business_id")
+            user_id = meta.get("user_id")
+            location_id = meta.get("location_id")
+        except json.JSONDecodeError:
+            logger.warning("Invalid participant metadata: %s", raw_meta)
+
+    # Also check job metadata (set by dispatch)
+    if not business_id:
+        raw_job = getattr(ctx.job, "metadata", None)
+        if isinstance(raw_job, str) and raw_job:
+            try:
+                jm = json.loads(raw_job)
+                business_id = jm.get("business_id")
+                user_id = jm.get("user_id")
+            except json.JSONDecodeError:
+                pass
+
+    if not business_id:
+        logger.error("Executive session started with no business_id — aborting")
+        return
+
+    supabase = _get_supabase()
+    business_name = "your business"
+    business_timezone = "America/Toronto"
+    if supabase:
+        biz = _fetch_business(supabase, business_id)
+        if biz:
+            business_name = biz.get("name", "") or business_name
+            business_timezone = biz.get("timezone", "") or business_timezone
+
+    today = datetime.now().strftime("%A, %B %-d, %Y")
+    instructions = EXECUTIVE_INSTRUCTIONS.format(
+        business_name=business_name,
+        today=today,
+        context="",
+    )
+
+    session = AgentSession(
+        llm=openai.realtime.RealtimeModel(),
+        preemptive_generation=True,
+    )
+    assistant = ExecutiveAssistant(
+        instructions=instructions,
+        supabase=supabase,
+        business_id=business_id,
+        user_id=user_id or "",
+        business_name=business_name,
+        business_timezone=business_timezone,
+        room=ctx.room,
+        location_id=location_id,
+    )
+
+    # ── State signaling ───────────────────────────────────────────────────────
+
+    @session.on("agent_speaking_started")
+    def _on_speaking_started(_ev) -> None:
+        asyncio.ensure_future(_set_state(ctx.room, "speaking"))
+
+    @session.on("agent_speaking_stopped")
+    def _on_speaking_stopped(_ev) -> None:
+        asyncio.ensure_future(_set_state(ctx.room, "idle"))
+
+    @session.on("user_started_speaking")
+    def _on_user_speaking(_ev) -> None:
+        asyncio.ensure_future(_set_state(ctx.room, "listening"))
+
+    @session.on("user_stopped_speaking")
+    def _on_user_stopped(_ev) -> None:
+        asyncio.ensure_future(_set_state(ctx.room, "thinking"))
+
+    # ── Transcript relay to frontend ─────────────────────────────────────────
+
+    @session.on("conversation_item_added")
+    def _on_item(ev) -> None:
+        try:
+            item = getattr(ev, "item", ev)
+            role = getattr(item, "role", None)
+            if role not in ("user", "assistant"):
+                return
+            text = ""
+            if hasattr(item, "text_content"):
+                text = item.text_content or ""
+            elif hasattr(item, "content"):
+                for block in item.content:
+                    if hasattr(block, "text") and block.text:
+                        text += block.text
+            text = text.strip()
+            if text:
+                fe_role = "user" if role == "user" else "agent"
+                asyncio.ensure_future(_publish(ctx.room, {
+                    "type": "transcript",
+                    "role": fe_role,
+                    "text": text,
+                }))
+        except Exception as e:
+            logger.warning("Transcript relay error: %s", e)
+
+    # ── Text input handler (data channel) ────────────────────────────────────
+
+    @ctx.room.on("data_received")
+    def _on_data(data_packet) -> None:
+        try:
+            payload = json.loads(bytes(data_packet.data).decode())
+            if payload.get("type") == "user_text":
+                text = (payload.get("text") or "").strip()
+                if text:
+                    asyncio.ensure_future(
+                        session.generate_reply(
+                            instructions=(
+                                f"The owner just typed this message: '{text}'. "
+                                "Respond to it naturally and helpfully."
+                            )
+                        )
+                    )
+        except Exception as e:
+            logger.warning("Data received handler error: %s", e)
+
+    # ── Start session ─────────────────────────────────────────────────────────
+
+    await session.start(
+        room=ctx.room,
+        agent=assistant,
+        room_options=room_io.RoomOptions(),
+    )
+
+    # Greet the owner
+    await session.generate_reply(
+        instructions=(
+            f"Greet the business owner warmly. Say something like: "
+            f"'Good morning! How can I help you with {business_name} today?' "
+            "Keep it very short — one sentence."
+        )
+    )
+
+    logger.info(
+        "Executive agent started — business=%s user=%s",
+        business_id, user_id,
+    )
+
+
+if __name__ == "__main__":
+    agents.cli.run_app(server)

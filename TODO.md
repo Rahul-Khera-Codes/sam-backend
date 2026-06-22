@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-05-21 (Session 44 — custom greeting, appointment status buttons, noshow scheduler, UI fixes, toggle sync)
+Last updated: 2026-06-22 (Session 50 — KB scraper shipped, security fixes, Executive Agent next)
 
 ---
 
@@ -412,6 +412,49 @@ Phase 6 (v2 — SHIPPED session 38):
 - [x] Agent — `_is_within_available_hours()` in `supabase_helpers.py`; `forward_call` checks contact's hours before SIP REFER and returns polite refusal if outside window
 - [x] Setup checklist — `CustomerServiceEmployee.tsx` derives completion from real API data (phone number, schedule, forwarding contacts, Gmail, services, recent calls); clicks navigate to relevant pages; Gmail check fixed to use `s.connected` (not `s.is_connected`)
 - Full plan: `docs/superpowers/plans/2026-04-28-pre-release-checklist-fixes.md`
+
+### Website KB Scraper — SHIPPED Session 50 ✅
+- [x] `backend/app/routers/knowledge_base.py` — `POST /knowledge-base/scrape` — Jina AI Reader, GPT-4o 8-section extraction, `[Website]` prefix, replace-on-rerun, SSRF via Jina only, IDOR location validation
+- [x] `backend/app/main.py` — router registered
+- [x] `ai-employees-app/src/lib/voiceAgentApi.ts` — `scrapeWebsiteToKB()` function
+- [x] `ai-employees-app/src/pages/dashboard/BusinessSettings.tsx` — "Generate from Website" card + dialog + loading state + success toast + KB list refresh
+- Commits: `51f7f2a`, `7b09fb4`, `66b98be`, `52ab917` (backend) + `efdb03d` (frontend)
+
+### Executive Agent — IN PROGRESS (Session 50+)
+Full plan: `docs/superpowers/plans/2026-06-22-executive-agent-plan.md`
+UI: split layout — left (chat-style like Dex) + right (collapsible transcript). Mic toggle in same session.
+
+**Step 1 — Backend session endpoint**
+- [ ] `backend/app/routers/executive.py` — `POST /executive/session`: verify access, create LiveKit room, return token + room_name + livekit_url
+- [ ] Register router in `backend/app/main.py`
+
+**Step 2 — Frontend API + hook**
+- [ ] `src/lib/voiceAgentApi.ts`: add `createExecutiveSession(token, businessId)`
+- [ ] `src/hooks/useExecutiveSession.ts`: connect to LiveKit room, track agentState/transcript/previewItem, expose sendMessage/toggleMic/approvePreview
+
+**Step 3 — Frontend page + layout**
+- [ ] `src/pages/dashboard/ExecutiveAgent.tsx`: split layout, replaces Coming Soon placeholder
+- [ ] `src/components/executive/AgentStatusHeader.tsx`: name + state indicator (dots/waveform/pulse) + ⓘ transcript toggle
+- [ ] `src/components/executive/AgentDisplay.tsx`: streaming response display + preview panel (email draft / calendar event)
+- [ ] `src/components/executive/TranscriptPanel.tsx`: right collapsible panel, full back-and-forth bubbles
+- [ ] `src/components/executive/InputBar.tsx`: text field + mic toggle (glows when ON) + send button
+- [ ] CSS-only state animations: idle (static dot), listening (pulse), thinking (··· three dots), speaking (▌▌▌ waveform bars)
+
+**Step 4 — Agent: executive_agent.py**
+- [ ] `agent/executive_agent.py`: new file, session start, state signalling via LiveKit data messages
+- [ ] `_send_state(ctx, state)` helper: publishes `{state}` data message to room
+- [ ] Gmail tools: `list_emails`, `read_email`, `draft_reply` (sends preview, no auto-send), `send_email` (after approval)
+- [ ] Preview data message: `{type: "preview", kind: "email_draft", to, subject, body}` → frontend shows preview panel
+- [ ] Calendar tools: `get_schedule`, `create_event` (preview first), `reschedule_event`, `find_free_slots`
+- [ ] Appointments tools: `list_appointments`, `cancel_appointment`, `reschedule_appointment`
+- [ ] Register new agent dispatch type in LiveKit (room name prefix: `executive-`)
+
+**Step 5 — Billing (Phase 2 — deferred)**
+- [ ] Executive Agent card in Billing page → Stripe subscription item (free during beta)
+
+### Sales Agent — ON HOLD (legal review 2026-06-22)
+- Do NOT build until Sam confirms legal green light
+- UI mockups received (7 screens at `/home/lap-68/Downloads/Screen 1-7.png`)
 
 ### Future Features — Not Yet Started
 - [x] **TC-ROLES-002** ✅ FIXED session 40 — see QA section above

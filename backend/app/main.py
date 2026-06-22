@@ -23,6 +23,7 @@ from app.routers import (
     appointments as appointments_router,
     documents as documents_router,
     knowledge_base as knowledge_base_router,
+    executive as executive_router,
 )
 from app.services.scheduler_service import start_scheduler, stop_scheduler
 
@@ -68,6 +69,7 @@ app.include_router(billing_router.router)
 app.include_router(appointments_router.router)
 app.include_router(documents_router.router)
 app.include_router(knowledge_base_router.router, prefix="/knowledge-base", tags=["knowledge-base"])
+app.include_router(executive_router.router)
 
 
 # ── Health check ──────────────────────────────
