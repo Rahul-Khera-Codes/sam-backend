@@ -8,7 +8,6 @@ import logging
 import socket
 from typing import Optional
 import httpx
-import defusedxml.ElementTree as ET
 from fastapi import APIRouter, Depends, HTTPException
 from openai import AsyncOpenAI
 from pydantic import BaseModel
@@ -157,42 +156,26 @@ async def _fetch_via_jina(url: str, client: httpx.AsyncClient) -> Optional[str]:
 async def _get_page_urls(base_url: str, client: httpx.AsyncClient) -> list[str]:
     """
     Discover subpage URLs.
-    1. Try sitemap.xml — parse <loc> tags
-    2. Fall back to base URL only
+    1. Try sitemap.xml via Jina (never direct-fetches user-controlled hosts)
+    2. Fall back to links in homepage markdown
     """
+    import re
     from urllib.parse import urljoin, urlparse
     urls = [base_url]
+    base_host = urlparse(base_url).netloc
 
-    # Try sitemap
+    # Try sitemap via Jina — avoids direct outbound to user-controlled host (no SSRF/DNS-rebind)
     sitemap_url = urljoin(base_url, "/sitemap.xml")
-    try:
-        _validate_url_is_public(sitemap_url)
-        r = await client.get(sitemap_url, timeout=10.0, follow_redirects=False)
-        if r.status_code == 200 and "<?xml" in r.text[:100]:
-            try:
-                root = ET.fromstring(r.text)
-                ns = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
-                locs = root.findall(".//sm:loc", ns)
-                if not locs:
-                    # Try without namespace
-                    locs = root.findall(".//loc")
-                base_host = urlparse(base_url).netloc
-                for loc in locs:
-                    loc_url = (loc.text or "").strip()
-                    if loc_url and urlparse(loc_url).netloc == base_host:
-                        try:
-                            _validate_url_is_public(loc_url)
-                        except HTTPException:
-                            logger.warning("Skipping sitemap URL that resolves to private address: %s", loc_url)
-                            continue
-                        if loc_url not in urls:
-                            urls.append(loc_url)
-                logger.info("Sitemap found %d URLs", len(urls))
-                return urls[:MAX_PAGES]
-            except ET.ParseError:
-                pass
-    except Exception as e:
-        logger.info("No sitemap at %s: %s", sitemap_url, e)
+    sitemap_content = await _fetch_via_jina(sitemap_url, client)
+    if sitemap_content:
+        # Extract bare URLs from the rendered sitemap text
+        found_locs = re.findall(r'https?://[^\s<>"\'\)\]]+', sitemap_content)
+        for loc_url in found_locs:
+            if urlparse(loc_url).netloc == base_host and loc_url not in urls:
+                urls.append(loc_url)
+        if len(urls) > 1:
+            logger.info("Sitemap via Jina found %d URLs", len(urls))
+            return urls[:MAX_PAGES]
 
     # No sitemap — extract links from main page markdown via Jina
     main_content = await _fetch_via_jina(base_url, client)
@@ -216,6 +199,18 @@ async def scrape_website(
     user_id: str = Depends(get_user_id),
 ):
     verify_business_access(user_id, req.business_id)
+
+    # Validate location belongs to this business (IDOR prevention)
+    if req.location_id:
+        loc_row = (
+            supabase_admin.table("locations")
+            .select("business_id")
+            .eq("id", req.location_id)
+            .limit(1)
+            .execute()
+        )
+        if not loc_row.data or loc_row.data[0].get("business_id") != req.business_id:
+            raise HTTPException(status_code=403, detail="Invalid location for this business.")
 
     # Resolve URL
     url = req.url
