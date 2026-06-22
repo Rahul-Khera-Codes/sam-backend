@@ -769,33 +769,6 @@ async def executive_agent(ctx: agents.JobContext):
     def _on_user_stopped(_ev) -> None:
         asyncio.ensure_future(_set_state(ctx.room, "thinking"))
 
-    # ── Transcript relay to frontend ─────────────────────────────────────────
-
-    @session.on("conversation_item_added")
-    def _on_item(ev) -> None:
-        try:
-            item = getattr(ev, "item", ev)
-            role = getattr(item, "role", None)
-            if role not in ("user", "assistant"):
-                return
-            text = ""
-            if hasattr(item, "text_content"):
-                text = item.text_content or ""
-            elif hasattr(item, "content"):
-                for block in item.content:
-                    if hasattr(block, "text") and block.text:
-                        text += block.text
-            text = text.strip()
-            if text:
-                fe_role = "user" if role == "user" else "agent"
-                asyncio.ensure_future(_publish(ctx.room, {
-                    "type": "transcript",
-                    "role": fe_role,
-                    "text": text,
-                }))
-        except Exception as e:
-            logger.warning("Transcript relay error: %s", e)
-
     # ── Text input handler (data channel) ────────────────────────────────────
 
     @ctx.room.on("data_received")
