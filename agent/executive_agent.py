@@ -302,6 +302,16 @@ class ExecutiveAssistant(Agent):
         self._pending_card_id = None
         await _publish(self._room, {"type": "card_dismiss", "id": cid})
 
+    async def _activity_start(self, label: str) -> None:
+        """Tell the UI a tool is running (shows a caption + spinner under the avatar).
+        The frontend auto-clears this when the agent stops 'thinking', so a missing
+        'done' can never leave a stuck spinner."""
+        await _publish(self._room, {"type": "activity", "state": "start", "label": label})
+
+    async def _activity_done(self, label: str = "") -> None:
+        """Mark a terminal action complete (e.g. 'Email sent') — shown briefly with a ✓."""
+        await _publish(self._room, {"type": "activity", "state": "done", "label": label})
+
     # ── Gmail tools ───────────────────────────────────────────────────────────
 
     @function_tool()
@@ -316,6 +326,7 @@ class ExecutiveAssistant(Agent):
         Default: unread inbox. Returns id, sender, subject, date for each.
         """
         await _set_state(self._room, "thinking")
+        await self._activity_start("Reading your inbox…")
         # Fetch the token once and reuse it for every metadata call (avoids an
         # N+1 of redundant gmail_tokens DB lookups).
         token, _ = await _gmail_get_valid_token(self._supabase, self._business_id, self._location_id)
@@ -375,6 +386,7 @@ class ExecutiveAssistant(Agent):
         Returns sender, subject, date, and plain-text body.
         """
         await _set_state(self._room, "thinking")
+        await self._activity_start("Opening that email…")
         msg = await _gmail_get_message_full(
             self._supabase, self._business_id, self._location_id, email_id
         )
@@ -405,6 +417,7 @@ class ExecutiveAssistant(Agent):
         Do NOT call send_email_draft until the owner confirms.
         """
         await _set_state(self._room, "thinking")
+        await self._activity_start("Drafting a reply…")
         msg = await _gmail_get_message(
             self._supabase, self._business_id, self._location_id, email_id
         )
@@ -438,6 +451,7 @@ class ExecutiveAssistant(Agent):
         Do NOT call send_email_draft until the owner confirms.
         """
         await _set_state(self._room, "thinking")
+        await self._activity_start("Drafting your email…")
         preview = {
             "kind": "email_draft",
             "emailId": "",
@@ -469,6 +483,7 @@ class ExecutiveAssistant(Agent):
         from email.mime.text import MIMEText
 
         await _set_state(self._room, "thinking")
+        await self._activity_start("Sending your email…")
         token, sender_email = await _gmail_get_valid_token(
             self._supabase, self._business_id, self._location_id
         )
@@ -499,6 +514,7 @@ class ExecutiveAssistant(Agent):
                 )
                 if r.status_code in (200, 201):
                     await self._clear_preview()
+                    await self._activity_done("Email sent")
                     return f"Email sent to {to}."
                 logger.error("Gmail send failed %s: %s", r.status_code, r.text[:200])
                 return "Failed to send the email. Please try again."
@@ -520,6 +536,7 @@ class ExecutiveAssistant(Agent):
         days_ahead: how many days to show (default 1).
         """
         await _set_state(self._room, "thinking")
+        await self._activity_start("Checking your calendar…")
         from datetime import timezone as _tz
         import zoneinfo
 
@@ -566,6 +583,7 @@ class ExecutiveAssistant(Agent):
         Find free time slots on a given date (YYYY-MM-DD) with the given duration.
         """
         await _set_state(self._room, "thinking")
+        await self._activity_start("Finding open slots…")
         import zoneinfo
 
         tz = zoneinfo.ZoneInfo(self._business_timezone)
@@ -661,6 +679,7 @@ class ExecutiveAssistant(Agent):
         Creates exactly what is shown in the on-screen preview.
         """
         await _set_state(self._room, "thinking")
+        await self._activity_start("Adding to your calendar…")
 
         # Prefer the exact values from the approved preview — they were computed
         # with the business timezone in create_calendar_event. The model-supplied
@@ -701,6 +720,7 @@ class ExecutiveAssistant(Agent):
                 )
                 if r.status_code in (200, 201):
                     await self._clear_preview()
+                    await self._activity_done("Added to your calendar")
                     return f"Done! '{title}' has been added to your calendar."
                 logger.error("gcal create event failed %s: %s", r.status_code, r.text[:200])
                 return "Failed to create the calendar event. Please try again."
@@ -721,6 +741,7 @@ class ExecutiveAssistant(Agent):
         List upcoming appointments for the business. date: YYYY-MM-DD (default today).
         """
         await _set_state(self._room, "thinking")
+        await self._activity_start("Looking up appointments…")
         from datetime import date as _date
 
         start_date = date or datetime.now().strftime("%Y-%m-%d")
@@ -771,6 +792,7 @@ class ExecutiveAssistant(Agent):
         Always confirm with the owner before calling this tool.
         """
         await _set_state(self._room, "thinking")
+        await self._activity_start("Cancelling the appointment…")
         try:
             r = (
                 self._supabase.table("appointments")
@@ -811,6 +833,7 @@ class ExecutiveAssistant(Agent):
         new_date: YYYY-MM-DD, new_time: HH:MM (24h)
         """
         await _set_state(self._room, "thinking")
+        await self._activity_start("Rescheduling…")
         try:
             r = (
                 self._supabase.table("appointments")
