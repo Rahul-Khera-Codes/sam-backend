@@ -54,3 +54,11 @@ Phase B (separate, later): `email_detail`, `free_slots` pick-to-book, `appointme
 
 ## Out of scope
 WS4 (central avatar), Phase B cards, mood→avatar.
+
+---
+
+## A.2 execution note (2026-06-25)
+A.1 (info cards `email_list` + `calendar_schedule`) shipped + live-verified. A.2 = migrate the two existing previews into the card envelope:
+- **Backend:** `_send_preview` now emits `{type:"card", card:"email_draft"|"calendar_event_preview", ephemeral:true, data, actions}` via a generalized `_send_card(..., actions, ephemeral, card_id)`; `_pending_draft` retained (WS0). `_clear_preview` emits `{type:"card_dismiss", id}`. Internal `_start_iso/_end_iso` stripped from card `data`.
+- **Frontend:** `email_draft` + `calendar_event_preview` rendered through the `AgentCardView` registry with action buttons; single `activeCard` slot (removed the separate `previewItem` panel/state). Hook keeps a back-compat `preview`→`activeCard` converter so a stale backend still renders.
+- **Deviation from spec:** the structured `card_action` round-trip is **deferred to Phase B**. Phase-A action buttons keep the proven synthetic-text approve path (`approvePreview`/`rejectPreview` → "yes, go ahead"/"cancel that"), which WS0/WS8 already exercise. `card_action` is only required for Phase B cards with no verbal equivalent (free_slots pick-to-book, appointment cancel/reschedule).

@@ -225,26 +225,71 @@ class ExecutiveAssistant(Agent):
         self._location_id = location_id
         # Pending preview state (awaiting owner approval)
         self._pending_draft: dict | None = None
+        self._pending_card_id: str | None = None
         self._card_seq = 0
 
+    async def _send_card(
+        self,
+        card_type: str,
+        data: dict,
+        *,
+        actions: list | None = None,
+        ephemeral: bool = False,
+        card_id: str | None = None,
+    ) -> str:
+        """Publish a typed UI card to the frontend (rendered above the input). Returns the card id."""
+        if card_id is None:
+            self._card_seq += 1
+            card_id = f"card_{self._card_seq}"
+        payload: dict = {"type": "card", "card": card_type, "id": card_id, "data": data}
+        if ephemeral:
+            payload["ephemeral"] = True
+        if actions:
+            payload["actions"] = actions
+        await _publish(self._room, payload)
+        return card_id
+
     async def _send_preview(self, preview: dict) -> None:
-        """Publish a preview item to the frontend."""
+        """Show an approval card (email draft or calendar event) and remember it for confirm.
+
+        Approval cards reuse the unified card envelope; action buttons resolve via the
+        synthetic-text approve path (approvePreview/rejectPreview) on the frontend.
+        """
         self._pending_draft = preview
-        await _publish(self._room, {"type": "preview", **preview})
+        if preview.get("kind") == "email_draft":
+            card_type = "email_draft"
+            data = {
+                "emailId": preview.get("emailId", ""),
+                "to": preview.get("to", ""),
+                "subject": preview.get("subject", ""),
+                "body": preview.get("body", ""),
+            }
+            actions = [
+                {"id": "send", "label": "Send", "intent": "approve"},
+                {"id": "cancel", "label": "Cancel", "intent": "reject"},
+            ]
+        else:  # calendar_event
+            card_type = "calendar_event_preview"
+            data = {
+                "title": preview.get("title", ""),
+                "date": preview.get("date", ""),
+                "time": preview.get("time", ""),
+                "duration": preview.get("duration", ""),
+                "description": preview.get("description", ""),
+            }
+            actions = [
+                {"id": "confirm", "label": "Create Event", "intent": "approve"},
+                {"id": "cancel", "label": "Cancel", "intent": "reject"},
+            ]
+        self._pending_card_id = await self._send_card(
+            card_type, data, actions=actions, ephemeral=True
+        )
 
     async def _clear_preview(self) -> None:
         self._pending_draft = None
-        await _publish(self._room, {"type": "preview_cleared"})
-
-    async def _send_card(self, card_type: str, data: dict) -> None:
-        """Publish a typed UI card to the frontend (rendered above the input)."""
-        self._card_seq += 1
-        await _publish(self._room, {
-            "type": "card",
-            "card": card_type,
-            "id": f"card_{self._card_seq}",
-            "data": data,
-        })
+        cid = self._pending_card_id
+        self._pending_card_id = None
+        await _publish(self._room, {"type": "card_dismiss", "id": cid})
 
     # ── Gmail tools ───────────────────────────────────────────────────────────
 
