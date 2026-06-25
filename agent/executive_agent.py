@@ -786,14 +786,25 @@ class ExecutiveAssistant(Agent):
         if not rows:
             return f"No appointments found from {start_date} to {end}."
 
-        lines = []
+        appts = []
         for a in rows:
-            ref = a.get("id", "")[:8].upper()
-            lines.append(
-                f"  [{ref}] {a['appointment_date']} {a['appointment_time']} — "
-                f"{a['client_name']} ({a['service']})"
-            )
-        return f"Appointments ({start_date} → {end}):\n" + "\n".join(lines)
+            appts.append({
+                "ref": a.get("id", "")[:8].upper(),
+                "date": a.get("appointment_date", ""),
+                "time": a.get("appointment_time", ""),
+                "client": a.get("client_name", ""),
+                "service": a.get("service", ""),
+            })
+
+        # Show appointments with action buttons on screen; speak only a short summary.
+        await self._send_card("appointment_list", {"appointments": appts})
+        ref_lines = "\n".join(
+            f"- [{x['ref']}] {x['date']} {x['time']} — {x['client']} ({x['service']})" for x in appts
+        )
+        return (
+            f"Showing {len(appts)} appointment(s) on screen ({start_date} → {end}). "
+            f"For reference (use the ref for cancel/reschedule — do NOT read aloud):\n{ref_lines}"
+        )
 
     @function_tool()
     async def cancel_appointment(
@@ -1001,6 +1012,28 @@ async def executive_agent(ctx: agents.JobContext):
                         asyncio.ensure_future(session.generate_reply(user_input=prompt))
                     else:
                         logger.warning("card_action book_slot missing date/start: %s", payload)
+                elif action == "cancel_appointment":
+                    ref = (payload.get("ref") or "").strip()
+                    if ref:
+                        # The in-card Yes/No already confirmed — tell the model so it
+                        # cancels directly without re-asking.
+                        prompt = (
+                            f"The owner has confirmed cancelling appointment {ref}. "
+                            f"Call cancel_appointment for reference {ref} now."
+                        )
+                        asyncio.ensure_future(session.generate_reply(user_input=prompt))
+                    else:
+                        logger.warning("card_action cancel_appointment missing ref: %s", payload)
+                elif action == "reschedule_appointment":
+                    ref = (payload.get("ref") or "").strip()
+                    if ref:
+                        prompt = (
+                            f"The owner wants to reschedule appointment {ref}. Ask them for the "
+                            f"new date and time, then call reschedule_appointment for reference {ref}."
+                        )
+                        asyncio.ensure_future(session.generate_reply(user_input=prompt))
+                    else:
+                        logger.warning("card_action reschedule_appointment missing ref: %s", payload)
                 else:
                     logger.warning("Unhandled card_action: %s", action)
         except Exception as e:
