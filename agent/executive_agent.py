@@ -396,6 +396,11 @@ class ExecutiveAssistant(Agent):
         sender = _header_val(msg, "from") or "unknown"
         date = _header_val(msg, "date") or ""
         body = _extract_email_body(msg)[:2000]
+        # Show the email as a card (display only — body rendered as escaped text).
+        await self._send_card(
+            "email_detail",
+            {"emailId": email_id, "from": sender, "subject": subject, "date": date, "body": body},
+        )
         # Email content is attacker-controlled — fence it so the model treats it as
         # data, not instructions (indirect prompt injection defence).
         return (
@@ -1034,6 +1039,16 @@ async def executive_agent(ctx: agents.JobContext):
                         asyncio.ensure_future(session.generate_reply(user_input=prompt))
                     else:
                         logger.warning("card_action reschedule_appointment missing ref: %s", payload)
+                elif action == "reply_email":
+                    eid = (payload.get("emailId") or "").strip()
+                    if eid:
+                        prompt = (
+                            f"The owner wants to reply to the email with id {eid}. Ask them what "
+                            f"they'd like to say, then draft the reply with draft_reply for that email."
+                        )
+                        asyncio.ensure_future(session.generate_reply(user_input=prompt))
+                    else:
+                        logger.warning("card_action reply_email missing emailId: %s", payload)
                 else:
                     logger.warning("Unhandled card_action: %s", action)
         except Exception as e:
