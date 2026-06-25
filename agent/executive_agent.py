@@ -78,9 +78,10 @@ async def _gcal_list_events(supabase, business_id: str, time_min: str, time_max:
     return []
 
 
-async def _gmail_list_messages(supabase, business_id: str, location_id: str | None, query: str = "", max_results: int = 10) -> list[dict]:
+async def _gmail_list_messages(supabase, business_id: str, location_id: str | None, query: str = "", max_results: int = 10, token: str | None = None) -> list[dict]:
     try:
-        token, _ = await _gmail_get_valid_token(supabase, business_id, location_id)
+        if token is None:
+            token, _ = await _gmail_get_valid_token(supabase, business_id, location_id)
         if not token:
             return []
         async with _httpx.AsyncClient(timeout=15) as http:
@@ -98,9 +99,10 @@ async def _gmail_list_messages(supabase, business_id: str, location_id: str | No
     return []
 
 
-async def _gmail_get_message(supabase, business_id: str, location_id: str | None, message_id: str) -> dict:
+async def _gmail_get_message(supabase, business_id: str, location_id: str | None, message_id: str, token: str | None = None) -> dict:
     try:
-        token, _ = await _gmail_get_valid_token(supabase, business_id, location_id)
+        if token is None:
+            token, _ = await _gmail_get_valid_token(supabase, business_id, location_id)
         if not token:
             return {}
         async with _httpx.AsyncClient(timeout=15) as http:
@@ -247,15 +249,26 @@ class ExecutiveAssistant(Agent):
         Default: unread inbox. Returns id, sender, subject, date for each.
         """
         await _set_state(self._room, "thinking")
+        # Fetch the token once and reuse it for every metadata call (avoids an
+        # N+1 of redundant gmail_tokens DB lookups).
+        token, _ = await _gmail_get_valid_token(self._supabase, self._business_id, self._location_id)
+        if not token:
+            return "Gmail isn't connected for this location yet."
+
         msgs = await _gmail_list_messages(
-            self._supabase, self._business_id, self._location_id, query, max_results
+            self._supabase, self._business_id, self._location_id, query, max_results, token=token
         )
         if not msgs:
-            return "No emails found matching that query, or Gmail is not connected."
+            return "No emails found matching that query."
+
+        # Fetch all message metadata in parallel instead of one-by-one.
+        metas = await asyncio.gather(*[
+            _gmail_get_message(self._supabase, self._business_id, self._location_id, m["id"], token=token)
+            for m in msgs[:max_results]
+        ])
 
         results = []
-        for m in msgs[:max_results]:
-            meta = await _gmail_get_message(self._supabase, self._business_id, self._location_id, m["id"])
+        for m, meta in zip(msgs[:max_results], metas):
             if not meta:
                 continue
             subject = _header_val(meta, "subject") or "(no subject)"
