@@ -352,16 +352,43 @@ class ExecutiveAssistant(Agent):
         )
 
     @function_tool()
-    async def send_email_draft(
+    async def draft_email(
         self,
         context: RunContext,
-        email_id: str,
         to: str,
         subject: str,
         body: str,
     ) -> str:
         """
-        Send the approved email draft. Only call this after the owner explicitly confirms.
+        Draft a brand-new email (not a reply). Shows a preview to the owner for approval.
+        Do NOT call send_email_draft until the owner confirms.
+        """
+        await _set_state(self._room, "thinking")
+        preview = {
+            "kind": "email_draft",
+            "emailId": "",
+            "to": to,
+            "subject": subject,
+            "body": body,
+        }
+        await self._send_preview(preview)
+        return (
+            f"I've prepared an email to {to} with subject '{subject}'. "
+            "The draft is shown on screen. Say 'yes, go ahead' to send it, or tell me what to change."
+        )
+
+    @function_tool()
+    async def send_email_draft(
+        self,
+        context: RunContext,
+        to: str,
+        subject: str,
+        body: str,
+        email_id: str = "",
+    ) -> str:
+        """
+        Send the approved email draft (reply or new email). Only call this after the owner explicitly confirms.
+        email_id is optional — provide it only when sending a reply, to thread it.
         """
         import base64
         from email.mime.multipart import MIMEMultipart
