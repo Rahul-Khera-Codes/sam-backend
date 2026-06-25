@@ -611,20 +611,35 @@ class ExecutiveAssistant(Agent):
                 except ValueError:
                     pass
 
-        # Walk the day in 30-minute increments, skip overlapping busy slots
-        free = []
+        # Walk the day in 30-minute increments, skip overlapping busy slots.
+        # Build structured slots for the card; each carries the data needed to book
+        # (start in 24h "HH:MM") plus a friendly label.
+        slots: list[dict] = []
         cursor = day_start
         delta = timedelta(minutes=max(30, duration_minutes))
-        while cursor + delta <= day_end and len(free) < 6:
+        while cursor + delta <= day_end and len(slots) < 6:
             slot_end = cursor + delta
             conflict = any(not (slot_end <= b[0] or cursor >= b[1]) for b in busy)
             if not conflict:
-                free.append(f"  • {cursor.strftime('%I:%M %p')} – {slot_end.strftime('%I:%M %p')}")
+                slots.append({
+                    "start": cursor.strftime("%H:%M"),
+                    "label": cursor.strftime("%I:%M %p"),
+                })
             cursor += timedelta(minutes=30)
 
-        if not free:
+        if not slots:
             return f"No free {duration_minutes}-minute slots found on {date} between 8am and 6pm."
-        return f"Free {duration_minutes}-min slots on {date}:\n" + "\n".join(free)
+
+        # Show tappable slots on screen (pick-to-book); speak only a short summary.
+        await self._send_card(
+            "free_slots",
+            {"date": date, "durationMinutes": duration_minutes, "slots": slots},
+        )
+        labels = ", ".join(s["label"] for s in slots)
+        return (
+            f"Showing {len(slots)} open {duration_minutes}-min slot(s) on screen for {date}. "
+            f"The owner can tap one to book it, or just say a time. Slots: {labels}."
+        )
 
     @function_tool()
     async def create_calendar_event(
@@ -968,6 +983,26 @@ async def executive_agent(ctx: agents.JobContext):
                     asyncio.ensure_future(
                         session.generate_reply(user_input=text)
                     )
+            elif payload.get("type") == "card_action":
+                # A button on a card was tapped. Resolve it as a precise synthetic
+                # user turn so the model runs the right tool through the SAME
+                # preview→approve gate as a spoken request. The prompt is built here
+                # from typed fields — never echo free-form frontend text to the model.
+                action = payload.get("action")
+                if action == "book_slot":
+                    date = (payload.get("date") or "").strip()
+                    start = (payload.get("start") or "").strip()
+                    dur = int(payload.get("durationMinutes") or 30)
+                    if date and start:
+                        prompt = (
+                            f"Book a {dur}-minute appointment on {date} at {start}. "
+                            "Create the calendar event."
+                        )
+                        asyncio.ensure_future(session.generate_reply(user_input=prompt))
+                    else:
+                        logger.warning("card_action book_slot missing date/start: %s", payload)
+                else:
+                    logger.warning("Unhandled card_action: %s", action)
         except Exception as e:
             logger.warning("Data received handler error: %s", e)
 
