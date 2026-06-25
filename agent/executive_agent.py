@@ -31,6 +31,11 @@ from supabase_helpers import _get_supabase, _fetch_business
 load_dotenv(".env.local")
 logger = logging.getLogger("executive-agent")
 
+# Dev mode runs the root logger at DEBUG, which makes hpack/httpx emit hundreds of
+# lines per HTTP request and drown the actual agent logs. Silence those.
+for _noisy in ("hpack", "hpack.hpack", "hpack.table", "httpx", "httpcore"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
+
 EXECUTIVE_AGENT_NAME = "executive-agent"
 
 # ── State helpers ─────────────────────────────────────────────────────────────
@@ -339,7 +344,16 @@ class ExecutiveAssistant(Agent):
 
         # Render the list as a card on screen; speak only a short summary.
         await self._send_card("email_list", {"emails": rows})
-        return f"Showing your {len(rows)} most recent emails on screen."
+        # The model still needs the real IDs/subjects in context so it can resolve
+        # follow-ups ("open the one about X") to a real email_id for read_email /
+        # draft_reply — without this it hallucinates IDs. The prompt tells it to
+        # speak only a brief summary, so this reference list is NOT read aloud.
+        ref = "\n".join(f"- id={r['id']} | {r['subject']} — {r['from']}" for r in rows)
+        return (
+            f"Showing your {len(rows)} most recent emails on screen. "
+            f"For your reference (do NOT read these aloud — use the id for read_email or "
+            f"draft_reply):\n{ref}"
+        )
 
     @function_tool()
     async def read_email(
