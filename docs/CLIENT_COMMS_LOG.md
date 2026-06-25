@@ -5,6 +5,83 @@ Most recent entry at top.
 
 ---
 
+## OPEN QUESTIONS FOR SAM (drafted 2026-06-24, NOT yet sent)
+
+1. **Gmail / Google verification:** What's the app's current OAuth verification status? Email *reading* needs `gmail.readonly` (Google **restricted** scope) → public launch requires a paid annual **CASA** assessment — commit to it, or narrow the feature? And `readonly` vs `modify` — will Remi ever *manage* the inbox (mark read/archive/label), so we request the right scope once?
+2. **Avatar:** OK with a clean *abstract* avatar for the first Executive Assistant release, with the **HeyGen** talking-avatar (your PDF) as Phase 2? (So we build a swappable placeholder.)
+3. **Rich cards** (email-list/schedule as visual cards) in this release (extra frontend time), or ship text-first and add cards later?
+4. **Billing toggle:** wire the Stripe add-on now or keep free during beta — and what's the price ($49–79 TBD)?
+5. **Sales Employee (later):** using **Apify to scrape LinkedIn still risks LinkedIn's ToS** — flag for the lawyer review. Also: do you have an **Apify account + budget** (usage-priced)?
+
+---
+
+## 2026-06-24 — Sam answered Sales Employee questions + sent 5 reference PDFs + PRIORITY CHANGE
+
+Rahul sent the 5 clarification questions (AM). Sam replied (7:33 PM):
+
+1. **Data source** → use **Apify API** (https://apify.com/) for scraping/enrichment (instead of Apollo/Hunter/Clearbit).
+2. **Push to CRM** → **Don't include this feature yet.**
+3. **Market & Competitor intelligence** → use Sam's recommended pipeline:
+   - `Company Input → Website scrape → LinkedIn enrichment → LLM industry classification → Competitor discovery → News aggregation → Sentiment analysis → Opportunity report`
+   - Report output: Industry overview, Market trends, Competitor analysis, Pricing intelligence, Demand signals, Hiring signals, New opportunities, Risks, Lead opportunities, Recommended sales angles.
+4. **Legal (CASL)** → **Agreed** (will run by lawyer).
+5. **Priority** → **"Don't develop the Outbound Calling Employee now, wait until we finish the Executive Assistant, and Sales Employee."**
+   - ⇒ Build sequence: **Executive Assistant (in progress) → Sales Employee → then Outbound Calling Employee.**
+
+**5 reference PDFs sent** (in `/home/lap-68/Downloads/`): `Executive Assistant.pdf`, `Outbound Caller.pdf`, `Sales Employee.pdf`, `Branding.pdf`, `Marketing Employee.pdf`.
+
+**PDF review (session 52):**
+- **Executive Assistant.pdf** → a **HeyGen "Talking Avatar" picker** (100+ realistic avatars: Derek, Monica, Tyler, Zoey…). Confirms the Phase-2 avatar = HeyGen talking avatar + selection gallery. Matches his Jun 12 HeyGen reference.
+- **Branding.pdf** → expanded **Branding tab** in Business Settings: logo, color palette, fonts, mission, unique value claims, "Use Emojis" toggle, **Competitive Analysis** + **Market Insights**. Feeds the Sales Employee market-intel pipeline.
+- **Sales Employee.pdf** → the 4 modules (Lead Researcher / Competitor Agent / Market Agent / Report Scheduler) as portal sidebar modules; report email branded "AgenticBI".
+- **Outbound Caller.pdf** + **Marketing Employee.pdf** → not yet reviewed (deprioritized / future). Review when those workstreams start.
+
+---
+
+## Executive Agent — decision lineage (Jun 12 → 22, reconciled session 52)
+
+For full status see TODO.md + `memory/project_voice_agent.md`. Key decisions from the chat:
+
+- **Jun 12:** Sam shared a Heygen/OpenClaw TikTok (realistic talking avatar) — *"Can we create something like this for our Executive Assistant?"* — **this is his visual reference for the animated character.** Link: https://www.tiktok.com/@shawn.kanungo/video/7628836652701584658 (by @shawn.kanungo, his brother-in-law). Saved in memory `reference_executive_avatar.md`.
+- **Jun 16:** Sam clarified — wants a **live AI avatar face, separate from the Voice Agent**, that manages tasks on connected services (Gmail, Calendar) via voice. *"talk to the AI and ask it to do things."*
+- **Jun 18–19:** Sam asked for a high-level explanation **including billing integration**. Rahul sent the overview doc (= `docs/executive-agent-overview.md`).
+- **Avatar scope:** overview sets **Phase 1 = clean animated avatar with 3 states** (listening/thinking/speaking), **Phase 2 = expressive Heygen-style face**. The built status indicator satisfies Phase 1; the realistic face Sam admired is Phase 2.
+- **Billing:** Sam specifically asked to include billing. Overview proposes an add-on toggle + Stripe line item, **price TBD ($49–79/mo)**. Built free-during-beta pending Sam's price decision.
+- **Jun 19:** Sam asked for an **estimate** to check budget.
+- **Estimate given:** **2 weeks**, starting **Mon Jun 22, 2026** → target completion **~Jul 3–6, 2026**.
+- **Jun 22 (1:55 AM):** Sam: *"Continue to build the Executive Agent."* → green light. Rahul started same day (start of the 2-week window).
+- **Note:** Sam is also designing a **Marketing Agent** (mentioned Jun 22) — not yet shared.
+
+---
+
+## 2026-06-22 → 06-23 — Chat (Outbound Calling Employee rename, two-way calendar, NEW Sales Employee product)
+
+**From:** Sam Maisuria (with Rahul replies)
+
+**1. New section: "Outbound Calling Employee"**
+- Sam (Jun 22, 8:10 PM): *"Can you add another section called Outbound Calling Employee. The screenshots I sent you for Sales Employee will be named Outbound Calling Employee. I will give you some new screenshots to be used for the Sales Employee soon."*
+- Effect: the original 7 mockups (`/home/lap-68/Downloads/Screen 1-7.png`) — the outbound cold-calling / lead-list VOICE product — are now branded **Outbound Calling Employee**.
+- Status: ⏳ Pending clarification on functional spec + whether the legal hold (cold-call legality) still applies. Do NOT build yet.
+
+**2. Two-way Google Calendar sync — direction clarified**
+- Rahul asked (Jun 22, 9:14 PM): which direction + per-staff vs business-wide?
+- Sam (Jun 23, 12:23 AM): *"yes INTO from clients calendar"*
+- ✅ Direction confirmed: pull events FROM the client's connected Google Calendar INTO the portal Calendar view (currently we only push portal → GCal).
+- ⏳ Still unclear: per-staff (each user sees their own GCal events) vs business-wide; whether pulled events are read-only overlays or editable; conflict handling against existing appointments.
+
+**3. NEW "Sales Employee" product — 4 screenshots (this is NOT the cold-calling product)**
+- Sam (Jun 23, 12:23 AM): *"I attached some screenshots of our Sales Employee. Please develop this one too."*
+- Files: `Lead Research.png`, `Competitor Intelligence.png`, `Market Intelligence.png`, `Report Scheduler.png` (all in `/home/lap-68/Downloads/`)
+- **This is a B2B sales-intelligence dashboard, branded "AgenticBI" — no voice/calling at all.** Completely different from the originally-scoped Sales Agent (CSV lead upload + outbound calls). Four modules:
+  - **Lead Researcher AI Agent** — paste a LinkedIn profile URL → enriched lead card: predicted email + confidence score, best time to reach, job-role insights, pain points & sales angles, personal interests, and a generated outreach email template. Actions: Export PDF, Email Report, Push to CRM. Has History + Saved Leads.
+  - **Competitor Agent (Competitor Intelligence)** — add competitors by website URL; real-time tracking of competitor features, sentiment, social media, market moves; per-competitor "View Report"; Schedule Report.
+  - **Market Agent (Market Intelligence Feed)** — "What's Changing" feed with multiple AI analyst cards (Trend, Cultural, Market Research, Consumer Insights, Innovation Strategist, Business Intelligence). Add Custom Report.
+  - **Report Scheduler** — automated email briefings combining the 3 modules; recipients list, frequency (daily/weekly/monthly/custom), module checkboxes, live email preview ("Weekly Intelligence Briefing").
+- **Client has NOT shared written requirements** — only the 4 screens. Major unknowns: data sources for email prediction / competitor tracking / market feed (all require paid 3rd-party APIs + have legal/privacy implications), CRM targets, industry scoping, branding ("AgenticBI" vs AI Employees), priority vs Executive/Outbound/calendar work.
+- Status: ⏳ Clarification message drafted for Sam (see below). Do NOT build until data sources + scope confirmed.
+
+---
+
 ## 2026-06-16 — Chat messages (Executive Assistant idea + PDF bug)
 
 **From:** Sam Maisuria
