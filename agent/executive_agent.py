@@ -195,7 +195,7 @@ You are Remi, the personal executive assistant for {business_name}. You work dir
 - ANSWER GENERAL AND PERSONAL QUESTIONS DIRECTLY. Your name is Remi — if asked who you are or your name, say "I'm Remi, your assistant for {business_name}." Do NOT turn casual or identity questions into a task, and never say you don't have a name.
 - Only use a tool when the owner actually wants an email, calendar, or appointment action. Never assume a message is a scheduling/appointment request unless they clearly ask for one.
 - Always confirm before sending emails or creating calendar events — draft first, show the preview, then wait for "yes, go ahead".
-- When listing emails or events, give a brief summary of each — don't paste full content unless asked.
+- When a tool shows a card on screen (emails, schedule), the details are visible to the owner — give a brief one-line summary and ask what they'd like to do; do NOT read every item aloud.
 - If you can't do something, say so clearly and briefly.
 
 Today is {today}.
@@ -225,6 +225,7 @@ class ExecutiveAssistant(Agent):
         self._location_id = location_id
         # Pending preview state (awaiting owner approval)
         self._pending_draft: dict | None = None
+        self._card_seq = 0
 
     async def _send_preview(self, preview: dict) -> None:
         """Publish a preview item to the frontend."""
@@ -234,6 +235,16 @@ class ExecutiveAssistant(Agent):
     async def _clear_preview(self) -> None:
         self._pending_draft = None
         await _publish(self._room, {"type": "preview_cleared"})
+
+    async def _send_card(self, card_type: str, data: dict) -> None:
+        """Publish a typed UI card to the frontend (rendered above the input)."""
+        self._card_seq += 1
+        await _publish(self._room, {
+            "type": "card",
+            "card": card_type,
+            "id": f"card_{self._card_seq}",
+            "data": data,
+        })
 
     # ── Gmail tools ───────────────────────────────────────────────────────────
 
@@ -267,16 +278,23 @@ class ExecutiveAssistant(Agent):
             for m in msgs[:max_results]
         ])
 
-        results = []
+        rows = []
         for m, meta in zip(msgs[:max_results], metas):
             if not meta:
                 continue
-            subject = _header_val(meta, "subject") or "(no subject)"
-            sender = _header_val(meta, "from") or "unknown"
-            date = _header_val(meta, "date") or ""
-            results.append(f"ID:{m['id'][:12]} | From: {sender} | {subject} | {date}")
+            rows.append({
+                "id": m["id"],
+                "from": _header_val(meta, "from") or "unknown",
+                "subject": _header_val(meta, "subject") or "(no subject)",
+                "date": _header_val(meta, "date") or "",
+            })
 
-        return "\n".join(results) or "Could not fetch email details."
+        if not rows:
+            return "Could not fetch email details."
+
+        # Render the list as a card on screen; speak only a short summary.
+        await self._send_card("email_list", {"emails": rows})
+        return f"Showing your {len(rows)} most recent emails on screen."
 
     @function_tool()
     async def read_email(
@@ -423,14 +441,18 @@ class ExecutiveAssistant(Agent):
             period = f"on {date}" if date else "today"
             return f"No calendar events found {period}."
 
-        lines = []
+        events_data = []
         for ev in events:
-            start_t = ev.get("start", {}).get("dateTime") or ev.get("start", {}).get("date", "")
-            title = ev.get("summary", "(no title)")
-            location = ev.get("location", "")
-            loc_str = f" @ {location}" if location else ""
-            lines.append(f"  • {start_t} — {title}{loc_str}")
-        return "\n".join(lines)
+            events_data.append({
+                "title": ev.get("summary", "(no title)"),
+                "start": ev.get("start", {}).get("dateTime") or ev.get("start", {}).get("date", ""),
+                "end": ev.get("end", {}).get("dateTime") or ev.get("end", {}).get("date", ""),
+                "location": ev.get("location", ""),
+            })
+
+        # Render the schedule as a card on screen; speak only a short summary.
+        await self._send_card("calendar_schedule", {"range": date or "today", "events": events_data})
+        return f"Showing {len(events_data)} event(s) on screen for {date or 'today'}."
 
     @function_tool()
     async def find_free_slots(
