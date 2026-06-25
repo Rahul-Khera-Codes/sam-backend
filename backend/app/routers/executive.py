@@ -24,6 +24,7 @@ EXECUTIVE_AGENT_NAME = "executive-agent"
 
 class ExecutiveSessionRequest(BaseModel):
     business_id: str
+    location_id: str | None = None
 
 
 class ExecutiveSessionResponse(BaseModel):
@@ -62,6 +63,7 @@ async def create_executive_session(
             "session_type": "executive",
             "business_id": body.business_id,
             "user_id": user_id,
+            "location_id": body.location_id,
         },
     )
 
@@ -72,6 +74,7 @@ async def create_executive_session(
             "session_type": "executive",
             "business_id": body.business_id,
             "user_id": user_id,
+            "location_id": body.location_id,
         },
     )
 

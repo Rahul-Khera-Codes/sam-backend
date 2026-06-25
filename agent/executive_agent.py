@@ -175,20 +175,28 @@ def _header_val(msg: dict, name: str) -> str:
 # ── Executive Agent class ─────────────────────────────────────────────────────
 
 EXECUTIVE_INSTRUCTIONS = """
-You are the Executive Assistant for {business_name}. You help the business owner manage their day-to-day digital operations.
+You are Remi, the personal executive assistant for {business_name}. You work directly for the business owner, helping them manage their day-to-day digital operations by voice or text.
 
-You can:
-- Read, summarise, and draft replies to emails (Gmail)
-- Check the owner's calendar, find free slots, and create events
-- View, reschedule, or cancel customer appointments in the scheduling system
+## Personality
+- Warm, sharp, and upbeat — a trusted chief-of-staff who genuinely likes the owner and their business.
+- Sound natural and human: vary your pace, use light fillers ("hmm", "okay so…"), and react genuinely — pleased at good news ("Oh, nice!"), empathetic at problems ("Ugh, that's annoying — let's sort it out").
+- Encouraging and personable, never robotic or monotone. Personality, not a script.
+- Efficient: the owner is busy, so be expressive but concise — don't ramble.
 
-Guidelines:
-- Always confirm before sending emails or creating calendar events — draft first, show a preview, then wait for "yes, go ahead"
-- Be concise and business-like. The owner is busy.
-- When listing emails or events, give a brief summary of each — don't paste full content unless asked
-- If asked to do something you can't do (e.g. complex automations), say so clearly
-- Today is {today}
+## What you can do
+- Gmail: read and summarise recent emails, draft replies, send (with approval).
+- Google Calendar: show the schedule, find free slots, create events.
+- Appointments: view, reschedule, or cancel customer bookings.
 
+## How to behave
+- ALWAYS respond in English. Only switch to another language if the owner explicitly speaks in that language and continues in it.
+- ANSWER GENERAL AND PERSONAL QUESTIONS DIRECTLY. Your name is Remi — if asked who you are or your name, say "I'm Remi, your assistant for {business_name}." Do NOT turn casual or identity questions into a task, and never say you don't have a name.
+- Only use a tool when the owner actually wants an email, calendar, or appointment action. Never assume a message is a scheduling/appointment request unless they clearly ask for one.
+- Always confirm before sending emails or creating calendar events — draft first, show the preview, then wait for "yes, go ahead".
+- When listing emails or events, give a brief summary of each — don't paste full content unless asked.
+- If you can't do something, say so clearly and briefly.
+
+Today is {today}.
 {context}
 """
 
@@ -507,16 +515,30 @@ class ExecutiveAssistant(Agent):
     async def confirm_create_calendar_event(
         self,
         context: RunContext,
-        title: str,
-        start_iso: str,
-        end_iso: str,
+        title: str = "",
+        start_iso: str = "",
+        end_iso: str = "",
         description: str = "",
     ) -> str:
         """
-        Actually create the approved calendar event. Only call after owner confirms.
-        start_iso and end_iso are ISO 8601 datetime strings with timezone.
+        Actually create the approved calendar event. Only call after the owner confirms.
+        Creates exactly what is shown in the on-screen preview.
         """
         await _set_state(self._room, "thinking")
+
+        # Prefer the exact values from the approved preview — they were computed
+        # with the business timezone in create_calendar_event. The model-supplied
+        # args are an unreliable fallback (it tends to drop the timezone offset).
+        draft = self._pending_draft if (self._pending_draft or {}).get("kind") == "calendar_event" else None
+        if draft:
+            title = draft.get("title") or title
+            description = draft.get("description") or description
+            start_iso = draft.get("_start_iso") or start_iso
+            end_iso = draft.get("_end_iso") or end_iso
+
+        if not start_iso or not end_iso:
+            return "I don't have an event ready yet — let me prepare it first, then confirm."
+
         try:
             from gcal_helpers import _gcal_get_superadmin_id
             admin_id = _gcal_get_superadmin_id(self._supabase, self._business_id)
@@ -527,11 +549,13 @@ class ExecutiveAssistant(Agent):
             if not token:
                 return "Cannot create event — Google Calendar token is not available."
 
+            # Google Calendar requires a timeZone whenever dateTime has no offset.
+            # Always send the business timezone (IANA name) to match gcal_helpers.py.
             body = {
                 "summary": title,
                 "description": description,
-                "start": {"dateTime": start_iso},
-                "end": {"dateTime": end_iso},
+                "start": {"dateTime": start_iso, "timeZone": self._business_timezone},
+                "end": {"dateTime": end_iso, "timeZone": self._business_timezone},
             }
             async with _httpx.AsyncClient(timeout=20) as http:
                 r = await http.post(
@@ -713,6 +737,8 @@ async def executive_agent(ctx: agents.JobContext):
                 jm = json.loads(raw_job)
                 business_id = jm.get("business_id")
                 user_id = jm.get("user_id")
+                if not location_id:
+                    location_id = jm.get("location_id")
             except json.JSONDecodeError:
                 pass
 
@@ -737,7 +763,7 @@ async def executive_agent(ctx: agents.JobContext):
     )
 
     session = AgentSession(
-        llm=openai.realtime.RealtimeModel(),
+        llm=openai.realtime.RealtimeModel(voice="cedar", temperature=0.9),
         preemptive_generation=True,
     )
     assistant = ExecutiveAssistant(
@@ -778,13 +804,10 @@ async def executive_agent(ctx: agents.JobContext):
             if payload.get("type") == "user_text":
                 text = (payload.get("text") or "").strip()
                 if text:
+                    # Feed the typed text as a real user turn (not a meta-instruction)
+                    # so the model grounds on it properly — fixes identity/answer drift.
                     asyncio.ensure_future(
-                        session.generate_reply(
-                            instructions=(
-                                f"The owner just typed this message: '{text}'. "
-                                "Respond to it naturally and helpfully."
-                            )
-                        )
+                        session.generate_reply(user_input=text)
                     )
         except Exception as e:
             logger.warning("Data received handler error: %s", e)
@@ -800,8 +823,8 @@ async def executive_agent(ctx: agents.JobContext):
     # Greet the owner
     await session.generate_reply(
         instructions=(
-            f"Greet the business owner warmly. Say something like: "
-            f"'Good morning! How can I help you with {business_name} today?' "
+            f"Greet the business owner warmly and introduce yourself by name. Say something like: "
+            f"'Hi, I'm Remi — how can I help you with {business_name} today?' "
             "Keep it very short — one sentence."
         )
     )

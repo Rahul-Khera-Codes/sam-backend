@@ -28,7 +28,10 @@ GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 GOOGLE_AUTH_BASE = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo"
 GMAIL_SEND_SCOPE_URI = "https://www.googleapis.com/auth/gmail.send"
-GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/userinfo.email openid"
+# gmail.readonly added for the Executive Agent (list_emails / read_email).
+# NOTE: gmail.readonly is a Google "restricted" scope — production verification
+# requires a CASA security assessment. Works now under "testing" mode for test users.
+GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email openid"
 
 
 # ── OAuth URL ─────────────────────────────────────────────────────────────────
