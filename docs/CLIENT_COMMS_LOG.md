@@ -5,13 +5,22 @@ Most recent entry at top.
 
 ---
 
-## OPEN QUESTIONS FOR SAM (drafted 2026-06-24, NOT yet sent)
+## SAM ITEMS — re-triaged 2026-06-25 (Sam is non-technical: only surface what he must ACT on, or build-and-demo for feedback)
 
-1. **Gmail / Google verification:** What's the app's current OAuth verification status? Email *reading* needs `gmail.readonly` (Google **restricted** scope) → public launch requires a paid annual **CASA** assessment — commit to it, or narrow the feature? And `readonly` vs `modify` — will Remi ever *manage* the inbox (mark read/archive/label), so we request the right scope once?
-2. **Avatar:** OK with a clean *abstract* avatar for the first Executive Assistant release, with the **HeyGen** talking-avatar (your PDF) as Phase 2? (So we build a swappable placeholder.)
-3. **Rich cards** (email-list/schedule as visual cards) in this release (extra frontend time), or ship text-first and add cards later?
-4. **Billing toggle:** wire the Stripe add-on now or keep free during beta — and what's the price ($49–79 TBD)?
-5. **Sales Employee (later):** using **Apify to scrape LinkedIn still risks LinkedIn's ToS** — flag for the lawyer review. Also: do you have an **Apify account + budget** (usage-priced)?
+**Build now, don't ask — show Sam for feedback when ready:**
+- **Avatar** → abstract avatar now / HeyGen Phase 2 is already the approved plan (he approved the full overview doc, both phases). Build swappable, demo it. (WS4, in progress.)
+- **Rich cards** → already BUILT + verified. Demo, not a question.
+
+**Get feedback when convenient (not a blocker — sensible default already shipping):**
+- **Billing price** → free-during-beta is the working default; ask his price ($49–79/mo TBD) when he's around. No build dependency.
+
+**Genuine action item for Sam — raise at the right time, in plain language (NOT a build blocker; works in test mode now):**
+- **Gmail go-live / CASA:** to let Remi read Gmail in the *public* product, Google requires a paid **annual third-party security review (CASA)** — costs money + a few weeks lead time. When we're ready to launch publicly he must approve that spend (and any Google-side verification steps he owns). Secondary: confirm whether Remi should ever *manage* the inbox (mark-read/archive/label) so we request `gmail.modify` once instead of re-verifying. Until then it runs fine in test mode for our test users.
+
+**Deferred to the Sales Employee workstream (next product, not now):**
+- **Apify / LinkedIn:** scraping LinkedIn via Apify carries LinkedIn-ToS risk (lawyer review, alongside CASL) + Sam needs to provide an Apify account/budget. Raise when Sales work starts.
+
+_Prior Jun-24 draft (a flat 5-question list) superseded by the above — the old framing asked Sam technical decisions he doesn't need to make._
 
 ---
 
