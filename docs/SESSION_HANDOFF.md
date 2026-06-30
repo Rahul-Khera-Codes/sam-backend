@@ -133,7 +133,7 @@ Key env files:
 - **Supabase Auth Google** — controls "Sign in with Google" login. Separate credentials, not ours.
 - **`backend/.env` GOOGLE_CLIENT_ID/SECRET** — controls Gmail + Calendar integrations per location
 - **`agent/.env.local` GOOGLE_CLIENT_ID/SECRET** — MUST match backend. Agent refreshes tokens; backend creates them.
-- Current project: `870924190939-gqnop6gsjdm698eg5n2oog9bb1qi3kt4.apps.googleusercontent.com`
+- ⚠️ **Project/client-id discrepancy (verify):** `backend/.env` currently uses client `902808969705-…e7q5uca` (project 902808969705), but this doc previously listed `870924190939-…1qi3kt4`. The `.env` is likely the live one (recall the credential-mismatch fix where agent/.env.local was changed to match backend). **Confirm which project is live on the VPS and reconcile both `backend/.env` + `agent/.env.local`.** (Client IDs aren't secret; the client SECRET is — never commit/print it.)
 - Scopes used: `gmail.send`, **`gmail.readonly`** (added WS6 — restricted → CASA for public launch), `calendar.events`, `userinfo.email`, `openid`
 
 ---
@@ -233,6 +233,17 @@ Key env files:
 - `ai-employees-app/src/components/executive/` — new `AgentAvatar.tsx`, `AgentCardView.tsx`; rewired `AgentDisplay.tsx`; `ExecutiveAgent.tsx` auto-open transcript + thread `sendCardAction`/`agentActivity`.
 - `ai-employees-app/tailwind.config.ts` — `breathe` keyframe.
 - Specs: `docs/superpowers/specs/2026-06-2{4,5}-executive-agent-*` (compose-email, cards-phase-a A.2 note, email-ids-and-logs, avatar-ws4, activity-feed-ws10, phase-b-pick-to-book-ws11, phase-b-appointments-ws12, phase-b-email-detail-ws13).
+
+### Session 53 addendum (2026-06-25→30) — client sync, exec-agent feedback, avatar research
+- **Sam tested the Executive Agent (Jun 29): "test was successful" ✅** — broad live-verification of the session-53 UI passed. (WS4/10/11/12/13 still merit a focused dev pass, but Sam's hands-on test went fine.)
+- **Team scaling:** Yuvraj onboarded as 2nd dev (**UI**); Rahul = lead (agent/backend core). Meeting held ~Jun 29. Sam wants the agent suite done in ~2 months.
+- **"Three agents in July" = Marketing + Sales + HR** (excludes Customer Service + Executive Assistant). Rahul → needs exact feature specs per agent before committing. Honest read: all three *complete* in a month is unrealistic; tight MVPs maybe.
+- **Sam's 4 exec-agent requests:** (1) center Start Session button, (2) center Unmute Mic button, (3) **fix attach-document-to-email BUG**, (4) "ChatGPT-like" general Q&A (scope it).
+- **Attach-doc bug (confirmed + root-caused):** exec `send_email_draft` only attaches `MIMEText(body)` → no doc attach (placeholder in body; screenshot in ~/Downloads). Fix = port CS agent's `email_document` (`agent/agent.py:716`) into `executive_agent.py`.
+- **Cost estimate owed to Sam** (LiveKit + OpenAI Realtime; +~$0.10/min if HeyGen avatar ships).
+- **Avatar = HeyGen (Sam's call). Integration researched + verified:** `livekit-plugins-liveavatar` LITE mode, **realtime-compatible** (avatar consumes AgentSession audio output), **`~=1.4` matches our framework** (no bump), free sandbox POC, ≈$0.10/min. Frontend = render avatar video track at the WS4 swap point. Full notes: memory `reference_heygen_liveavatar_integration`.
+- **NEW product — Human Resources Employee** (`Human Resources.pdf`, ~/Downloads, 9 screens — full AI recruiting/ATS). Memory `project_feature_hr_employee`. One of the 3 July agents.
+- Logged to: `docs/CLIENT_COMMS_LOG.md` (2026-06-25→06-30), `TODO.md` ("📋 NEW from Sam"), memory (`project_feature_hr_employee`, `reference_heygen_liveavatar_integration`, updated `reference_executive_avatar`/`project_blockers`/`project_voice_agent`/`MEMORY.md`).
 
 ---
 

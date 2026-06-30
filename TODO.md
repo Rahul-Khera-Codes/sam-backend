@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-06-25 (Session 53 — Executive Assistant "Remi" Phase-1 essentially CODE-COMPLETE. This session: WS8 compose/send new email; WS3 A.2 unified card envelope; WS9 email-IDs back in model context + log quieting; security prompt-injection hardening; WS4 central avatar; WS10 avatar-centric display + tool activity feed; WS3 Phase B = WS11 free_slots pick-to-book + WS12 appointment Cancel/Reschedule + WS13 email_detail+Reply, all on a new card_action round-trip. PENDING: live-verify WS4/10/11/12/13, then merge feature/google-calendar-timezone → main. Sam items re-triaged (build-and-demo vs must-act). Prev session 52: WS0/1/2/5/6/7.)
+Last updated: 2026-06-25 (Session 53 — Executive Assistant "Remi" Phase-1 essentially CODE-COMPLETE. This session: WS8 compose/send new email; WS3 A.2 unified card envelope; WS9 email-IDs back in model context + log quieting; security prompt-injection hardening; WS4 central avatar; WS10 avatar-centric display + tool activity feed; WS3 Phase B = WS11 free_slots pick-to-book + WS12 appointment Cancel/Reschedule + WS13 email_detail+Reply, all on a new card_action round-trip. PENDING: live-verify WS4/10/11/12/13, then merge feature/google-calendar-timezone → main. Sam items re-triaged (build-and-demo vs must-act). Prev session 52: WS0/1/2/5/6/7.) — ADDENDUM (Jun 25–30): Sam tested exec agent = successful; Yuvraj onboarded (UI), Rahul lead; July target = 3 agents (Marketing+Sales+HR) pending specs; attach-doc-to-email bug (port CS email_document); center Start/Mic buttons; ChatGPT-scope Q; cost estimate owed; avatar=HeyGen LiveAvatar (verified, LITE/sandbox); NEW HR Employee product (Human Resources.pdf). See "📋 NEW from Sam" section + CLIENT_COMMS_LOG + memory.
 
 ---
 
@@ -419,6 +419,23 @@ Phase 6 (v2 — SHIPPED session 38):
 - [x] `ai-employees-app/src/lib/voiceAgentApi.ts` — `scrapeWebsiteToKB()` function
 - [x] `ai-employees-app/src/pages/dashboard/BusinessSettings.tsx` — "Generate from Website" card + dialog + loading state + success toast + KB list refresh
 - Commits: `51f7f2a`, `7b09fb4`, `66b98be`, `52ab917` (backend) + `efdb03d` (frontend)
+
+### 📋 NEW from Sam (Jun 25–30) — scope/build next (see CLIENT_COMMS_LOG 2026-06-25→06-30)
+**Team:** Yuvraj onboarded as 2nd dev (UI); Rahul = lead (agent/backend core). Target: agent suite in ~2 months.
+**July question:** can the THREE remaining agents (**Marketing + Sales + HR**) be done in July? Rahul → needs exact feature specs per agent first. → [ ] Get a spec (like HR PDF) per agent, scope MVP-vs-full, give per-agent estimate.
+
+**Executive Agent — Sam tested OK (Jun 29) ✅. His requests:**
+- [ ] **Fix attach-document-to-email (BUG, confirmed).** Exec agent `send_email_draft` only attaches `MIMEText(body)` — no doc attach (body shows placeholder "[…inserted here]", screenshot in ~/Downloads). Port the CS agent's `email_document` capability (`agent/agent.py:716` — `business-documents` storage → signed URL → download → `MIMEBase("application","pdf")`) into `executive_agent.py`: a tool to list business docs + attach the chosen PDF to the draft → existing preview→approve→send.
+- [ ] **Move Start Session button to center** of screen (exec agent UI).
+- [ ] **Add Unmute Mic button to center** of screen (exec agent UI; centered layout exists on customer agent — bring to exec).
+- [ ] **"ChatGPT-like" functionality** — Remi already answers general Qs via the realtime model; clarify with Sam: open-ended Q&A/drafting (easy) vs document/data analysis (bigger). Scope before building.
+- [ ] **Cost estimate for Sam** (owed) — LiveKit + OpenAI Realtime per active session; if HeyGen avatar ships, +~$0.10/min (LiveAvatar LITE) → frame avatar on-by-default vs optional.
+
+**Avatar — HeyGen (Sam confirmed in meeting). Integration researched + verified (see memory `reference_heygen_liveavatar_integration`):**
+- [ ] Phase-2 avatar = HeyGen **LiveAvatar** plugin, **LITE mode** (keep our OpenAI-Realtime pipeline), `livekit-plugins-liveavatar~=1.4` (matches our `livekit-agents~=1.4`, no framework bump). Realtime-compatible (avatar consumes session audio output). **POC in free sandbox first** (`is_sandbox=True`). Backend: `AvatarSession` + `await avatar.start(session, room)` before `session.start()` in `executive_agent.py` + env vars. Frontend: render avatar participant's **video track** at WS4 swap point in `AgentAvatar.tsx` (add video branch to `TrackSubscribed`); avoid double audio. Open: exact $ pricing + sandbox caps + which HeyGen avatar Sam wants (must be available in LiveAvatar).
+
+**New product — Human Resources Employee** (`Human Resources.pdf`, ~/Downloads — 9 screens, full AI recruiting/ATS). See memory `project_feature_hr_employee`. One of the 3 July agents. Big lift (LinkedIn/Indeed sync + AI video interviewer + onboarding avatar chat). [ ] Build after specs confirmed; reuse avatar/doc-library/realtime infra.
+**Sales Employee + Marketing Employee** — the other two July agents; Sales reqs confirmed (Apify pipeline, no CRM, AgenticBI report) — see `project_feature_sales_agent`; Marketing not yet specced.
 
 ### Executive Agent — BUILT & COMMITTED, NOT COMPLETE ⚠️
 Full plan: `docs/superpowers/plans/2026-06-22-executive-agent-plan.md`

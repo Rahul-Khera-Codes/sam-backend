@@ -24,6 +24,27 @@ _Prior Jun-24 draft (a flat 5-question list) superseded by the above — the old
 
 ---
 
+## 2026-06-25 → 06-30 — Team scaling, Exec-Agent tested OK, 4 requests + attach-doc bug, avatar=HeyGen, new HR product
+
+**Team / process change (Upwork, Jun 25–26):**
+- Sam wants the **whole agent suite done in ~2 months** (not end of year) and asked Rahul to bring on a second developer. Rahul proposed **Yuvraj** (8 yrs, fullstack + design, Upwork). Sam wants **Rahul as lead developer** guiding Yuvraj. Rahul showed Yuvraj the system; he's interested.
+- **Meeting held (~Jun 29, Mon AM India time)** between Sam, Rahul, Yuvraj: agreed **Yuvraj works on UI**, Rahul on agent/backend core + lead.
+- Sam asked: **can all THREE remaining agents be done in July?** "Three" = excluding Customer Service + Executive Assistant → **Marketing + Sales + Human Resources**. Rahul's answer (correct): **need exact feature details per agent to confirm feasibility.** → Action: get a spec (like the HR PDF) per agent, scope MVP-vs-full, give per-agent estimate. (Honest read: all three *complete* in one month w/ 2 devs is unrealistic; tight MVPs maybe.)
+
+**Executive Agent — Sam tested it (Mon Jun 29): "the test was successful" ✅** (broad live-verification of the session-53 batch passed in Sam's hands). Then Sam raised:
+1. Move **Start Session** button to center of screen. (UI)
+2. Add **Unmute Mic** button to center of screen. (UI; Rahul: that centered layout was on the customer agent — will bring to executive agent too)
+3. **Fix attach-document-to-email (BUG).** ⬇
+4. Add **ChatGPT-like** general-question functionality. (scope — Remi already answers general Qs via the realtime model; clarify if Sam means open-ended Q&A/drafting [easy] vs file/data analysis [bigger])
+
+**BUG — attach document to email (confirmed + root-caused):** Asking Remi to send an email with a Business-Settings/Documents attachment → no attachment; body shows a placeholder like "[Packages and pricing details will be inserted here]" (screenshot `{FF5E41F0…}.png` in ~/Downloads). **Root cause:** `executive_agent.py send_email_draft` only does `msg.attach(MIMEText(body))` — the exec agent has NO document-lookup/attach capability. The **CS agent already has it** (`email_document` in `agent/agent.py:716` → pulls `business-documents` storage, signs URL, downloads, attaches as `MIMEBase("application","pdf")`). **Fix = port that into the exec agent** (a tool to list business docs + attach the chosen PDF to the draft → through the existing preview→approve→send).
+
+**Cost question (owed deliverable):** Sam asked how the Executive Assistant affects running costs. Rahul: same stack as CS agent (LiveKit + OpenAI), minus telephony; **will send a cost estimate.** Note: if the HeyGen avatar ships, it adds ~$0.10/min (LiveAvatar LITE) on top of OpenAI Realtime + LiveKit → material per-minute add; frame avatar-on vs optional in the estimate.
+
+**Avatar decision — use HeyGen.** Sam (meeting) confirmed the Phase-2 avatar = **HeyGen**. Rahul researched + verified the integration (2026-06-30): HeyGen **LiveAvatar** plugin for LiveKit Agents, **LITE mode** (we keep our OpenAI-Realtime pipeline, HeyGen renders video), **realtime-compatible** (avatar consumes the AgentSession audio output), **version-aligned** (`livekit-plugins-liveavatar~=1.4` matches our `livekit-agents~=1.4`), **free sandbox** for POC, ≈$0.10/min LITE. Full tech notes in memory `reference_heygen_liveavatar_integration`. Our WS4 `AgentAvatar.tsx` already has the swap point; frontend adds a video-track render branch.
+
+**NEW product — Human Resources Employee** (`Human Resources.pdf`, ~Jun 26, in ~/Downloads): a full AI recruiting/ATS suite (9 screens: recruitment dashboard + funnel, job postings, JD builder "Ava" + Talent Finder LinkedIn search, Interview Question Bank + AI video interviewer, candidates + AI scoring, interview analysis/feedback + hire recommendations, candidate detail, document library, onboarding chat with avatar). Big lift (LinkedIn/Indeed sync + AI video interviewer; same LinkedIn-ToS risk as Sales). Reuse: onboarding avatar = Remi pattern, doc library = business-documents/KB, interviewer = LiveKit realtime. Full breakdown in memory `project_feature_hr_employee`.
+
 ## 2026-06-24 — Sam answered Sales Employee questions + sent 5 reference PDFs + PRIORITY CHANGE
 
 Rahul sent the 5 clarification questions (AM). Sam replied (7:33 PM):
