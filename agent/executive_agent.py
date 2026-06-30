@@ -972,9 +972,12 @@ async def executive_agent(ctx: agents.JobContext):
 
     _avatar_id = os.environ.get("LIVEAVATAR_AVATAR_ID", "")
     if _avatar_id:
-        _avatar = liveavatar.AvatarSession(avatar_id=_avatar_id, is_sandbox=True)
-        await _avatar.start(session, room=ctx.room)
-        logger.info("HeyGen LiveAvatar started (sandbox) — avatar_id=%s", _avatar_id)
+        try:
+            _avatar = liveavatar.AvatarSession(avatar_id=_avatar_id)
+            await _avatar.start(session, room=ctx.room)
+            logger.info("HeyGen LiveAvatar started — avatar_id=%s", _avatar_id)
+        except Exception as _avatar_err:
+            logger.warning("HeyGen LiveAvatar failed to start — continuing without avatar: %s", _avatar_err)
     else:
         logger.info("LIVEAVATAR_AVATAR_ID not set — running without avatar")
 
