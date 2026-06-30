@@ -953,7 +953,7 @@ async def executive_agent(ctx: agents.JobContext):
     )
 
     session = AgentSession(
-        llm=openai.realtime.RealtimeModel(voice="cedar", temperature=0.9),
+        llm=openai.realtime.RealtimeModel(voice="marin", temperature=0.9),
         preemptive_generation=True,
     )
     assistant = ExecutiveAssistant(
