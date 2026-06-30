@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from livekit import agents, rtc
 from livekit.agents import AgentServer, AgentSession, Agent, function_tool, RunContext, room_io
-from livekit.plugins import openai
+from livekit.plugins import openai, liveavatar
 
 import httpx as _httpx
 from constants import GOOGLE_TOKEN_URL, GOOGLE_CALENDAR_BASE, GMAIL_SEND_URL
@@ -966,6 +966,17 @@ async def executive_agent(ctx: agents.JobContext):
         room=ctx.room,
         location_id=location_id,
     )
+
+    # ── HeyGen LiveAvatar (Phase 2) ───────────────────────────────────────────
+    # Must start BEFORE session.start(). Guarded so agent still works without keys.
+
+    _avatar_id = os.environ.get("LIVEAVATAR_AVATAR_ID", "")
+    if _avatar_id:
+        _avatar = liveavatar.AvatarSession(avatar_id=_avatar_id, is_sandbox=True)
+        await _avatar.start(session, room=ctx.room)
+        logger.info("HeyGen LiveAvatar started (sandbox) — avatar_id=%s", _avatar_id)
+    else:
+        logger.info("LIVEAVATAR_AVATAR_ID not set — running without avatar")
 
     # ── State signaling ───────────────────────────────────────────────────────
 
