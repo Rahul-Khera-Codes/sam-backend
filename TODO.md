@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-06-24 (Session 52 — Executive Agent hardening: WS0 calendar-tz fix, WS1 naming "Remi", WS2 personality/voice, WS5 Gmail location, WS6 Gmail read scope; Sam's Sales Employee answers + build sequence (ExecAssistant→Sales→Outbound) + 5 PDFs; open questions for Sam drafted. Future scopes: docs/executive-agent-future-requirements.md)
+Last updated: 2026-06-25 (Session 53 — Executive Assistant "Remi" Phase-1 essentially CODE-COMPLETE. This session: WS8 compose/send new email; WS3 A.2 unified card envelope; WS9 email-IDs back in model context + log quieting; security prompt-injection hardening; WS4 central avatar; WS10 avatar-centric display + tool activity feed; WS3 Phase B = WS11 free_slots pick-to-book + WS12 appointment Cancel/Reschedule + WS13 email_detail+Reply, all on a new card_action round-trip. PENDING: live-verify WS4/10/11/12/13, then merge feature/google-calendar-timezone → main. Sam items re-triaged (build-and-demo vs must-act). Prev session 52: WS0/1/2/5/6/7.)
 
 ---
 
