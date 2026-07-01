@@ -446,17 +446,28 @@ class ExecutiveAssistant(Agent):
         orig_subject = _header_val(msg, "subject") or "(no subject)"
         reply_subject = subject or (f"Re: {orig_subject}" if not orig_subject.startswith("Re:") else orig_subject)
 
+        # Validate attachment if requested
+        attachment_note = ""
+        if attachment_doc_name:
+            doc = self._doc_by_name.get(attachment_doc_name.lower())
+            if not doc:
+                available = ", ".join(self._doc_by_name.keys()) or "none"
+                return f"Document '{attachment_doc_name}' not found. Available: {available}"
+            attachment_note = f"\n\n📎 Attachment: {doc['name']}"
+
         preview = {
             "kind": "email_draft",
             "emailId": email_id,
             "to": sender,
             "subject": reply_subject,
-            "body": reply_body,
+            "body": reply_body + attachment_note,
+            "attachmentDocName": attachment_doc_name,
         }
         await self._send_preview(preview)
         return (
-            f"I've prepared a reply to {sender} with subject '{reply_subject}'. "
-            "The draft is shown on screen. Say 'yes, go ahead' to send it, or tell me what to change."
+            f"I've prepared a reply to {sender} with subject '{reply_subject}'"
+            + (f" and attachment '{attachment_doc_name}'" if attachment_doc_name else "")
+            + ". The draft is shown on screen. Say 'yes, go ahead' to send it, or tell me what to change."
         )
 
     @function_tool()
@@ -466,24 +477,38 @@ class ExecutiveAssistant(Agent):
         to: str,
         subject: str,
         body: str,
+        attachment_doc_name: str = "",
     ) -> str:
         """
         Draft a brand-new email (not a reply). Shows a preview to the owner for approval.
         Do NOT call send_email_draft until the owner confirms.
+        attachment_doc_name: optional name of a business document to attach (use list_documents to see options).
         """
         await _set_state(self._room, "thinking")
         await self._activity_start("Drafting your email…")
+
+        # Validate attachment if requested
+        attachment_note = ""
+        if attachment_doc_name:
+            doc = self._doc_by_name.get(attachment_doc_name.lower())
+            if not doc:
+                available = ", ".join(self._doc_by_name.keys()) or "none"
+                return f"Document '{attachment_doc_name}' not found. Available: {available}"
+            attachment_note = f"\n\n📎 Attachment: {doc['name']}"
+
         preview = {
             "kind": "email_draft",
             "emailId": "",
             "to": to,
             "subject": subject,
-            "body": body,
+            "body": body + attachment_note,
+            "attachmentDocName": attachment_doc_name,
         }
         await self._send_preview(preview)
         return (
-            f"I've prepared an email to {to} with subject '{subject}'. "
-            "The draft is shown on screen. Say 'yes, go ahead' to send it, or tell me what to change."
+            f"I've prepared an email to {to} with subject '{subject}'"
+            + (f" and attachment '{attachment_doc_name}'" if attachment_doc_name else "")
+            + ". The draft is shown on screen. Say 'yes, go ahead' to send it, or tell me what to change."
         )
 
     @function_tool()
@@ -494,14 +519,18 @@ class ExecutiveAssistant(Agent):
         subject: str,
         body: str,
         email_id: str = "",
+        attachment_doc_name: str = "",
     ) -> str:
         """
         Send the approved email draft (reply or new email). Only call this after the owner explicitly confirms.
         email_id is optional — provide it only when sending a reply, to thread it.
+        attachment_doc_name is optional — name of a business document to attach as PDF.
         """
         import base64
         from email.mime.multipart import MIMEMultipart
         from email.mime.text import MIMEText
+        from email.mime.base import MIMEBase
+        from email import encoders
 
         await _set_state(self._room, "thinking")
         await self._activity_start("Sending your email…")
@@ -511,11 +540,60 @@ class ExecutiveAssistant(Agent):
         if not token:
             return "Cannot send — Gmail is not connected for this business."
 
-        msg = MIMEMultipart("alternative")
+        # Resolve and download attachment if requested
+        pdf_bytes: bytes | None = None
+        pdf_filename = ""
+        if attachment_doc_name:
+            doc = self._doc_by_name.get(attachment_doc_name.lower())
+            if not doc:
+                # Fuzzy match — substring
+                req_lower = attachment_doc_name.lower()
+                for k, v in self._doc_by_name.items():
+                    if req_lower in k or k in req_lower:
+                        doc = v
+                        break
+            if not doc:
+                return f"Document '{attachment_doc_name}' not found. Use list_documents to see available documents."
+            try:
+                signed = self._supabase.storage.from_("business-documents").create_signed_url(doc["file_path"], 300)
+                if isinstance(signed, dict):
+                    file_url = (
+                        signed.get("signedURL")
+                        or signed.get("signedUrl")
+                        or (signed.get("data") or {}).get("signedUrl")
+                        or ""
+                    )
+                else:
+                    file_url = getattr(signed, "signed_url", None) or ""
+                if not file_url:
+                    return "Failed to generate download link for the document."
+                async with _httpx.AsyncClient(timeout=30) as http:
+                    resp = await http.get(file_url)
+                    resp.raise_for_status()
+                    pdf_bytes = resp.content
+                pdf_filename = doc.get("file_name") or f"{doc['name']}.pdf"
+            except Exception as e:
+                logger.error("Failed to fetch attachment %s: %s", attachment_doc_name, e)
+                return f"Failed to retrieve document '{attachment_doc_name}'. Please try again."
+
+        # Build MIME message — mixed (supports attachment) or alternative (plain text only)
+        if pdf_bytes:
+            msg = MIMEMultipart("mixed")
+        else:
+            msg = MIMEMultipart("alternative")
         msg["From"] = f"{self._business_name} <{sender_email}>"
         msg["To"] = to
         msg["Subject"] = subject
-        msg.attach(MIMEText(body, "plain"))
+        # Strip the attachment note line we added for display in the preview card
+        clean_body = body.split("\n\n📎 Attachment:")[0]
+        msg.attach(MIMEText(clean_body, "plain"))
+
+        if pdf_bytes:
+            part = MIMEBase("application", "pdf")
+            part.set_payload(pdf_bytes)
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", f'attachment; filename="{pdf_filename}"')
+            msg.attach(part)
 
         # Thread the reply if we have a message ID
         if email_id:
