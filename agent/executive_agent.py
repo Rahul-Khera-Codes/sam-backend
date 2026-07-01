@@ -26,7 +26,7 @@ import httpx as _httpx
 from constants import GOOGLE_TOKEN_URL, GOOGLE_CALENDAR_BASE, GMAIL_SEND_URL
 from gmail_helpers import _gmail_get_valid_token
 from gcal_helpers import _gcal_get_valid_token, _gcal_refresh_token
-from supabase_helpers import _get_supabase, _fetch_business
+from supabase_helpers import _get_supabase, _fetch_business, _fetch_documents_for_location
 
 load_dotenv(".env.local")
 logger = logging.getLogger("executive-agent")
@@ -239,6 +239,12 @@ class ExecutiveAssistant(Agent):
         self._pending_card_id: str | None = None
         self._card_seq = 0
 
+        # Document library — preloaded for attach-to-email flow
+        self._documents = _fetch_documents_for_location(supabase, business_id, location_id) if supabase else []
+        self._doc_by_name: dict[str, dict] = {
+            d["name"].lower(): d for d in self._documents if d.get("name")
+        }
+
     async def _send_card(
         self,
         card_type: str,
@@ -410,16 +416,26 @@ class ExecutiveAssistant(Agent):
         )
 
     @function_tool()
+    async def list_documents(self, context: RunContext) -> str:
+        """List business documents available to attach to an email."""
+        if not self._documents:
+            return "No documents found in the business document library."
+        names = [d["name"] for d in self._documents if d.get("name")]
+        return "Available documents:\n" + "\n".join(f"- {n}" for n in names)
+
+    @function_tool()
     async def draft_reply(
         self,
         context: RunContext,
         email_id: str,
         reply_body: str,
         subject: str = "",
+        attachment_doc_name: str = "",
     ) -> str:
         """
         Draft a reply to an email. Shows a preview to the owner for approval.
         Do NOT call send_email_draft until the owner confirms.
+        attachment_doc_name: optional name of a business document to attach (use list_documents to see options).
         """
         await _set_state(self._room, "thinking")
         await self._activity_start("Drafting a reply…")
