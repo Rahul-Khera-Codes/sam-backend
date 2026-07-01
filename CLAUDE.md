@@ -19,6 +19,40 @@
 
 5. **Confirm what was verified after each fix.** State what was checked (syntax, types, logic trace, related flows) so it's clear the fix is solid, not just plausible.
 
+6. **Think as engineer + product owner — full resolution, no patches.**
+   - For new functionality: before writing any code, (a) verify technical feasibility in the current stack, (b) map every layer affected (frontend → hook → API router → backend → agent → DB → side effects on existing flows), (c) identify what existing features could break or change behavior, (d) present the full impact and wait for confirmation.
+   - For bugs: same — never patch the symptom, solve the root cause completely.
+   - "Product owner" means: how does this change what the end user experiences? Does it conflict with another flow, create confusion, or introduce a hidden cost?
+   - **Mandatory sequence: verify → spec → implement. No exceptions.**
+
+---
+
+## Dev Process (ALWAYS follow — every task, every session)
+
+Every piece of work — bug fix or new feature — follows three explicit phases.
+Do not skip or merge phases. Do not start the next phase without completing the current one.
+
+### Phase 1 — Verify
+- Reproduce or confirm the issue/requirement exists.
+- Trace the full call flow end-to-end (frontend → hook → API → backend → agent → DB).
+- Identify the real root cause (bugs) or the exact gap (features) — not the surface symptom.
+- Read every file that will be touched. Understand current behavior before proposing any change.
+- **Output:** a clear statement of what is actually wrong or missing, with evidence.
+
+### Phase 2 — Spec
+- List every file that needs to change and exactly what changes in each.
+- Map the full impact: what existing flows are affected, what could break, what edge cases exist.
+- State any risks, tradeoffs, or open questions.
+- **Present this to the user and wait for explicit confirmation before writing any code.**
+- If the spec reveals the task is bigger or different than described, say so now — not mid-implementation.
+
+### Phase 3 — Implement
+- Only after Phase 2 is confirmed ("yes, go ahead" / "start").
+- Implement one logical unit at a time. Do not bundle unrelated changes.
+- **Incremental commits — no large commits.** Each commit = one coherent change (one file fixed, one tool added, one bug resolved). If a task touches 4 files for 4 different reasons, that is 4 commits.
+- Commit message must say what changed and why in one line. No vague "fix" or "update" messages.
+- After completion, state what was verified (syntax, types, logic trace, related flows).
+
 ---
 
 ## Session Start Checklist (ALWAYS do this first)
