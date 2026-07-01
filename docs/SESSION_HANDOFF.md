@@ -1,4 +1,4 @@
-# Session Handoff — 2026-06-25 (Session 53)
+# Session Handoff — 2026-07-01 (Session 55)
 
 Read this at the start of every session. It captures the full current state so you can pick up immediately.
 
@@ -17,13 +17,13 @@ Two repos:
 - **Backend + Agent:** `/home/lap-68/Documents/gt-rahul/sam-backend`
 - **Frontend:** `/home/lap-68/Documents/gt-rahul/ai-employees-app`
 
-Both repos are on `feature/google-calendar-timezone`, deployed to VPS. **Executive Assistant Phase-1 is now essentially code-complete** (session 53). **Pending before merge:** live-verify the new UI (WS4 avatar, WS10 activity feed, WS11–13 Phase B action cards), apply the timezone migration, then merge to main. Earlier "calendar-create broken" is FIXED + live-verified (WS0).
+Backend + agent on `feature/exec-agent-improvements` (session 55 work). Frontend on same branch. **Session 55 shipped:** attach-doc bug, center Start/Mic buttons, avatar toggle (user-controlled HeyGen on/off, persisted in localStorage, fully drop-safe). Docker log verified. **Pending before merge:** live-verify WS4/10/11/12/13 action cards, apply timezone migration, then merge to main.
 
-> **Restart needed to pick up session-53 code:** `docker compose restart sam-executive-agent` (backend agent changes) + frontend is on Vite HMR (just reload `/dashboard/executive`).
+> **Restart needed:** `docker compose restart sam-executive-agent` after any backend/agent code changes.
 
 ---
 
-## System Status (2026-06-20)
+## System Status (2026-07-01)
 
 ### Core — Working end-to-end ✅
 - Inbound SIP call → agent answers → books appointment → transcript + summary → emails → shows in UI
@@ -49,8 +49,8 @@ Both repos are on `feature/google-calendar-timezone`, deployed to VPS. **Executi
 - Agent OFF → silent SIP REFER to business phone
 - Google OAuth token refresh logging — all 4 paths log exact error on failure
 
-### Executive Agent "Remi" — Phase-1 essentially CODE-COMPLETE (sessions 52–53) ⚠️ pending live verify + merge
-Backend + frontend committed on `feature/google-calendar-timezone` (both repos), deployed and running from that branch. Worked as separate trackable workstreams (verify → spec → implement → commit); specs in `docs/superpowers/specs/2026-06-2{4,5}-executive-agent-*`.
+### Executive Agent "Remi" — Phase-1 CODE-COMPLETE (sessions 52–55) ⚠️ pending live verify + merge
+Backend + frontend on `feature/exec-agent-improvements` (session 55). Session 55 shipped attach-doc, center buttons, avatar toggle. Earlier workstreams (sessions 52–53) on `feature/google-calendar-timezone`; both branches need merging. Worked as separate trackable workstreams (verify → spec → implement → commit); specs in `docs/superpowers/specs/2026-06-2{4,5}-executive-agent-*` + `docs/superpowers/specs/2026-07-01-exec-agent-avatar-toggle.md`.
 
 **✅ DONE + live-verified:** WS0 calendar-create tz fix · WS1 naming "Remi" · WS2 personality (`voice="cedar"`, `temp=0.9`, English-lock, `generate_reply(user_input=text)`) · WS5 Gmail location_id · WS6 `gmail.readonly` scope · WS7 list_emails perf (~11s→~2s) · WS8 compose/send NEW email (`email_id` optional + `draft_email`) · WS3 A.1 info cards (email_list, calendar_schedule) · WS9 email-IDs back in model context (fixed hallucinated `read_email` IDs) + hpack/httpx log quieting.
 
@@ -180,7 +180,8 @@ Key env files:
 
 ## Pending Manual Steps
 
-- [ ] **Live-verify the session-53 Executive Assistant UI** (after `docker compose restart sam-executive-agent` + reload `/dashboard/executive`): WS4 avatar states; WS10 activity caption (spinner→✓, no stuck spinner on error); WS11 free_slots tap→preview→approve→booked; WS12 appointment Cancel(confirm)/Reschedule; WS13 email_detail + Reply. WS3 A.2 draft/event previews still approve/send.
+- [ ] **Reconcile `fix/avatar-aec` with `feature/exec-agent-improvements` before merge.** `fix/avatar-aec` (both repos, session 54) fixes avatar-audio/mic echo via `AudioContext`/`webAudioMix` routing + headphone notice — NOT merged into this branch. Frontend commits `486cedd`/`6002792`/`eeca509` heavily rewrite `useExecutiveSession.ts`, the same file session 55 touched for the avatar toggle. Diff the two branches on that file and manually reconcile; do not assume a clean auto-merge.
+- [ ] **Live-verify Executive Agent UI** (after `docker compose restart sam-executive-agent` + reload `/dashboard/executive`): WS4 avatar states; WS10 activity caption (spinner→✓, no stuck spinner on error); WS11 free_slots tap→preview→approve→booked; WS12 appointment Cancel(confirm)/Reschedule; WS13 email_detail + Reply. WS3 A.2 draft/event previews still approve/send. **Session-55 additions:** avatar toggle Video/VideoOff persists across page reload; attach-doc sends PDF in email; Start Session + Unmute Mic centered.
 - [ ] **Dev OAuth client for local Gmail testing** — own Google project, Testing mode, localhost redirect URIs (`http://localhost:5173/integrations/{gmail,google}/callback`), scopes gmail.send+gmail.readonly+calendar.events+userinfo.email+openid, dev as test user; put client id/secret in local `backend/.env` AND `agent/.env.local`.
 - [ ] **Decision (Sam): Gmail CASA** — commit to restricted-scope assessment for launch, or narrow feature. Don't escalate the core product's pending verification.
 - [ ] **Merge `feature/google-calendar-timezone` → main** on both repos (deployed to VPS, NOT ready until exec-agent hardening + timezone migration done)
@@ -204,6 +205,67 @@ Key env files:
 
 ## Pending Migrations (not yet applied)
 - `20260618000000_businesses_timezone.sql` — add `timezone TEXT DEFAULT 'America/Toronto'` to businesses. File exists in `ai-employees-app/supabase/migrations/`. Run `supabase db push`.
+
+---
+
+## What Was Done This Session (Session 55, 2026-07-01)
+
+**Avatar toggle + attach-doc bug fix + center buttons. All on branch `feature/exec-agent-improvements`.**
+
+### 1. Avatar toggle — end-to-end (WS: verify → spec → implement)
+
+User-controlled Video/VideoOff toggle for the HeyGen LiveAvatar, persisted in localStorage. Drop-safe by design: one extra condition in agent (`if _avatar_id and avatar_enabled:`), one-line revert to remove.
+
+**Backend (`backend/app/routers/executive.py`):**
+- Added `import os`.
+- Added `avatar_enabled: bool = True` to `ExecutiveSessionRequest`.
+- Added `avatar_available: bool` to `ExecutiveSessionResponse` (returned from `bool(os.environ.get("LIVEAVATAR_AVATAR_ID", ""))`).
+- `avatar_enabled` passed in agent dispatch metadata. Backwards-compatible default = `True`.
+
+**Agent (`agent/executive_agent.py`):**
+- Added `avatar_enabled: bool = True` variable.
+- Job metadata parsing: reads `avatar_enabled` from `jm["avatar_enabled"]` when present.
+- Avatar gate changed from `if _avatar_id:` → `if _avatar_id and avatar_enabled:`.
+- Else-branch log: `"avatar disabled by user"` vs `"LIVEAVATAR_AVATAR_ID not set"`.
+
+**Frontend:**
+- `lib/voiceAgentApi.ts` — added `avatar_available: boolean` to `ExecutiveSessionResponse`; added `avatarEnabled` param to `createExecutiveSession()`.
+- `hooks/useExecutiveSession.ts` — `avatarEnabled` state (localStorage-persisted, default `true`); `avatarAvailable` state (cached from session response); `toggleAvatarEnabled()` (no-op when connected/connecting); all three exported.
+- `components/executive/AgentStatusHeader.tsx` — Video/VideoOff `lucide-react` icon button, always rendered (no `avatarAvailable` gate — frontend can't know backend capability before a session). Button disabled during active session; `_avatarAvailable` renamed to suppress unused TS warning. Uses `cn` for colour state.
+- `pages/dashboard/ExecutiveAgent.tsx` — wires `avatarEnabled`, `avatarAvailable`, `toggleAvatarEnabled` into `AgentStatusHeader`.
+
+**Verified live (Docker logs):**
+- Session 1&2: `avatar_enabled=True` → `"HeyGen LiveAvatar started"`.
+- Session 3: `avatar_enabled=False` → `"Running without avatar — avatar disabled by user"`.
+- Agent tools (`list_emails`) worked correctly in the avatar-disabled session.
+
+**Drop-safety confirmed:** avatar lifecycle is fully isolated in `executive_agent.py` L1064–1076. Agent core (session, tools, state) has zero coupling to avatar state. Remove = one-line revert of the gate condition.
+
+**Debug trace (three attempts):**
+1. `avatarAvailable=false` on first page load (empty localStorage) hid button via `{avatarAvailable && ...}` gate → moved to localStorage cache approach.
+2. Component default `avatarAvailable = true` irrelevant because `ExecutiveAgent.tsx` always passes explicit prop from hook → identified the gate as wrong approach.
+3. Correct fix: removed conditional gate entirely; button always renders; `avatarAvailable` kept for future billing gate but renamed to suppress TS unused warning.
+
+### 2. Attach-document-to-email bug fix (`executive_agent.py`)
+Root cause was two-fold: (1) no document library was loaded for the exec agent at all; (2) `send_email_draft` only built `MIMEText(body)` — no attachment code path existed. Sam confirmed bug Jun 29 with a screenshot (placeholder text visible in email body).
+
+Fix (2 commits):
+- `_fetch_documents_for_location()` (new helper in `agent/supabase_helpers.py`) preloads the business's document library into `self._documents` / `self._doc_by_name` at agent startup.
+- New `list_documents` function-tool lets Remi tell the model what's available.
+- `draft_email`, `draft_reply`, and `send_email_draft` all gained an `attachment_doc_name: str = ""` param. `draft_*` just validate the name and add a "📎 Attachment: …" note to the preview body. `send_email_draft` does the real work: resolve doc (exact or fuzzy substring match) → Supabase signed URL → `httpx` download → `MIMEBase("application","pdf")` + base64 encode → attach. Switches the outer message from `MIMEMultipart("alternative")` to `MIMEMultipart("mixed")` when an attachment is present, and strips the "📎 Attachment:" preview note out of the body before it's sent.
+
+### 3. Center Start Session + Unmute Mic buttons
+Frontend layout fix: Start Session and Unmute Mic call-to-action buttons in `AgentDisplay.tsx` centered in the page rather than left-aligned.
+
+### Files touched (session 55)
+- `backend/app/routers/executive.py` — avatar_enabled/avatar_available
+- `agent/executive_agent.py` — avatar gate + metadata parse + attach-doc fix
+- `ai-employees-app/src/lib/voiceAgentApi.ts` — avatar_enabled/avatar_available API types
+- `ai-employees-app/src/hooks/useExecutiveSession.ts` — avatarEnabled/avatarAvailable/toggleAvatarEnabled
+- `ai-employees-app/src/components/executive/AgentStatusHeader.tsx` — Video/VideoOff toggle button
+- `ai-employees-app/src/pages/dashboard/ExecutiveAgent.tsx` — wire avatar props
+- `ai-employees-app/src/components/executive/AgentDisplay.tsx` — center buttons
+- `TODO.md` — marked attach-doc, center buttons, avatar toggle ✅
 
 ---
 
