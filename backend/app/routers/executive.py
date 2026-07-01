@@ -5,6 +5,7 @@ executive assistant session and returns the token for the frontend to join.
 """
 import json
 import logging
+import os
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -25,12 +26,14 @@ EXECUTIVE_AGENT_NAME = "executive-agent"
 class ExecutiveSessionRequest(BaseModel):
     business_id: str
     location_id: str | None = None
+    avatar_enabled: bool = True
 
 
 class ExecutiveSessionResponse(BaseModel):
     room_name: str
     token: str
     livekit_url: str
+    avatar_available: bool
 
 
 @router.post("/session", response_model=ExecutiveSessionResponse)
@@ -75,16 +78,21 @@ async def create_executive_session(
             "business_id": body.business_id,
             "user_id": user_id,
             "location_id": body.location_id,
+            "avatar_enabled": body.avatar_enabled,
         },
     )
 
     logger.info(
-        "Executive session created: room=%s business=%s",
-        room_name, body.business_id,
+        "Executive session created: room=%s business=%s avatar_enabled=%s",
+        room_name, body.business_id, body.avatar_enabled,
     )
+
+    # avatar_available = env var set (future: also check billing tier)
+    avatar_available = bool(os.environ.get("LIVEAVATAR_AVATAR_ID", ""))
 
     return ExecutiveSessionResponse(
         room_name=room_name,
         token=token,
         livekit_url=settings.livekit_url,
+        avatar_available=avatar_available,
     )
