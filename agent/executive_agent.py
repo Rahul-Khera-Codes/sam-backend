@@ -239,11 +239,13 @@ class ExecutiveAssistant(Agent):
         self._pending_card_id: str | None = None
         self._card_seq = 0
 
-        # Document library — preloaded for attach-to-email flow
-        self._documents = _fetch_documents_for_location(supabase, business_id, location_id) if supabase else []
-        self._doc_by_name: dict[str, dict] = {
-            d["name"].lower(): d for d in self._documents if d.get("name")
-        }
+    def _fetch_doc_by_name(self) -> tuple[list[dict], dict[str, dict]]:
+        """
+        Live document-library fetch — never cached, so a document added
+        mid-session is visible on the very next call (unlike a startup snapshot).
+        """
+        docs = _fetch_documents_for_location(self._supabase, self._business_id, self._location_id) if self._supabase else []
+        return docs, {d["name"].lower(): d for d in docs if d.get("name")}
 
     async def _send_card(
         self,
@@ -418,9 +420,10 @@ class ExecutiveAssistant(Agent):
     @function_tool()
     async def list_documents(self, context: RunContext) -> str:
         """List business documents available to attach to an email."""
-        if not self._documents:
+        docs, _ = self._fetch_doc_by_name()
+        if not docs:
             return "No documents found in the business document library."
-        names = [d["name"] for d in self._documents if d.get("name")]
+        names = [d["name"] for d in docs if d.get("name")]
         return "Available documents:\n" + "\n".join(f"- {n}" for n in names)
 
     @function_tool()
@@ -449,9 +452,10 @@ class ExecutiveAssistant(Agent):
         # Validate attachment if requested
         attachment_note = ""
         if attachment_doc_name:
-            doc = self._doc_by_name.get(attachment_doc_name.lower())
+            _, doc_by_name = self._fetch_doc_by_name()
+            doc = doc_by_name.get(attachment_doc_name.lower())
             if not doc:
-                available = ", ".join(self._doc_by_name.keys()) or "none"
+                available = ", ".join(doc_by_name.keys()) or "none"
                 return f"Document '{attachment_doc_name}' not found. Available: {available}"
             attachment_note = f"\n\n📎 Attachment: {doc['name']}"
 
@@ -490,9 +494,10 @@ class ExecutiveAssistant(Agent):
         # Validate attachment if requested
         attachment_note = ""
         if attachment_doc_name:
-            doc = self._doc_by_name.get(attachment_doc_name.lower())
+            _, doc_by_name = self._fetch_doc_by_name()
+            doc = doc_by_name.get(attachment_doc_name.lower())
             if not doc:
-                available = ", ".join(self._doc_by_name.keys()) or "none"
+                available = ", ".join(doc_by_name.keys()) or "none"
                 return f"Document '{attachment_doc_name}' not found. Available: {available}"
             attachment_note = f"\n\n📎 Attachment: {doc['name']}"
 
@@ -544,11 +549,12 @@ class ExecutiveAssistant(Agent):
         pdf_bytes: bytes | None = None
         pdf_filename = ""
         if attachment_doc_name:
-            doc = self._doc_by_name.get(attachment_doc_name.lower())
+            _, doc_by_name = self._fetch_doc_by_name()
+            doc = doc_by_name.get(attachment_doc_name.lower())
             if not doc:
                 # Fuzzy match — substring
                 req_lower = attachment_doc_name.lower()
-                for k, v in self._doc_by_name.items():
+                for k, v in doc_by_name.items():
                     if req_lower in k or k in req_lower:
                         doc = v
                         break
