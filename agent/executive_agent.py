@@ -1002,6 +1002,7 @@ async def executive_agent(ctx: agents.JobContext):
     business_id: str | None = None
     user_id: str | None = None
     location_id: str | None = None
+    avatar_enabled: bool = True  # default True — backwards compat if key absent
 
     raw_meta = participant.metadata
     if isinstance(raw_meta, str) and raw_meta:
@@ -1014,17 +1015,20 @@ async def executive_agent(ctx: agents.JobContext):
             logger.warning("Invalid participant metadata: %s", raw_meta)
 
     # Also check job metadata (set by dispatch)
-    if not business_id:
-        raw_job = getattr(ctx.job, "metadata", None)
-        if isinstance(raw_job, str) and raw_job:
-            try:
-                jm = json.loads(raw_job)
+    raw_job = getattr(ctx.job, "metadata", None)
+    if isinstance(raw_job, str) and raw_job:
+        try:
+            jm = json.loads(raw_job)
+            if not business_id:
                 business_id = jm.get("business_id")
                 user_id = jm.get("user_id")
                 if not location_id:
                     location_id = jm.get("location_id")
-            except json.JSONDecodeError:
-                pass
+            # avatar_enabled always read from job metadata (set by dispatch)
+            if "avatar_enabled" in jm:
+                avatar_enabled = bool(jm["avatar_enabled"])
+        except json.JSONDecodeError:
+            pass
 
     if not business_id:
         logger.error("Executive session started with no business_id — aborting")
@@ -1065,7 +1069,7 @@ async def executive_agent(ctx: agents.JobContext):
     # Must start BEFORE session.start(). Guarded so agent still works without keys.
 
     _avatar_id = os.environ.get("LIVEAVATAR_AVATAR_ID", "")
-    if _avatar_id:
+    if _avatar_id and avatar_enabled:
         try:
             _avatar = liveavatar.AvatarSession(avatar_id=_avatar_id)
             await _avatar.start(session, room=ctx.room)
@@ -1073,7 +1077,8 @@ async def executive_agent(ctx: agents.JobContext):
         except Exception as _avatar_err:
             logger.warning("HeyGen LiveAvatar failed to start — continuing without avatar: %s", _avatar_err)
     else:
-        logger.info("LIVEAVATAR_AVATAR_ID not set — running without avatar")
+        reason = "avatar disabled by user" if _avatar_id and not avatar_enabled else "LIVEAVATAR_AVATAR_ID not set"
+        logger.info("Running without avatar — %s", reason)
 
     # ── State signaling ───────────────────────────────────────────────────────
 
