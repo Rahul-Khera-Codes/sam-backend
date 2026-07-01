@@ -5,6 +5,113 @@ Most recent entry at top.
 
 ---
 
+## SAM ITEMS — re-triaged 2026-06-25 (Sam is non-technical: only surface what he must ACT on, or build-and-demo for feedback)
+
+**Build now, don't ask — show Sam for feedback when ready:**
+- **Avatar** → abstract avatar now / HeyGen Phase 2 is already the approved plan (he approved the full overview doc, both phases). Build swappable, demo it. (WS4, in progress.)
+- **Rich cards** → already BUILT + verified. Demo, not a question.
+
+**Get feedback when convenient (not a blocker — sensible default already shipping):**
+- **Billing price** → free-during-beta is the working default; ask his price ($49–79/mo TBD) when he's around. No build dependency.
+
+**Genuine action item for Sam — raise at the right time, in plain language (NOT a build blocker; works in test mode now):**
+- **Gmail go-live / CASA:** to let Remi read Gmail in the *public* product, Google requires a paid **annual third-party security review (CASA)** — costs money + a few weeks lead time. When we're ready to launch publicly he must approve that spend (and any Google-side verification steps he owns). Secondary: confirm whether Remi should ever *manage* the inbox (mark-read/archive/label) so we request `gmail.modify` once instead of re-verifying. Until then it runs fine in test mode for our test users.
+
+**Deferred to the Sales Employee workstream (next product, not now):**
+- **Apify / LinkedIn:** scraping LinkedIn via Apify carries LinkedIn-ToS risk (lawyer review, alongside CASL) + Sam needs to provide an Apify account/budget. Raise when Sales work starts.
+
+_Prior Jun-24 draft (a flat 5-question list) superseded by the above — the old framing asked Sam technical decisions he doesn't need to make._
+
+---
+
+## 2026-06-25 → 06-30 — Team scaling, Exec-Agent tested OK, 4 requests + attach-doc bug, avatar=HeyGen, new HR product
+
+**Team / process change (Upwork, Jun 25–26):**
+- Sam wants the **whole agent suite done in ~2 months** (not end of year) and asked Rahul to bring on a second developer. Rahul proposed **Yuvraj** (8 yrs, fullstack + design, Upwork). Sam wants **Rahul as lead developer** guiding Yuvraj. Rahul showed Yuvraj the system; he's interested.
+- **Meeting held (~Jun 29, Mon AM India time)** between Sam, Rahul, Yuvraj: agreed **Yuvraj works on UI**, Rahul on agent/backend core + lead.
+- Sam asked: **can all THREE remaining agents be done in July?** "Three" = excluding Customer Service + Executive Assistant → **Marketing + Sales + Human Resources**. Rahul's answer (correct): **need exact feature details per agent to confirm feasibility.** → Action: get a spec (like the HR PDF) per agent, scope MVP-vs-full, give per-agent estimate. (Honest read: all three *complete* in one month w/ 2 devs is unrealistic; tight MVPs maybe.)
+
+**Executive Agent — Sam tested it (Mon Jun 29): "the test was successful" ✅** (broad live-verification of the session-53 batch passed in Sam's hands). Then Sam raised:
+1. Move **Start Session** button to center of screen. (UI)
+2. Add **Unmute Mic** button to center of screen. (UI; Rahul: that centered layout was on the customer agent — will bring to executive agent too)
+3. **Fix attach-document-to-email (BUG).** ⬇
+4. Add **ChatGPT-like** general-question functionality. (scope — Remi already answers general Qs via the realtime model; clarify if Sam means open-ended Q&A/drafting [easy] vs file/data analysis [bigger])
+
+**BUG — attach document to email (confirmed + root-caused):** Asking Remi to send an email with a Business-Settings/Documents attachment → no attachment; body shows a placeholder like "[Packages and pricing details will be inserted here]" (screenshot `{FF5E41F0…}.png` in ~/Downloads). **Root cause:** `executive_agent.py send_email_draft` only does `msg.attach(MIMEText(body))` — the exec agent has NO document-lookup/attach capability. The **CS agent already has it** (`email_document` in `agent/agent.py:716` → pulls `business-documents` storage, signs URL, downloads, attaches as `MIMEBase("application","pdf")`). **Fix = port that into the exec agent** (a tool to list business docs + attach the chosen PDF to the draft → through the existing preview→approve→send).
+
+**Cost question (owed deliverable):** Sam asked how the Executive Assistant affects running costs. Rahul: same stack as CS agent (LiveKit + OpenAI), minus telephony; **will send a cost estimate.** Note: if the HeyGen avatar ships, it adds ~$0.10/min (LiveAvatar LITE) on top of OpenAI Realtime + LiveKit → material per-minute add; frame avatar-on vs optional in the estimate.
+
+**Avatar decision — use HeyGen.** Sam (meeting) confirmed the Phase-2 avatar = **HeyGen**. Rahul researched + verified the integration (2026-06-30): HeyGen **LiveAvatar** plugin for LiveKit Agents, **LITE mode** (we keep our OpenAI-Realtime pipeline, HeyGen renders video), **realtime-compatible** (avatar consumes the AgentSession audio output), **version-aligned** (`livekit-plugins-liveavatar~=1.4` matches our `livekit-agents~=1.4`), **free sandbox** for POC, ≈$0.10/min LITE. Full tech notes in memory `reference_heygen_liveavatar_integration`. Our WS4 `AgentAvatar.tsx` already has the swap point; frontend adds a video-track render branch.
+
+**NEW product — Human Resources Employee** (`Human Resources.pdf`, ~Jun 26, in ~/Downloads): a full AI recruiting/ATS suite (9 screens: recruitment dashboard + funnel, job postings, JD builder "Ava" + Talent Finder LinkedIn search, Interview Question Bank + AI video interviewer, candidates + AI scoring, interview analysis/feedback + hire recommendations, candidate detail, document library, onboarding chat with avatar). Big lift (LinkedIn/Indeed sync + AI video interviewer; same LinkedIn-ToS risk as Sales). Reuse: onboarding avatar = Remi pattern, doc library = business-documents/KB, interviewer = LiveKit realtime. Full breakdown in memory `project_feature_hr_employee`.
+
+## 2026-06-24 — Sam answered Sales Employee questions + sent 5 reference PDFs + PRIORITY CHANGE
+
+Rahul sent the 5 clarification questions (AM). Sam replied (7:33 PM):
+
+1. **Data source** → use **Apify API** (https://apify.com/) for scraping/enrichment (instead of Apollo/Hunter/Clearbit).
+2. **Push to CRM** → **Don't include this feature yet.**
+3. **Market & Competitor intelligence** → use Sam's recommended pipeline:
+   - `Company Input → Website scrape → LinkedIn enrichment → LLM industry classification → Competitor discovery → News aggregation → Sentiment analysis → Opportunity report`
+   - Report output: Industry overview, Market trends, Competitor analysis, Pricing intelligence, Demand signals, Hiring signals, New opportunities, Risks, Lead opportunities, Recommended sales angles.
+4. **Legal (CASL)** → **Agreed** (will run by lawyer).
+5. **Priority** → **"Don't develop the Outbound Calling Employee now, wait until we finish the Executive Assistant, and Sales Employee."**
+   - ⇒ Build sequence: **Executive Assistant (in progress) → Sales Employee → then Outbound Calling Employee.**
+
+**5 reference PDFs sent** (in `/home/lap-68/Downloads/`): `Executive Assistant.pdf`, `Outbound Caller.pdf`, `Sales Employee.pdf`, `Branding.pdf`, `Marketing Employee.pdf`.
+
+**PDF review (session 52):**
+- **Executive Assistant.pdf** → a **HeyGen "Talking Avatar" picker** (100+ realistic avatars: Derek, Monica, Tyler, Zoey…). Confirms the Phase-2 avatar = HeyGen talking avatar + selection gallery. Matches his Jun 12 HeyGen reference.
+- **Branding.pdf** → expanded **Branding tab** in Business Settings: logo, color palette, fonts, mission, unique value claims, "Use Emojis" toggle, **Competitive Analysis** + **Market Insights**. Feeds the Sales Employee market-intel pipeline.
+- **Sales Employee.pdf** → the 4 modules (Lead Researcher / Competitor Agent / Market Agent / Report Scheduler) as portal sidebar modules; report email branded "AgenticBI".
+- **Outbound Caller.pdf** + **Marketing Employee.pdf** → not yet reviewed (deprioritized / future). Review when those workstreams start.
+
+---
+
+## Executive Agent — decision lineage (Jun 12 → 22, reconciled session 52)
+
+For full status see TODO.md + `memory/project_voice_agent.md`. Key decisions from the chat:
+
+- **Jun 12:** Sam shared a Heygen/OpenClaw TikTok (realistic talking avatar) — *"Can we create something like this for our Executive Assistant?"* — **this is his visual reference for the animated character.** Link: https://www.tiktok.com/@shawn.kanungo/video/7628836652701584658 (by @shawn.kanungo, his brother-in-law). Saved in memory `reference_executive_avatar.md`.
+- **Jun 16:** Sam clarified — wants a **live AI avatar face, separate from the Voice Agent**, that manages tasks on connected services (Gmail, Calendar) via voice. *"talk to the AI and ask it to do things."*
+- **Jun 18–19:** Sam asked for a high-level explanation **including billing integration**. Rahul sent the overview doc (= `docs/executive-agent-overview.md`).
+- **Avatar scope:** overview sets **Phase 1 = clean animated avatar with 3 states** (listening/thinking/speaking), **Phase 2 = expressive Heygen-style face**. The built status indicator satisfies Phase 1; the realistic face Sam admired is Phase 2.
+- **Billing:** Sam specifically asked to include billing. Overview proposes an add-on toggle + Stripe line item, **price TBD ($49–79/mo)**. Built free-during-beta pending Sam's price decision.
+- **Jun 19:** Sam asked for an **estimate** to check budget.
+- **Estimate given:** **2 weeks**, starting **Mon Jun 22, 2026** → target completion **~Jul 3–6, 2026**.
+- **Jun 22 (1:55 AM):** Sam: *"Continue to build the Executive Agent."* → green light. Rahul started same day (start of the 2-week window).
+- **Note:** Sam is also designing a **Marketing Agent** (mentioned Jun 22) — not yet shared.
+
+---
+
+## 2026-06-22 → 06-23 — Chat (Outbound Calling Employee rename, two-way calendar, NEW Sales Employee product)
+
+**From:** Sam Maisuria (with Rahul replies)
+
+**1. New section: "Outbound Calling Employee"**
+- Sam (Jun 22, 8:10 PM): *"Can you add another section called Outbound Calling Employee. The screenshots I sent you for Sales Employee will be named Outbound Calling Employee. I will give you some new screenshots to be used for the Sales Employee soon."*
+- Effect: the original 7 mockups (`/home/lap-68/Downloads/Screen 1-7.png`) — the outbound cold-calling / lead-list VOICE product — are now branded **Outbound Calling Employee**.
+- Status: ⏳ Pending clarification on functional spec + whether the legal hold (cold-call legality) still applies. Do NOT build yet.
+
+**2. Two-way Google Calendar sync — direction clarified**
+- Rahul asked (Jun 22, 9:14 PM): which direction + per-staff vs business-wide?
+- Sam (Jun 23, 12:23 AM): *"yes INTO from clients calendar"*
+- ✅ Direction confirmed: pull events FROM the client's connected Google Calendar INTO the portal Calendar view (currently we only push portal → GCal).
+- ⏳ Still unclear: per-staff (each user sees their own GCal events) vs business-wide; whether pulled events are read-only overlays or editable; conflict handling against existing appointments.
+
+**3. NEW "Sales Employee" product — 4 screenshots (this is NOT the cold-calling product)**
+- Sam (Jun 23, 12:23 AM): *"I attached some screenshots of our Sales Employee. Please develop this one too."*
+- Files: `Lead Research.png`, `Competitor Intelligence.png`, `Market Intelligence.png`, `Report Scheduler.png` (all in `/home/lap-68/Downloads/`)
+- **This is a B2B sales-intelligence dashboard, branded "AgenticBI" — no voice/calling at all.** Completely different from the originally-scoped Sales Agent (CSV lead upload + outbound calls). Four modules:
+  - **Lead Researcher AI Agent** — paste a LinkedIn profile URL → enriched lead card: predicted email + confidence score, best time to reach, job-role insights, pain points & sales angles, personal interests, and a generated outreach email template. Actions: Export PDF, Email Report, Push to CRM. Has History + Saved Leads.
+  - **Competitor Agent (Competitor Intelligence)** — add competitors by website URL; real-time tracking of competitor features, sentiment, social media, market moves; per-competitor "View Report"; Schedule Report.
+  - **Market Agent (Market Intelligence Feed)** — "What's Changing" feed with multiple AI analyst cards (Trend, Cultural, Market Research, Consumer Insights, Innovation Strategist, Business Intelligence). Add Custom Report.
+  - **Report Scheduler** — automated email briefings combining the 3 modules; recipients list, frequency (daily/weekly/monthly/custom), module checkboxes, live email preview ("Weekly Intelligence Briefing").
+- **Client has NOT shared written requirements** — only the 4 screens. Major unknowns: data sources for email prediction / competitor tracking / market feed (all require paid 3rd-party APIs + have legal/privacy implications), CRM targets, industry scoping, branding ("AgenticBI" vs AI Employees), priority vs Executive/Outbound/calendar work.
+- Status: ⏳ Clarification message drafted for Sam (see below). Do NOT build until data sources + scope confirmed.
+
+---
+
 ## 2026-06-16 — Chat messages (Executive Assistant idea + PDF bug)
 
 **From:** Sam Maisuria

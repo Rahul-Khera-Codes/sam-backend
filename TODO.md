@@ -1,7 +1,7 @@
 # Voice Agent - TODO Tracker
 
 Covers: `sam-backend` (backend + agent) and `ai-employees-app` (frontend)
-Last updated: 2026-05-21 (Session 44 — custom greeting, appointment status buttons, noshow scheduler, UI fixes, toggle sync)
+Last updated: 2026-06-25 (Session 53 — Executive Assistant "Remi" Phase-1 essentially CODE-COMPLETE. This session: WS8 compose/send new email; WS3 A.2 unified card envelope; WS9 email-IDs back in model context + log quieting; security prompt-injection hardening; WS4 central avatar; WS10 avatar-centric display + tool activity feed; WS3 Phase B = WS11 free_slots pick-to-book + WS12 appointment Cancel/Reschedule + WS13 email_detail+Reply, all on a new card_action round-trip. PENDING: live-verify WS4/10/11/12/13, then merge feature/google-calendar-timezone → main. Sam items re-triaged (build-and-demo vs must-act). Prev session 52: WS0/1/2/5/6/7.) — ADDENDUM (Jun 25–30): Sam tested exec agent = successful; Yuvraj onboarded (UI), Rahul lead; July target = 3 agents (Marketing+Sales+HR) pending specs; attach-doc-to-email bug (port CS email_document); center Start/Mic buttons; ChatGPT-scope Q; cost estimate owed; avatar=HeyGen LiveAvatar (verified, LITE/sandbox); NEW HR Employee product (Human Resources.pdf). See "📋 NEW from Sam" section + CLIENT_COMMS_LOG + memory.
 
 ---
 
@@ -412,6 +412,145 @@ Phase 6 (v2 — SHIPPED session 38):
 - [x] Agent — `_is_within_available_hours()` in `supabase_helpers.py`; `forward_call` checks contact's hours before SIP REFER and returns polite refusal if outside window
 - [x] Setup checklist — `CustomerServiceEmployee.tsx` derives completion from real API data (phone number, schedule, forwarding contacts, Gmail, services, recent calls); clicks navigate to relevant pages; Gmail check fixed to use `s.connected` (not `s.is_connected`)
 - Full plan: `docs/superpowers/plans/2026-04-28-pre-release-checklist-fixes.md`
+
+### Website KB Scraper — SHIPPED Session 50 ✅
+- [x] `backend/app/routers/knowledge_base.py` — `POST /knowledge-base/scrape` — Jina AI Reader, GPT-4o 8-section extraction, `[Website]` prefix, replace-on-rerun, SSRF via Jina only, IDOR location validation
+- [x] `backend/app/main.py` — router registered
+- [x] `ai-employees-app/src/lib/voiceAgentApi.ts` — `scrapeWebsiteToKB()` function
+- [x] `ai-employees-app/src/pages/dashboard/BusinessSettings.tsx` — "Generate from Website" card + dialog + loading state + success toast + KB list refresh
+- Commits: `51f7f2a`, `7b09fb4`, `66b98be`, `52ab917` (backend) + `efdb03d` (frontend)
+
+### 📋 NEW from Sam (Jun 25–30) — scope/build next (see CLIENT_COMMS_LOG 2026-06-25→06-30)
+**Team:** Yuvraj onboarded as 2nd dev (UI); Rahul = lead (agent/backend core). Target: agent suite in ~2 months.
+**July question:** can the THREE remaining agents (**Marketing + Sales + HR**) be done in July? Rahul → needs exact feature specs per agent first. → [ ] Get a spec (like HR PDF) per agent, scope MVP-vs-full, give per-agent estimate.
+
+**Executive Agent — Sam tested OK (Jun 29) ✅. His requests:**
+- [ ] **Fix attach-document-to-email (BUG, confirmed).** Exec agent `send_email_draft` only attaches `MIMEText(body)` — no doc attach (body shows placeholder "[…inserted here]", screenshot in ~/Downloads). Port the CS agent's `email_document` capability (`agent/agent.py:716` — `business-documents` storage → signed URL → download → `MIMEBase("application","pdf")`) into `executive_agent.py`: a tool to list business docs + attach the chosen PDF to the draft → existing preview→approve→send.
+- [ ] **Move Start Session button to center** of screen (exec agent UI).
+- [ ] **Add Unmute Mic button to center** of screen (exec agent UI; centered layout exists on customer agent — bring to exec).
+- [ ] **"ChatGPT-like" functionality** — Remi already answers general Qs via the realtime model; clarify with Sam: open-ended Q&A/drafting (easy) vs document/data analysis (bigger). Scope before building.
+- [ ] **Cost estimate for Sam** (owed) — LiveKit + OpenAI Realtime per active session; if HeyGen avatar ships, +~$0.10/min (LiveAvatar LITE) → frame avatar on-by-default vs optional.
+
+**Avatar — HeyGen (Sam confirmed in meeting). Integration researched + verified (see memory `reference_heygen_liveavatar_integration`):**
+- [ ] Phase-2 avatar = HeyGen **LiveAvatar** plugin, **LITE mode** (keep our OpenAI-Realtime pipeline), `livekit-plugins-liveavatar~=1.4` (matches our `livekit-agents~=1.4`, no framework bump). Realtime-compatible (avatar consumes session audio output). **POC in free sandbox first** (`is_sandbox=True`). Backend: `AvatarSession` + `await avatar.start(session, room)` before `session.start()` in `executive_agent.py` + env vars. Frontend: render avatar participant's **video track** at WS4 swap point in `AgentAvatar.tsx` (add video branch to `TrackSubscribed`); avoid double audio. Open: exact $ pricing + sandbox caps + which HeyGen avatar Sam wants (must be available in LiveAvatar).
+
+**New product — Human Resources Employee** (`Human Resources.pdf`, ~/Downloads — 9 screens, full AI recruiting/ATS). See memory `project_feature_hr_employee`. One of the 3 July agents. Big lift (LinkedIn/Indeed sync + AI video interviewer + onboarding avatar chat). [ ] Build after specs confirmed; reuse avatar/doc-library/realtime infra.
+**Sales Employee + Marketing Employee** — the other two July agents; Sales reqs confirmed (Apify pipeline, no CRM, AgenticBI report) — see `project_feature_sales_agent`; Marketing not yet specced.
+
+### Executive Agent — BUILT & COMMITTED, NOT COMPLETE ⚠️
+Full plan: `docs/superpowers/plans/2026-06-22-executive-agent-plan.md`
+UI: split layout — left (chat-style like Dex) + right (collapsible transcript). Mic toggle in same session.
+
+**Status:** Backend + frontend committed on `feature/google-calendar-timezone` (both repos), demo-able, but NOT done. Outstanding work below.
+
+**Timeline:** Estimate given to Sam = **2 weeks from Mon Jun 22, 2026** → target completion **~Jul 3–6, 2026**.
+**Open questions for Sam (drafted, not sent):** see `docs/CLIENT_COMMS_LOG.md` top — Gmail verification status + CASA + readonly-vs-modify; avatar Phase-1-abstract vs HeyGen; cards in this release?; billing toggle now-vs-beta + price; (later) Apify/LinkedIn ToS + budget.
+**Future scopes/verification/infra reference:** `docs/executive-agent-future-requirements.md`.
+**Local Gmail-read testing blocked:** dev's localhost callback not in Sam's OAuth client → set up own dev OAuth client (Testing mode, localhost redirects, gmail.send+readonly+calendar scopes) in local `backend/.env` + `agent/.env.local`. See Pending Manual Steps in SESSION_HANDOFF.
+**Personality/emotion plan + test flows:** `docs/executive-agent-personality-and-flows.md` (Levers 1–3 = persona prompt + `voice="cedar"` + `temperature=0.9`; Lever 4 = `set_mood` → avatar, scope with Phase-2 avatar).
+**Rich card UI design:** `docs/executive-agent-cards-design.md` — tool-emitted typed cards over the data channel (email list/draft, calendar schedule/event, appointment list), generalizes the existing preview channel. Phase A = card envelope + draft/event/email-list/schedule cards; Phase B = rest. May extend the 2-week estimate — flag to Sam.
+**WS1 — Naming (Remi):** ✅ DONE + live-verified (session 52). Spec `docs/superpowers/specs/2026-06-24-executive-agent-naming-remi.md`. Persona name "Remi" applied to prompt self-intro + greeting (`executive_agent.py` L178/L820) + status header + empty-state (`AgentStatusHeader.tsx`, `AgentDisplay.tsx`). Product label "Executive Agent" kept on page H1 + cancel-note + dispatch names. Confirmed live: header shows "Remi", greeting says "Hi, I'm Remi…".
+
+**WS6 — Gmail read scope (403 on email reads):** ✅ FIXED + LIVE-VERIFIED (session 52) — after reconnect with `gmail.readonly`, Remi lists real emails (10 returned, no 403).
+**WS7 — `list_emails` N+1 perf:** ✅ DONE + LIVE-VERIFIED (commit `3fd5d03`). Measured ~2.1s (was ~11s). Fetch token once + `asyncio.gather` the per-message gets + optional token param on helpers. Was ~11s → expect ~1–2s. Spec `docs/superpowers/specs/2026-06-24-executive-agent-list-emails-perf.md`. **Test:** "list my emails" should now return fast.
+**WS8 — compose/send NEW email:** ✅ DONE + live-verified (2026-06-25). `send_email_draft` required `email_id` → composing a new email failed Pydantic validation; made it optional + added `draft_email(to,subject,body)` preview tool. Spec `docs/superpowers/specs/2026-06-25-executive-agent-compose-email.md`. **Test:** "draft an email to X saying …" → preview → "yes" → sends.
+**WS3 — rich cards Phase A:** ✅ email_list card LIVE-VERIFIED (renders real emails + Remi summarises briefly); calendar_schedule same mechanism, quick to confirm. `email_list` (list_emails) + `calendar_schedule` (get_schedule) emit via `_send_card` → render as cards above the input (`AgentCardView` registry + text fallback); agent speaks a one-line summary. Envelope `{type:card,card,id,data}` + `card_dismiss`. **WS9 — email IDs regression + log noise:** ✅ DONE + live-verified (2026-06-25): Remi summarises real emails and 'tell me about <subject>' resolves to the correct email (no hallucinated IDs). Commit `35a8560` + injection hardening `57e78e2`. A.1 had moved email id/subject into the card but `list_emails` returned only a short summary to the model → model hallucinated IDs (`appointment20`) → `read_email` "Could not fetch" loop (+ tripped an OpenAI-plugin `InvalidStateError`). Now also returns a compact `id|subject|from` reference list to the model (prompt keeps it unspoken). Also quieted hpack/httpx DEBUG. **Observed-not-fixed:** `conversation_already_has_active_response` thrash (should drop once loop stops — re-check); transcript "language drift" = user-voice STT mis-hears, not Remi output. Spec `docs/superpowers/specs/2026-06-25-executive-agent-email-ids-and-logs.md`.
+
+**Phase A.2:** ✅ DONE + live-verified (2026-06-25): email_list card renders; single slot; approval path intact.
+
+**WS10 — avatar-centric display + tool activity feed:** ✅ DONE in code (pending live verify). Removed the message paragraph under the avatar; center = avatar + one caption. Each tool emits `{type:activity,state:start,label}` (Reading your inbox…/Drafting…/Checking your calendar…/etc); send + calendar-create emit `{done,'Email sent'|'Added to your calendar'}`. Frontend shows spinner+label → ✓ → fades; auto-clears when agent stops thinking (no stuck spinner). Transcript panel auto-opens on first activity (sole home for worded replies). Commits backend `d2d5286` / frontend `a158e17`. Spec `docs/superpowers/specs/2026-06-25-executive-agent-activity-feed-ws10.md`. **Test:** run a tool → caption + spinner → ✓; transcript opens; no stuck spinner on error. — email_draft + calendar_event previews now ride the unified card envelope (`{type:card, card:email_draft|calendar_event_preview, ephemeral, data, actions}`); single `activeCard` slot via `AgentCardView` (old preview panel removed); approval keeps synthetic-text path; `card_action` round-trip deferred to Phase B. Commits backend `8015f11` / frontend `43639c3`. **Test:** "draft a reply / new email" + "block off Friday 10am" → card with Send/Create + Cancel buttons → approve sends/creates. **Phase B — slice 1 (WS11):** ✅ DONE in code (pending live verify) — **card_action round-trip + free_slots pick-to-book**. `find_free_slots` emits a `free_slots` card (tappable chips); tap → `{type:card_action, action:book_slot, date, start, durationMinutes}` → backend builds a precise synthetic turn → model runs `create_calendar_event` → existing preview→approve gate → booked (WS0 tz holds). Resolve = synthetic-turn+preview (chosen over direct-resolve); backend builds the prompt from typed fields only. Commits backend `617ac95` / frontend `0a9172a`. Spec `…phase-b-pick-to-book-ws11.md`. **Test:** "find free slots Friday" → chips → tap → preview → approve → event.
+**Phase B — slice 2 (WS12):** ✅ DONE in code (pending live verify) — **appointment_list card with Cancel/Reschedule**. `list_appointments` emits an `appointment_list` card (rows: ref/date/time/client/service). Cancel = two-step in-card Yes/No → `card_action cancel_appointment {ref}` → synthetic turn stating owner confirmed → model cancels directly. Reschedule = one tap → `card_action reschedule_appointment {ref}` → model asks for new date/time conversationally → reschedules. Commits backend `b24bddf` / frontend `ec338b8`. Spec `…phase-b-appointments-ws12.md`. **Test:** "show appointments" → buttons; Cancel→confirm→Yes cancels; Reschedule→Remi asks new time→moves.
+**Phase B — slice 3 (WS13):** ✅ DONE in code (pending live verify) — **email_detail card + Reply**. `read_email` emits an `email_detail` card (from/subject/date + scrollable escaped body) and keeps returning the fenced text to the model. Reply button → `card_action reply_email {emailId}` → model asks what to say → `draft_reply` → preview→approve→send. Commits backend `893398b` / frontend `da0a47b`. Spec `…phase-b-email-detail-ws13.md`. **→ Phase B COMPLETE (slices 1-3).** **Test:** "list my emails" / "what's on my calendar today" → card renders, Remi summarises briefly.
+
+(historical) **WS6 — Gmail read scope (403 on email reads):** ✅ code fixed (session 52). Diagnosed via DB+API test: token valid + found for location, but Gmail returned `403 ACCESS_TOKEN_SCOPE_INSUFFICIENT` — the integration only requested `gmail.send`. Added `gmail.readonly` to `GMAIL_SCOPE` (`backend/app/services/email_service.py`). **Manual steps to activate:** (1) `docker compose restart sam-backend`; (2) Google Cloud OAuth consent screen → add `gmail.readonly` + keep app in Testing mode with test users; (3) Business Settings → Integrations → Gmail → Disconnect + reconnect to re-consent; (4) test "list my emails". **⚠️ LAUNCH BLOCKER:** `gmail.readonly` is a Google *restricted* scope → public launch needs a CASA security assessment (annual, paid) — flag to Sam; ties into the pending OAuth verification.
+
+**WS5 — Gmail "not connected" bug (location context):** ✅ DONE in code (session 52), pending live verify. Spec `docs/superpowers/specs/2026-06-24-executive-agent-location-gmail-fix.md`. Root cause: `/executive/session` never passed `location_id` in metadata → agent `self._location_id=None` → Gmail token lookup searched `location_id IS NULL` but tokens are location-scoped (Eifel Tower 8) → "not connected". (Calendar unaffected — its token is by superadmin, not location.) Fix: FE passes `selectedLocationId` → `createExecutiveSession` body → backend includes `location_id` in both metadata blocks → agent uses it (already wired) + job-metadata fallback parses it too. Backend AST + frontend tsc clean. **Pending: restart agent + FE rebuild, then "list my emails" with Gmail connected for the selected location → expect real emails.**
+
+**WS2 — Personality/emotion:** ✅ DONE + live-verified (session 52). Confirmed live: "what's your name" → "I'm Remi, your assistant for Woyce Tech"; "nice" → in-character "Thanks! Glad you like it. So, what's on your plate today?"; all English, no drift. Spec `docs/superpowers/specs/2026-06-24-executive-agent-personality.md`. Rewrote `EXECUTIVE_INSTRUCTIONS` with persona + emotion direction + two behavior rules (answer identity/general Qs directly; only use tools for real email/calendar/appt actions — fixes the "what's your name → schedule" misroute seen live). Model config → `RealtimeModel(voice="cedar", temperature=0.9)`. **Refinements after 1st live test:** (a) added "ALWAYS respond in English" rule (it had drifted to Turkish; CS agent already had this); (b) text-input handler now uses `generate_reply(user_input=text)` instead of stuffing into `instructions` — fixes identity grounding (it had said "I don't know my name"); (c) strengthened identity rule ("never say you don't have a name"). Backend AST clean. **Pending: restart `sam-executive-agent` + re-test** — "what's your name" → "I'm Remi"; no Turkish; tool flows still fire; voice warmer.
+
+**Status reconciliation (session 52, from full Sam chat Jun 12–24):** Build green-lit by Sam Jun 22 after he reviewed the Jun 19 overview doc. Deployed and running from `feature/google-calendar-timezone` (the live branch). Avatar-as-status-indicator and text-first mic are DECIDED Phase-1 scope (overview note + build plan) — NOT gaps. Billing toggle deferred to free-during-beta is reasonable (add-on price still TBD in the doc). Genuinely open items only, below.
+
+_Real bug:_
+- [x] **BUG: Calendar event creation broken** — FIXED + LIVE-VERIFIED (session 52). Live test: "Block off Friday 10am" + 2hr → preview → "yes, go ahead" → event created (no 400). Created at 10 AM business-tz; displayed 7:30 PM in the India (GMT+5:30) calendar = correct conversion (10 AM EDT = 7:30 PM IST). Date/duration/title/description all correct. `confirm_create_calendar_event` previously sent `"start": {"dateTime": start_iso}` with no `timeZone` and trusted the LLM to round-trip the offset-aware ISO → naive strings → Google 400 (confirmed live, job `AJ_BUkqK3XsRDGM`). Fix: (1) now reads `_start_iso`/`_end_iso`/title/description from the approved preview (`self._pending_draft`) instead of LLM-retyped args — WYSIWYG + timezone-correct; (2) adds `"timeZone": self._business_timezone` to start/end (matches `gcal_helpers.py` pattern). Falls back to LLM args + timeZone if no pending draft. AST-parse clean. **Still TODO: restart `sam-executive-agent` + create a real event end-to-end to confirm 201.**
+
+_Avatar — APPROVED Phase-1 scope, ready for spec (NOT blocked — verified `AgentStatusHeader.tsx` session 52):_
+- [x] **WS4 — Central animated avatar/character** ✅ DONE in code (pending live verify) — `AgentAvatar.tsx`: abstract orb reacting to agentState (idle=breathe, listening=ping ripples, thinking=rotating gradient ring, speaking=waveform, disconnected=muted 💼). Rendered centered in `AgentDisplay` (empty + connected). Self-contained + swappable — props are just `{agentState,isConnected}`, Phase-2 HeyGen `<video>` drops in at the marked swap point. Added `breathe` keyframe. Commit frontend `c2882b4`. Spec `docs/superpowers/specs/2026-06-25-executive-agent-avatar-ws4.md`. **Show Sam for feedback.** (Realistic talking face = Phase 2.)
+  - **Optional Sam input (not a blocker):** any visual-style preference. Sam's Phase-2 reference (sent Jun 12): Heygen/OpenClaw TikTok — https://www.tiktok.com/@shawn.kanungo/video/7628836652701584658 (realistic talking-head = Phase 2).
+
+_Scope classification vs the APPROVED overview doc (session 52):_
+- **In approved Phase 1** (build now): 3-state central avatar, voice+text, Gmail, Calendar, Appointments, Billing toggle.
+- **In approved Phase 2** (deferred — "nothing required for launch"): expressive/realistic face, personality settings (owner sets name/tone), CRM, multi-agent handoff.
+- **BEYOND the approved doc (our additions — decide: internal polish vs flag to Sam):**
+  - **Rich cards UI** (`docs/executive-agent-cards-design.md`) — not in the doc at all; net-new scope; real extra work; flag if it affects the 2-week estimate.
+  - **Personality/emotion polish** (`docs/executive-agent-personality-and-flows.md`) — the doc places Personality Settings in **Phase 2**; voice/temp/persona prose pulls it forward. Picking default name **Remi** is fine (doc makes name customizable in P2).
+
+_Confirm scope with Sam (overview lists these; may have been verbally de-scoped for Phase 1):_
+- [ ] **Calendar `reschedule_event` tool** — overview Phase 1 says "create and reschedule events"; code only has `reschedule_appointment` (DB row), no GCal event patch. Likely should exist for Phase 1.
+- [ ] **Appointment "flag no-shows & cancellations" + "look up client history"** — listed in overview "What It Can Do"; no dedicated tools yet. Confirm Phase 1 vs later.
+- [ ] **Billing toggle** — in overview Phase 1 table but add-on price is TBD; currently free during beta. Confirm with Sam whether to wire the Stripe line item now or keep free for beta.
+
+_Ship items (housekeeping — deployed already runs from the feature branch):_
+- [ ] **Apply migration `20260618000000_businesses_timezone.sql`** — agent reads `businesses.timezone`; without it calendar tools fail.
+- [ ] **Merge `feature/google-calendar-timezone` → main** (both repos) — housekeeping; live deploy already tracks this branch.
+- [ ] **End-to-end live verification** — calendar-create currently 400s; re-test full flow after the timezone fix.
+
+**Step 1 — Backend session endpoint** ✅
+- [x] `backend/app/routers/executive.py` — `POST /executive/session`: verify access, create LiveKit room, return token + room_name + livekit_url
+- [x] Register router in `backend/app/main.py`
+
+**Step 2 — Frontend API + hook** ✅
+- [x] `src/lib/voiceAgentApi.ts`: added `createExecutiveSession(token, businessId)`
+- [x] `src/hooks/useExecutiveSession.ts`: connects LiveKit room, tracks agentState/transcript/previewItem/streamingAgentText, exposes sendMessage/toggleMic/approvePreview/rejectPreview
+
+**Step 3 — Frontend page + layout** ✅
+- [x] `src/pages/dashboard/ExecutiveAgent.tsx`: split layout, replaces Coming Soon placeholder
+- [x] `src/components/executive/AgentStatusHeader.tsx`: name + state indicator (dots/waveform/pulse) + ⓘ transcript toggle
+- [x] `src/components/executive/AgentDisplay.tsx`: 3 states (fresh/ended/connected), streaming text, preview panel
+- [x] `src/components/executive/TranscriptPanel.tsx`: right collapsible panel, bubbles + streaming bubble with cursor blink
+- [x] `src/components/executive/InputBar.tsx`: auto-resize textarea, mic toggle (glows when ON), send button
+- [x] CSS-only state animations: idle dot, listening pulse, thinking-dot bounce, waveform bars
+- [x] `DashboardLayout.tsx`: `FULL_HEIGHT_ROUTES` pattern — full-height pages skip padding wrapper
+
+**Step 4 — Agent: executive_agent.py** ✅
+- [x] `agent/executive_agent.py`: LiveKit Agents v1.5.1 worker, state signalling via data messages
+- [x] `_set_state(room, state)` helper: publishes `{state}` to room
+- [x] Gmail tools: `list_emails`, `read_email`, `draft_reply` (preview flow), `send_email` (post-approval)
+- [x] Preview-approve flow: `{type: "preview", kind: "email_draft"|"calendar_event", ...}` → owner approves → agent acts
+- [x] Calendar tools: `get_schedule`, `create_event`, `find_free_slots`
+- [x] Appointments tools: `list_appointments`, `cancel_appointment`, `reschedule_appointment`
+- [x] Text streaming: `RoomEvent.TranscriptionReceived` + `TranscriptionSegment.final`; removed manual relay
+- [x] `docker-compose.yml`: `sam-executive-agent` service on port 8002
+- Commits: backend `cdccacf` + `075d722`; frontend `3f15a87` + `52264d4` + `7630cd0`
+
+**Step 5 — Billing (Phase 2 — deferred)**
+- [ ] Executive Agent card in Billing page → Stripe subscription item (free during beta)
+
+**NOT in original step list — discovered incomplete (session 52):**
+- [ ] Calendar create timezone bug (see Remaining work above)
+- [ ] Calendar `reschedule_event` tool never built
+- [ ] End-to-end live verification blocked by calendar bug
+
+### BUILD SEQUENCE (Sam, 2026-06-24): Executive Assistant → Sales Employee → Outbound Calling Employee
+Sam: "Don't develop the Outbound Calling Employee now, wait until we finish the Executive Assistant, and Sales Employee." Marketing Employee also being designed (PDF received, future).
+
+### Sales Employee — REQUIREMENTS CONFIRMED (2026-06-24), build AFTER Executive Assistant
+- "AgenticBI" B2B sales-intelligence dashboard, NO voice. Modules: Lead Researcher (LinkedIn URL → enriched lead + outreach draft), Competitor Agent (track by URL), Market Agent (intelligence feed), Report Scheduler (weekly email briefing). Mockups: 4 PNGs + `Sales Employee.pdf`.
+- **Sam's answers:** data source = **Apify API** (apify.com); **no Push-to-CRM yet**; pipeline = Company Input → Website scrape → LinkedIn enrichment → LLM industry classification → Competitor discovery → News aggregation → Sentiment analysis → Opportunity report; report sections = Industry overview / Market trends / Competitor analysis / Pricing intelligence / Demand signals / Hiring signals / New opportunities / Risks / Lead opportunities / Recommended sales angles; CASL = Sam runs by lawyer.
+- `Branding.pdf` = expanded Branding tab (logo/palette/fonts/mission/Use-Emojis/Competitive Analysis/Market Insights) — feeds market intel.
+- Detail: `docs/CLIENT_COMMS_LOG.md` (2026-06-24) + `memory/project_feature_sales_agent.md`. Don't start until Executive Assistant is done.
+
+### Outbound Calling Employee — DEFERRED (Sam 2026-06-24)
+- VOICE / cold-calling product (original 7 screens `Screen 1-7.png` + `Outbound Caller.pdf`).
+- Do NOT build until Executive Assistant + Sales Employee are finished. PDF not yet reviewed.
+
+### Marketing Employee — FUTURE (PDF received 2026-06-24)
+- `Marketing Employee.pdf` in `/home/lap-68/Downloads/` (5MB) — Sam designing it. Not yet reviewed/scoped.
+
+### Two-Way Google Calendar Sync — BACKLOG (requested 2026-06-22, direction confirmed 2026-06-23)
+- Sam: "Is it possible to pull calendar events from a Google calendar into our portal appointment calendar — customers are asking for a two-way sync"
+- ✅ Direction confirmed (Jun 23): "yes INTO from clients calendar" — pull GCal events INTO portal Calendar view
+- Existing: portal appointments already push to connected Google Calendars (one direction works). This adds the reverse: show GCal events in the portal Calendar page.
+- Still unclear: per-staff (each user's own GCal) vs business-wide; read-only overlay vs editable; conflict handling vs existing appointments; which calendar(s) when staff has multiple. (asked Sam)
 
 ### Future Features — Not Yet Started
 - [x] **TC-ROLES-002** ✅ FIXED session 40 — see QA section above

@@ -105,6 +105,7 @@ class Assistant(Agent):
         staff: list[dict] | None = None,
         business_name: str = "",
         business_phone: str = "",
+        business_timezone: str = "America/Toronto",
         room_name: str | None = None,
         sip_participant_identity: str | None = None,
     ) -> None:
@@ -118,6 +119,7 @@ class Assistant(Agent):
         self._staff = staff or []
         self._business_name = business_name
         self._business_phone = business_phone
+        self._business_timezone = business_timezone
         self._room_name = room_name
         self._sip_participant_identity = sip_participant_identity
 
@@ -542,7 +544,7 @@ class Assistant(Agent):
                 gcal_updates: dict = {}
 
                 staff_event_id = await _gcal_create_event(
-                    self._supabase, staff["user_id"], appt_data,
+                    self._supabase, staff["user_id"], appt_data, timezone=self._business_timezone,
                 )
                 if staff_event_id:
                     gcal_updates["google_event_id"] = staff_event_id
@@ -550,7 +552,7 @@ class Assistant(Agent):
                 admin_id = _gcal_get_superadmin_id(self._supabase, self._business_id)
                 if admin_id and admin_id != staff["user_id"]:
                     admin_event_id = await _gcal_create_event(
-                        self._supabase, admin_id, appt_data,
+                        self._supabase, admin_id, appt_data, timezone=self._business_timezone,
                     )
                     if admin_event_id:
                         gcal_updates["google_event_id_admin"] = admin_event_id
@@ -585,6 +587,7 @@ class Assistant(Agent):
                             time=time,
                             duration_minutes=duration_min,
                             confirmation_ref=short_id,
+                            business_timezone=self._business_timezone,
                         )
                     except Exception:
                         pass
@@ -932,11 +935,11 @@ class Assistant(Agent):
             assigned_uid = appt_row.get("assigned_user_id")
 
             if appt_row.get("google_event_id") and assigned_uid:
-                await _gcal_update_event(self._supabase, assigned_uid, appt_row["google_event_id"], updated_row)
+                await _gcal_update_event(self._supabase, assigned_uid, appt_row["google_event_id"], updated_row, timezone=self._business_timezone)
 
             admin_id = _gcal_get_superadmin_id(self._supabase, self._business_id)
             if appt_row.get("google_event_id_admin") and admin_id:
-                await _gcal_update_event(self._supabase, admin_id, appt_row["google_event_id_admin"], updated_row)
+                await _gcal_update_event(self._supabase, admin_id, appt_row["google_event_id_admin"], updated_row, timezone=self._business_timezone)
 
             # ── Gmail: reschedule notifications ───────────────────────────────
             client_email_addr = appt_row.get("client_email", "")
@@ -968,6 +971,7 @@ class Assistant(Agent):
                         new_time=new_t,
                         duration_minutes=duration_min,
                         confirmation_ref=short_id,
+                        business_timezone=self._business_timezone,
                     )
                 except Exception:
                     pass
@@ -1593,6 +1597,7 @@ async def voice_agent(ctx: agents.JobContext):
 
     business_name = ""
     business_phone = ""
+    business_timezone = "America/Toronto"
 
     # Check for agent-disabled custom schedule
     disabled_by_schedule = None
@@ -1642,6 +1647,7 @@ async def voice_agent(ctx: agents.JobContext):
             if biz:
                 business_name = biz.get("name", "") or ""
                 business_phone = biz.get("phone", "") or ""
+                business_timezone = biz.get("timezone", "") or "America/Toronto"
             logger.info(
                 "Loaded context — locations: %d, services: %d, staff: %d (call_id=%s)",
                 len(locations), len(services), len(staff), call_id,
@@ -1671,6 +1677,7 @@ async def voice_agent(ctx: agents.JobContext):
         staff=staff,
         business_name=business_name,
         business_phone=business_phone,
+        business_timezone=business_timezone,
         room_name=ctx.room.name,
         sip_participant_identity=participant.identity if is_sip_call else None,
     )

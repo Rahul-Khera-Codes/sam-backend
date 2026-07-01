@@ -16,6 +16,7 @@ def generate_ics(
     date: str,           # YYYY-MM-DD
     time: str,           # HH:MM (24h)
     duration_minutes: int,
+    timezone: str = "",  # IANA timezone e.g. "America/Edmonton"; empty = floating time
     organizer_email: str = "",
     attendee_email: str = "",
     uid: str = "",
@@ -48,11 +49,15 @@ def generate_ics(
     start_dt = datetime.strptime(f"{date} {hour:02d}:{minute:02d}", "%Y-%m-%d %H:%M")
     end_dt = start_dt + timedelta(minutes=duration_minutes)
 
-    # Format as iCal datetime (UTC-naive; we use TZID-less format for max compat)
     fmt = "%Y%m%dT%H%M%S"
-    dtstart = start_dt.strftime(fmt)
-    dtend = end_dt.strftime(fmt)
     dtstamp = datetime.utcnow().strftime(fmt) + "Z"
+    if timezone:
+        dtstart_line = f"DTSTART;TZID={timezone}:{start_dt.strftime(fmt)}"
+        dtend_line = f"DTEND;TZID={timezone}:{end_dt.strftime(fmt)}"
+    else:
+        # Floating time (no timezone): displays in viewer's local timezone
+        dtstart_line = f"DTSTART:{start_dt.strftime(fmt)}"
+        dtend_line = f"DTEND:{end_dt.strftime(fmt)}"
 
     # Escape special chars per RFC 5545
     def esc(s: str) -> str:
@@ -66,8 +71,8 @@ def generate_ics(
         "BEGIN:VEVENT",
         f"UID:{uid}",
         f"DTSTAMP:{dtstamp}",
-        f"DTSTART:{dtstart}",
-        f"DTEND:{dtend}",
+        dtstart_line,
+        dtend_line,
         f"SUMMARY:{esc(summary)}",
         f"DESCRIPTION:{esc(description)}",
         f"LOCATION:{esc(location)}",

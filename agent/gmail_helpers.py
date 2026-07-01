@@ -93,6 +93,7 @@ async def _gmail_send_confirmation(
     time: str,
     duration_minutes: int,
     confirmation_ref: str,
+    business_timezone: str = "",
 ) -> None:
     """Send appointment confirmation email with .ics calendar attachment (best-effort)."""
     import base64
@@ -161,6 +162,7 @@ body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSy
         date=date,
         time=time,
         duration_minutes=duration_minutes,
+        timezone=business_timezone,
         organizer_email=sender_email,
         attendee_email=client_email,
         uid=f"{confirmation_ref}@aiemployees",
@@ -336,6 +338,7 @@ async def _gmail_send_reschedule_confirmation(
     new_time: str,
     duration_minutes: int,
     confirmation_ref: str,
+    business_timezone: str = "",
 ) -> None:
     """Send reschedule confirmation email with .ics attachment (best-effort)."""
     import base64
@@ -403,6 +406,7 @@ body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSy
         date=new_date,
         time=new_time,
         duration_minutes=duration_minutes,
+        timezone=business_timezone,
         organizer_email=sender_email,
         attendee_email=client_email,
         uid=f"{confirmation_ref}@aiemployees",

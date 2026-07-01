@@ -116,7 +116,7 @@ def is_token_expired(expiry: datetime) -> bool:
 
 # ── Google Calendar API ───────────────────────────────────────────────────────
 
-def _appointment_to_event(appointment: dict) -> dict:
+def _appointment_to_event(appointment: dict, timezone: str = "UTC") -> dict:
     """
     Convert an appointments table row to a Google Calendar event body.
     appointment must have: client_name, service, appointment_date (YYYY-MM-DD),
@@ -147,8 +147,8 @@ def _appointment_to_event(appointment: dict) -> dict:
     event = {
         "summary": f"{appointment.get('client_name', 'Client')} — {appointment.get('service', 'Appointment')}",
         "description": "\n".join(description_parts),
-        "start": {"dateTime": start_dt, "timeZone": "UTC"},
-        "end": {"dateTime": end_dt, "timeZone": "UTC"},
+        "start": {"dateTime": start_dt, "timeZone": timezone},
+        "end": {"dateTime": end_dt, "timeZone": timezone},
     }
 
     if appointment.get("location_name"):
@@ -201,6 +201,7 @@ async def create_calendar_event(
     client_id: str,
     client_secret: str,
     supabase,
+    timezone: str = "UTC",
 ) -> Optional[str]:
     """
     Create a Google Calendar event for the appointment.
@@ -210,7 +211,7 @@ async def create_calendar_event(
     if not access_token:
         return None
 
-    event_body = _appointment_to_event(appointment)
+    event_body = _appointment_to_event(appointment, timezone=timezone)
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
@@ -232,13 +233,14 @@ async def update_calendar_event(
     client_id: str,
     client_secret: str,
     supabase,
+    timezone: str = "UTC",
 ) -> bool:
     """Update an existing Google Calendar event. Returns True on success."""
     access_token = await _get_valid_access_token(token_row, client_id, client_secret, supabase)
     if not access_token:
         return False
 
-    event_body = _appointment_to_event(appointment)
+    event_body = _appointment_to_event(appointment, timezone=timezone)
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.patch(

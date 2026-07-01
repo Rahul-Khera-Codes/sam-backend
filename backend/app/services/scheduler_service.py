@@ -138,6 +138,8 @@ async def run_reminder_calls() -> None:
     for cfg in (cfg_rows.data or []):
         business_id = cfg["business_id"]
         location_id = cfg["location_id"]
+        if not location_id:
+            continue
         config = cfg.get("config_value") or {}
         days = int(config.get("days") or 1)
         template = config.get("message_template") or (
@@ -226,6 +228,8 @@ async def run_reschedule_calls() -> None:
     for cfg in (cfg_rows.data or []):
         business_id = cfg["business_id"]
         location_id = cfg["location_id"]
+        if not location_id:
+            continue
         config = cfg.get("config_value") or {}
         days = int(config.get("days") or 3)
         template = config.get("message_template") or (
@@ -316,6 +320,8 @@ async def run_noshow_calls() -> None:
     for cfg in (cfg_rows.data or []):
         business_id = cfg["business_id"]
         location_id = cfg["location_id"]
+        if not location_id:
+            continue
         config = cfg.get("config_value") or {}
         days = int(config.get("days") or 1)
         template = config.get("message_template") or (

@@ -44,7 +44,7 @@ Multi-location service businesses — barbershops, salons, spas, dental/medical 
 - Live call forwarding — SIP REFER transfer to a real human (Option C implementation)
 - Missed call text-back — automatic SMS when a call is not answered
 - Multi-language support (configurable feature flag)
-- Custom business hours + holiday/special schedule overrides per location
+c- Custom business hours + holiday/special schedule overrides per location
 
 **Communications**
 - SMS confirmations, reminders via Twilio

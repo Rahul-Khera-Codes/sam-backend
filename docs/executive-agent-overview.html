@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Executive Agent — Product Overview</title>
+<style>
+  :root {
+    --ground:       #F9F8F5;
+    --ground-2:     #EEECEA;
+    --ground-3:     #E5E2DC;
+    --text:         #141210;
+    --text-muted:   #6B6860;
+    --accent:       #2A47FC;
+    --accent-bg:    #EEF1FF;
+    --billing:      #E49B00;
+    --billing-bg:   #FEF8E8;
+    --billing-border: #F5D97A;
+    --border:       #DDD9D3;
+    --serif:        Georgia, "Times New Roman", serif;
+    --sans:         "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+    --mono:         "Courier New", Courier, monospace;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { background: var(--ground); color: var(--text); font-family: var(--sans); }
+
+  body {
+    max-width: 740px;
+    margin: 0 auto;
+    padding: 0 28px 80px;
+  }
+
+  /* ── Top bar ── */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 28px 0 40px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 56px;
+  }
+  .topbar-brand {
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .topbar-meta {
+    font-family: var(--sans);
+    font-size: 12px;
+    color: var(--text-muted);
+    text-align: right;
+    line-height: 1.6;
+  }
+
+  /* ── Hero ── */
+  .hero { margin-bottom: 64px; }
+  .hero-eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 20px;
+  }
+  .hero-headline {
+    font-family: var(--serif);
+    font-size: clamp(38px, 6vw, 56px);
+    font-weight: normal;
+    line-height: 1.1;
+    letter-spacing: -.02em;
+    color: var(--text);
+    margin-bottom: 24px;
+  }
+  .hero-headline em { font-style: italic; color: var(--accent); }
+  .hero-sub {
+    font-family: var(--sans);
+    font-size: 17px;
+    line-height: 1.65;
+    color: var(--text-muted);
+    max-width: 560px;
+    margin-bottom: 36px;
+  }
+
+  .command-demo {
+    background: var(--text);
+    border-radius: 10px;
+    padding: 20px 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    max-width: 540px;
+  }
+  .command-prompt {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--accent);
+    flex-shrink: 0;
+    opacity: .7;
+  }
+  .command-text {
+    font-family: var(--mono);
+    font-size: 14px;
+    color: #F9F8F5;
+    line-height: 1.4;
+    flex: 1;
+    min-height: 20px;
+  }
+  .cursor {
+    display: inline-block;
+    width: 2px;
+    height: 15px;
+    background: #F9F8F5;
+    margin-left: 2px;
+    vertical-align: middle;
+    animation: blink .85s step-end infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* ── Section base ── */
+  .section { margin-bottom: 60px; }
+  .section-label {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 14px;
+  }
+  .section-title {
+    font-family: var(--serif);
+    font-size: 26px;
+    font-weight: normal;
+    letter-spacing: -.01em;
+    line-height: 1.25;
+    color: var(--text);
+    margin-bottom: 20px;
+  }
+  .section-body {
+    font-family: var(--sans);
+    font-size: 15.5px;
+    line-height: 1.7;
+    color: var(--text-muted);
+  }
+  .section-divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin-bottom: 60px;
+  }
+
+  /* ── Steps ── */
+  .steps { display: flex; flex-direction: column; }
+  .step {
+    display: grid;
+    grid-template-columns: 40px 1fr;
+    gap: 0 20px;
+    padding: 20px 0;
+    border-top: 1px solid var(--border);
+  }
+  .step:last-child { border-bottom: 1px solid var(--border); }
+  .step-num {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--accent);
+    padding-top: 2px;
+    opacity: .7;
+  }
+  .step-title {
+    font-family: var(--sans);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+  .step-desc {
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text-muted);
+  }
+
+  /* ── Capabilities ── */
+  .capabilities {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  @media (max-width: 520px) { .capabilities { grid-template-columns: 1fr; } }
+  .cap-card {
+    background: var(--ground-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px 20px;
+  }
+  .cap-card.coming-soon { opacity: .55; border-style: dashed; }
+  .cap-service {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 10px;
+  }
+  .cap-card.coming-soon .cap-service { color: var(--text-muted); }
+  .cap-actions { list-style: none; display: flex; flex-direction: column; gap: 5px; }
+  .cap-actions li {
+    font-family: var(--sans);
+    font-size: 13.5px;
+    color: var(--text);
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .cap-actions li::before {
+    content: "→";
+    color: var(--accent);
+    flex-shrink: 0;
+    font-size: 11px;
+    margin-top: 2px;
+  }
+  .cap-card.coming-soon .cap-actions li::before { color: var(--text-muted); }
+  .soon-tag {
+    display: inline-block;
+    font-family: var(--sans);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    background: var(--ground-3);
+    color: var(--text-muted);
+    border-radius: 3px;
+    padding: 2px 6px;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+
+  /* ── Comparison ── */
+  .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 520px) { .comparison { grid-template-columns: 1fr; } }
+  .comp-card { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .comp-header {
+    padding: 14px 18px;
+    background: var(--ground-2);
+    border-bottom: 1px solid var(--border);
+  }
+  .comp-tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+  }
+  .comp-name { font-family: var(--sans); font-size: 16px; font-weight: 700; color: var(--text); }
+  .comp-name.highlight { color: var(--accent); }
+  .comp-row {
+    display: grid;
+    grid-template-columns: 100px 1fr;
+    gap: 12px;
+    padding: 9px 18px;
+    border-bottom: 1px solid var(--border);
+    align-items: start;
+  }
+  .comp-row:last-child { border-bottom: none; }
+  .comp-key {
+    font-family: var(--sans);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: var(--text-muted);
+    padding-top: 1px;
+  }
+  .comp-val { font-family: var(--sans); font-size: 13.5px; color: var(--text); line-height: 1.45; }
+
+  /* ── Billing ── */
+  .billing-section {
+    background: var(--billing-bg);
+    border: 1px solid var(--billing-border);
+    border-left: 4px solid var(--billing);
+    border-radius: 8px;
+    padding: 28px 28px 32px;
+    margin-bottom: 60px;
+  }
+  .billing-section .section-label { color: var(--billing); }
+  .billing-section .section-title { margin-bottom: 16px; }
+  .billing-section .section-body { margin-bottom: 24px; }
+
+  .billing-model { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 24px; }
+  @media (max-width: 520px) { .billing-model { grid-template-columns: 1fr; } }
+  .plan-card {
+    background: #fff;
+    border: 1px solid var(--billing-border);
+    border-radius: 7px;
+    padding: 14px 16px;
+  }
+  .plan-name {
+    font-family: var(--sans);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+  }
+  .plan-price { font-family: var(--serif); font-size: 22px; color: var(--text); margin-bottom: 8px; line-height: 1; }
+  .plan-price span { font-family: var(--sans); font-size: 12px; color: var(--text-muted); font-style: normal; }
+  .plan-feature { font-family: var(--sans); font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+  .addon-badge {
+    display: inline-block;
+    margin-top: 10px;
+    background: var(--billing);
+    color: #fff;
+    font-family: var(--sans);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 3px;
+  }
+  .addon-note {
+    font-family: var(--sans);
+    font-size: 13.5px;
+    color: var(--text-muted);
+    line-height: 1.6;
+    padding-top: 16px;
+    border-top: 1px solid var(--billing-border);
+  }
+  .addon-note strong { color: var(--text); font-weight: 600; }
+
+  /* ── Phase 1 ── */
+  .phase-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+  @media (max-width: 520px) { .phase-grid { grid-template-columns: 1fr; } }
+  .phase-item {
+    background: var(--accent-bg);
+    border: 1px solid #C8D4FF;
+    border-radius: 7px;
+    padding: 14px 16px;
+  }
+  .phase-item-title { font-family: var(--sans); font-size: 13px; font-weight: 700; color: var(--accent); margin-bottom: 4px; }
+  .phase-item-desc { font-family: var(--sans); font-size: 13px; color: var(--text-muted); line-height: 1.55; }
+
+  .timeline-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--ground-2);
+    border: 1px solid var(--border);
+    border-radius: 99px;
+    padding: 8px 16px;
+    margin-top: 20px;
+    font-family: var(--sans);
+    font-size: 13px;
+    color: var(--text);
+  }
+  .timeline-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+
+  /* ── Footer ── */
+  .doc-footer {
+    padding-top: 40px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .doc-footer-from { font-family: var(--sans); font-size: 13px; color: var(--text-muted); }
+  .doc-footer-from strong { color: var(--text); }
+  .doc-footer-date { font-family: var(--mono); font-size: 11px; color: var(--text-muted); letter-spacing: .06em; }
+
+  /* ── Avatar states ── */
+  .avatar-section { margin-bottom: 60px; }
+  .avatar-intro {
+    font-family: var(--sans);
+    font-size: 15.5px;
+    line-height: 1.7;
+    color: var(--text-muted);
+    margin-bottom: 28px;
+  }
+  .avatar-states {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 20px;
+  }
+  @media (max-width: 520px) { .avatar-states { grid-template-columns: 1fr; } }
+  .avatar-state {
+    background: var(--ground-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 16px 18px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+  }
+  .avatar-orb {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    position: relative;
+  }
+  /* Idle / listening */
+  .orb-listen {
+    background: radial-gradient(circle at 38% 38%, #5B73FF, #2A47FC);
+    box-shadow: 0 0 0 0 rgba(42,71,252,.35);
+    animation: pulse-listen 2s ease-in-out infinite;
+  }
+  @keyframes pulse-listen {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(42,71,252,.35); }
+    50%       { box-shadow: 0 0 0 10px rgba(42,71,252,.0); }
+  }
+  /* Thinking */
+  .orb-think {
+    background: radial-gradient(circle at 38% 38%, #7B6FFF, #4A3FC8);
+    animation: rotate-think 1.6s linear infinite;
+  }
+  .orb-think::after {
+    content: "";
+    position: absolute;
+    inset: 4px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    border-top-color: rgba(255,255,255,.5);
+    animation: spin 1.2s linear infinite;
+  }
+  @keyframes rotate-think { to { filter: hue-rotate(30deg); } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  /* Speaking */
+  .orb-speak {
+    background: radial-gradient(circle at 38% 38%, #60CFFF, #1A8FC8);
+    animation: speak-wave 0.6s ease-in-out infinite alternate;
+  }
+  @keyframes speak-wave {
+    from { transform: scale(1);   box-shadow: 0 0 0 0 rgba(26,143,200,.4); }
+    to   { transform: scale(1.08); box-shadow: 0 0 0 8px rgba(26,143,200,.0); }
+  }
+  .avatar-state-label {
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .avatar-state-desc {
+    font-family: var(--sans);
+    font-size: 12.5px;
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+  .avatar-note {
+    background: var(--accent-bg);
+    border: 1px solid #C8D4FF;
+    border-radius: 7px;
+    padding: 14px 18px;
+    font-family: var(--sans);
+    font-size: 13.5px;
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+  .avatar-note strong { color: var(--accent); }
+
+  /* ── Phase blocks ── */
+  .phase-block {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 16px;
+  }
+  .phase-block-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 20px;
+    background: var(--ground-2);
+    border-bottom: 1px solid var(--border);
+  }
+  .phase-badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 99px;
+  }
+  .phase-badge.p1 { background: var(--accent); color: #fff; }
+  .phase-badge.p2 { background: var(--ground-3); color: var(--text-muted); }
+  .phase-block-title {
+    font-family: var(--sans);
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text);
+    flex: 1;
+  }
+  .phase-block-est {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    letter-spacing: .04em;
+  }
+  .phase-block-body {
+    padding: 16px 20px 20px;
+  }
+  .phase-block.p2-block { opacity: .7; }
+  .phase-items-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 0;
+  }
+  @media (max-width: 520px) { .phase-items-grid { grid-template-columns: 1fr; } }
+  .pi {
+    background: var(--accent-bg);
+    border: 1px solid #C8D4FF;
+    border-radius: 7px;
+    padding: 12px 14px;
+  }
+  .pi.muted {
+    background: var(--ground-2);
+    border-color: var(--border);
+  }
+  .pi-title { font-family: var(--sans); font-size: 13px; font-weight: 700; color: var(--accent); margin-bottom: 3px; }
+  .pi.muted .pi-title { color: var(--text-muted); }
+  .pi-desc { font-family: var(--sans); font-size: 12.5px; color: var(--text-muted); line-height: 1.5; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cursor, .orb-listen, .orb-think, .orb-think::after, .orb-speak { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-brand">AI Employees Inc.</div>
+  <div class="topbar-meta">Product Overview<br/>Prepared for Sam Maisuria</div>
+</div>
+
+<div class="hero">
+  <div class="hero-eyebrow">New Product · Executive Agent</div>
+  <h1 class="hero-headline">Your business,<br/><em>on command.</em></h1>
+  <p class="hero-sub">
+    The Voice Agent answers your customers' calls. The Executive Agent works directly
+    for you — a live AI character you talk to face-to-face in the browser, that takes
+    real actions on the services already connected to your account.
+  </p>
+  <div class="command-demo" aria-label="Example commands">
+    <span class="command-prompt">you &gt;</span>
+    <span class="command-text" id="cmdText"><span class="cursor"></span></span>
+  </div>
+</div>
+
+<hr class="section-divider"/>
+
+<!-- The Character -->
+<div class="section avatar-section">
+  <div class="section-label">The Character</div>
+  <h2 class="section-title">A live AI avatar, not just a chat box</h2>
+  <p class="avatar-intro">
+    The Executive Agent has a visual identity — an animated character that lives on the screen while you talk. It reacts in real time: it shows when it's listening to you, when it's working something out, and when it's speaking back. This makes the interaction feel like talking to an actual assistant rather than typing into a form.
+  </p>
+  <div class="avatar-states">
+    <div class="avatar-state">
+      <div class="avatar-orb orb-listen"></div>
+      <div class="avatar-state-label">Listening</div>
+      <div class="avatar-state-desc">Microphone is active. The agent is waiting for your command.</div>
+    </div>
+    <div class="avatar-state">
+      <div class="avatar-orb orb-think"></div>
+      <div class="avatar-state-label">Thinking</div>
+      <div class="avatar-state-desc">Processing your request, checking connected services.</div>
+    </div>
+    <div class="avatar-state">
+      <div class="avatar-orb orb-speak"></div>
+      <div class="avatar-state-label">Speaking</div>
+      <div class="avatar-state-desc">Responding out loud. Results or previews appear alongside.</div>
+    </div>
+  </div>
+  <div class="avatar-note">
+    <strong>Phase 1</strong> ships with a clean animated avatar showing these three states. <strong>Phase 2</strong> adds a more expressive face, customisable appearance, and personality settings the business owner can configure.
+  </div>
+</div>
+
+<hr class="section-divider"/>
+
+<div class="section">
+  <div class="section-label">How It Works</div>
+  <h2 class="section-title">Four steps, start to finish</h2>
+  <div class="steps">
+    <div class="step">
+      <span class="step-num">01</span>
+      <div>
+        <div class="step-title">Open a session</div>
+        <div class="step-desc">Click the Executive Agent page in the portal. Your microphone activates and the agent is ready — no setup, no phone number needed.</div>
+      </div>
+    </div>
+    <div class="step">
+      <span class="step-num">02</span>
+      <div>
+        <div class="step-title">Speak or type a command</div>
+        <div class="step-desc">Describe what you need in plain English. "Draft a reply to the last email from John." "What appointments did we miss this week?" "Block off Friday morning."</div>
+      </div>
+    </div>
+    <div class="step">
+      <span class="step-num">03</span>
+      <div>
+        <div class="step-title">Review before it acts</div>
+        <div class="step-desc">For anything that sends or changes data, the agent shows you a preview first. You approve, tweak the wording, or cancel — nothing goes out without your say.</div>
+      </div>
+    </div>
+    <div class="step">
+      <span class="step-num">04</span>
+      <div>
+        <div class="step-title">Done — next task</div>
+        <div class="step-desc">The action completes and a log entry is saved to your session history. Keep going or close the tab — the agent picks up where you left off next time.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<hr class="section-divider"/>
+
+<div class="section">
+  <div class="section-label">Capabilities</div>
+  <h2 class="section-title">Works with what's already connected</h2>
+  <p class="section-body" style="margin-bottom:20px;">No new logins. The Executive Agent uses the same Gmail and Google Calendar integrations your business already has set up in the portal.</p>
+  <div class="capabilities">
+    <div class="cap-card">
+      <div class="cap-service">Gmail</div>
+      <ul class="cap-actions">
+        <li>Read and summarise recent emails</li>
+        <li>Draft replies in your voice</li>
+        <li>Send with your approval</li>
+        <li>Find emails from a specific person</li>
+      </ul>
+    </div>
+    <div class="cap-card">
+      <div class="cap-service">Google Calendar</div>
+      <ul class="cap-actions">
+        <li>Show today's or this week's schedule</li>
+        <li>Create and reschedule events</li>
+        <li>Find free slots for a meeting</li>
+        <li>Block focus time</li>
+      </ul>
+    </div>
+    <div class="cap-card">
+      <div class="cap-service">Appointments</div>
+      <ul class="cap-actions">
+        <li>View upcoming and past bookings</li>
+        <li>Cancel or reschedule</li>
+        <li>Flag no-shows and cancellations</li>
+        <li>Look up a client's history</li>
+      </ul>
+    </div>
+    <div class="cap-card coming-soon">
+      <div class="cap-service">CRM / More <span class="soon-tag">Phase 2</span></div>
+      <ul class="cap-actions">
+        <li>Log client notes</li>
+        <li>Pull up contact history</li>
+        <li>Trigger follow-up sequences</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<hr class="section-divider"/>
+
+<div class="section">
+  <div class="section-label">Voice Agent vs Executive Agent</div>
+  <h2 class="section-title">Two different tools for two different jobs</h2>
+  <div class="comparison">
+    <div class="comp-card">
+      <div class="comp-header">
+        <div class="comp-tag">Existing product</div>
+        <div class="comp-name">Voice Agent</div>
+      </div>
+      <div>
+        <div class="comp-row"><span class="comp-key">Talks to</span><span class="comp-val">Your customers</span></div>
+        <div class="comp-row"><span class="comp-key">Where</span><span class="comp-val">Phone / SIP call</span></div>
+        <div class="comp-row"><span class="comp-key">Does</span><span class="comp-val">Books appointments, answers questions</span></div>
+        <div class="comp-row"><span class="comp-key">When</span><span class="comp-val">When a customer calls in</span></div>
+        <div class="comp-row"><span class="comp-key">Billing</span><span class="comp-val">Included in plan (call minutes)</span></div>
+      </div>
+    </div>
+    <div class="comp-card">
+      <div class="comp-header">
+        <div class="comp-tag">New product</div>
+        <div class="comp-name highlight">Executive Agent</div>
+      </div>
+      <div>
+        <div class="comp-row"><span class="comp-key">Talks to</span><span class="comp-val">You — the owner or manager</span></div>
+        <div class="comp-row"><span class="comp-key">Where</span><span class="comp-val">Browser, inside the portal</span></div>
+        <div class="comp-row"><span class="comp-key">Does</span><span class="comp-val">Drafts, schedules, manages tasks</span></div>
+        <div class="comp-row"><span class="comp-key">When</span><span class="comp-val">Whenever you open a session</span></div>
+        <div class="comp-row"><span class="comp-key">Billing</span><span class="comp-val">Monthly add-on (see below)</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<hr class="section-divider"/>
+
+<div class="billing-section">
+  <div class="section-label">Billing Integration</div>
+  <h2 class="section-title">An add-on, not a new plan</h2>
+  <p class="section-body">
+    The Executive Agent sits on top of any existing subscription — it doesn't replace the Voice Agent or require a separate account. Owners toggle it on from the Billing page and it appears as a new line item on their Stripe invoice, the same way future AI employees will be billed.
+  </p>
+  <div class="billing-model">
+    <div class="plan-card">
+      <div class="plan-name">Starter</div>
+      <div class="plan-price">$99<span>/mo</span></div>
+      <div class="plan-feature">150 calls · 1 location</div>
+    </div>
+    <div class="plan-card">
+      <div class="plan-name">Growth</div>
+      <div class="plan-price">$149<span>/mo</span></div>
+      <div class="plan-feature">400 calls · 3 locations</div>
+      <div class="addon-badge">+ Executive Agent</div>
+    </div>
+    <div class="plan-card">
+      <div class="plan-name">Pro</div>
+      <div class="plan-price">$299<span>/mo</span></div>
+      <div class="plan-feature">800 calls · 5 locations</div>
+      <div class="addon-badge">+ Executive Agent</div>
+    </div>
+  </div>
+  <div class="addon-note">
+    <strong>How the add-on works:</strong> A single "Enable Executive Agent" toggle appears in the Billing section. Turning it on adds a fixed monthly charge to the next invoice — suggested $49–$79/mo. Usage (sessions and minutes) is shown in the Billing page alongside the existing call usage bar. Turning it off cancels the add-on at the end of the billing period with no penalty. All of this is handled through Stripe subscription items — the same infrastructure already powering the existing plans.
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-label">Build Plan</div>
+  <h2 class="section-title">Two phases, working product after Phase 1</h2>
+  <p class="section-body" style="margin-bottom:24px;">Phase 1 ships a complete, usable product. Phase 2 makes it exceptional. Nothing in Phase 2 is required for launch.</p>
+
+  <!-- Phase 1 -->
+  <div class="phase-block">
+    <div class="phase-block-header">
+      <span class="phase-badge p1">Phase 1</span>
+      <span class="phase-block-title">Launch — Core Agent + Basic Avatar</span>
+      <span class="phase-block-est">3–4 weeks</span>
+    </div>
+    <div class="phase-block-body">
+      <div class="phase-items-grid">
+        <div class="pi">
+          <div class="pi-title">Animated Avatar</div>
+          <div class="pi-desc">Live character with Listening, Thinking, and Speaking states. Reacts in real time as you talk.</div>
+        </div>
+        <div class="pi">
+          <div class="pi-title">Voice + Text Input</div>
+          <div class="pi-desc">Speak or type commands. Microphone activates on session open.</div>
+        </div>
+        <div class="pi">
+          <div class="pi-title">Gmail</div>
+          <div class="pi-desc">Read recent emails, draft replies, send with your approval.</div>
+        </div>
+        <div class="pi">
+          <div class="pi-title">Google Calendar</div>
+          <div class="pi-desc">View schedule, create and reschedule events, find free slots.</div>
+        </div>
+        <div class="pi">
+          <div class="pi-title">Appointments</div>
+          <div class="pi-desc">View, cancel, and reschedule bookings from the portal.</div>
+        </div>
+        <div class="pi">
+          <div class="pi-title">Billing Toggle</div>
+          <div class="pi-desc">Add-on toggle in Billing, Stripe line item, session usage tracking.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phase 2 -->
+  <div class="phase-block p2-block">
+    <div class="phase-block-header">
+      <span class="phase-badge p2">Phase 2</span>
+      <span class="phase-block-title">Advanced Character + More Integrations</span>
+      <span class="phase-block-est">Post-launch</span>
+    </div>
+    <div class="phase-block-body">
+      <div class="phase-items-grid">
+        <div class="pi muted">
+          <div class="pi-title">Expressive Avatar</div>
+          <div class="pi-desc">More detailed face, richer animations, mood expressions during conversation.</div>
+        </div>
+        <div class="pi muted">
+          <div class="pi-title">Personality Settings</div>
+          <div class="pi-desc">Business owner can set the agent's name, tone, and communication style.</div>
+        </div>
+        <div class="pi muted">
+          <div class="pi-title">CRM Integration</div>
+          <div class="pi-desc">Log client notes, look up contact history, trigger follow-up sequences.</div>
+        </div>
+        <div class="pi muted">
+          <div class="pi-title">Multi-Agent Handoff</div>
+          <div class="pi-desc">Executive Agent delegates tasks to Voice Agent or other future agents.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="doc-footer">
+  <div class="doc-footer-from">Prepared by <strong>Rahul Khera</strong></div>
+  <div class="doc-footer-date">June 19, 2026</div>
+</div>
+
+<script>
+  const commands = [
+    "Draft a reply to Sarah's email about the contract",
+    "What appointments did we miss this week?",
+    "Schedule a team meeting next Tuesday at 2 PM",
+    "Summarise the last 5 emails from clients",
+    "Block off Friday morning for deep work"
+  ];
+  const el = document.getElementById("cmdText");
+  let idx = 0, charIdx = 0, deleting = false, pauseTicks = 0;
+  function tick() {
+    const cmd = commands[idx];
+    if (pauseTicks > 0) { pauseTicks--; setTimeout(tick, 60); return; }
+    if (!deleting) {
+      charIdx++;
+      el.textContent = cmd.slice(0, charIdx);
+      el.insertAdjacentHTML("beforeend", '<span class="cursor"></span>');
+      if (charIdx === cmd.length) { deleting = true; pauseTicks = 22; }
+      setTimeout(tick, 48);
+    } else {
+      charIdx--;
+      el.textContent = cmd.slice(0, charIdx);
+      el.insertAdjacentHTML("beforeend", '<span class="cursor"></span>');
+      if (charIdx === 0) { deleting = false; idx = (idx + 1) % commands.length; pauseTicks = 5; }
+      setTimeout(tick, 28);
+    }
+  }
+  tick();
+</script>
+</body>
+</html>
