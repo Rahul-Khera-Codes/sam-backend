@@ -7,6 +7,8 @@ Most recent entry at top.
 
 ## 2026-07-01 (evening) — Sam pushes back on cost/value, 7 new UI requests, ChatGPT-scope question raised
 
+**Note on this whole exchange:** Rahul pushed `feature/exec-agent-improvements` and gave it to Sam for testing yesterday, but it's **unconfirmed whether Sam actually tested it** — he only added the 7-item task list and sent the cost-pushback message below, no explicit test feedback. Don't read Sam's silence on the fixes as approval or as a failed test — it's simply unverified either way.
+
 **Rahul → Sam (06:19 PM):** sent the day's bug-fix summary for attach-document-to-email — three layered issues found and fixed in this session: (1) no attachment capability existed at all, (2) document library was cached once at session start instead of checked live, (3) the model answered "no documents" from its own earlier turn instead of re-checking. All three fixed, committed, agent restarted.
 
 **Rahul (06:20 PM, internal):** raised the open question already tracked in TODO.md — the "ChatGPT-like" general Q&A has no defined scope or boundary. Without one, Remi can answer literally anything, with no limit. Needs a decision before building more of it. (This turned out to be directly related to Sam's message below.)
