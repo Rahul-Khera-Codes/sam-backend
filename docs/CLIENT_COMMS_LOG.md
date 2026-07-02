@@ -5,6 +5,35 @@ Most recent entry at top.
 
 ---
 
+## 2026-07-01 (evening) — Sam pushes back on cost/value, 7 new UI requests, ChatGPT-scope question raised
+
+**Rahul → Sam (06:19 PM):** sent the day's bug-fix summary for attach-document-to-email — three layered issues found and fixed in this session: (1) no attachment capability existed at all, (2) document library was cached once at session start instead of checked live, (3) the model answered "no documents" from its own earlier turn instead of re-checking. All three fixed, committed, agent restarted.
+
+**Rahul (06:20 PM, internal):** raised the open question already tracked in TODO.md — the "ChatGPT-like" general Q&A has no defined scope or boundary. Without one, Remi can answer literally anything, with no limit. Needs a decision before building more of it. (This turned out to be directly related to Sam's message below.)
+
+**Rahul → Sam (08:40 PM):** "Also, I've updated the Executive Agent visibility so it can be offered as a subscription add-on. I've implemented toggle-based availability for now, and later we can control access based on whether the user has purchased the subscription." — **Note:** what was actually built this session is the **avatar** on/off toggle (`avatar_enabled`), not a whole-Executive-Agent visibility/subscription gate. Worth clarifying with Sam so expectations match what's actually shipped — the avatar toggle does not currently gate access to the Executive Agent itself.
+
+**Sam → Rahul (11:42 PM):** **"Rahul what is the cheapest way to run the executive assistant. People will not pay to use this when they can use ChatGPT for free."** Direct pushback on running cost and on value/differentiation versus free ChatGPT. Connects straight to Rahul's 06:20 PM note: Remi currently runs on OpenAI's Realtime API for every interaction (not a cheap text-only model), and the prompt has no topic boundary — the same lack of scope is both the expensive part and the undifferentiated part. **Needs a strategy conversation with Sam** — what Remi is actually *for* versus general chat, and the cheapest architecture that still delivers that — not a pure engineering fix.
+
+**Sam — 7 new requests logged (kanban board), "check everything thoroughly first":**
+1. Add more functionality "like ChatGPT" — blocked on the cost/scope conversation above.
+2. Remove business name from the opening greeting — target: "Hi, I'm Remi—how can I help you today?"
+3. Editable email **body** in the draft/preview card (fix a typo without re-dictating the whole email).
+4. Editable **recipient address** in the draft/preview card.
+5. Editable **subject** in the draft/preview card.
+6. Persistent chat memory / sidebar — access previous conversations. Currently the transcript resets to empty on every new session; no history is saved anywhere.
+7. Edit + copy buttons on the transcript/speech-to-text bubbles, to fix minor mistakes without repeating the whole utterance.
+
+**Rahul verified against current code (2026-07-01) before scoping any of the above:**
+- #2 — one-line fix, `agent/executive_agent.py:1188-1189`.
+- #3/#4/#5 — all in `AgentCardView.tsx`'s `email_draft` card (L245-260): currently 100% read-only text, no input fields at all. One workstream.
+- #6 — confirmed zero persistence anywhere: `useExecutiveSession.ts` wipes the transcript on every `connect()`; no DB table or endpoint stores exec-agent conversation history. The biggest of the 7 — new schema + save-on-message + history UI.
+- #7 — `TranscriptPanel.tsx` bubbles are plain text, no buttons.
+
+**Proposed sequencing (pending confirmation):** #2 now (trivial) → editable email draft fields (#3–5, one workstream) → transcript edit/copy (#7) → persistent chat history (#6, biggest, own workstream) → #1 blocked on the cost/scope conversation with Sam.
+
+---
+
 ## SAM ITEMS — re-triaged 2026-06-25 (Sam is non-technical: only surface what he must ACT on, or build-and-demo for feedback)
 
 **Build now, don't ask — show Sam for feedback when ready:**
