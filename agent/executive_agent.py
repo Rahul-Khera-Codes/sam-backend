@@ -1061,6 +1061,23 @@ async def executive_agent(ctx: agents.JobContext):
         llm=openai.realtime.RealtimeModel(voice="marin", temperature=0.9),
         preemptive_generation=True,
     )
+
+    def _log_cache_audit(ev):
+        """Cost audit — logs OpenAI Realtime's prompt-cache hit rate so we know
+        whether a separate STT/LLM/TTS pipeline would actually save money.
+        See docs/executive-agent-cost-analysis.md. Remove once the audit is done."""
+        for u in ev.usage.model_usage:
+            if u.type == "llm_usage" and u.input_tokens:
+                hit_pct = u.input_cached_tokens / u.input_tokens * 100
+                logger.info(
+                    "Cache audit — provider=%s model=%s input_tokens=%d cached=%d (%.0f%%) "
+                    "audio_in=%d cached_audio=%d",
+                    u.provider, u.model, u.input_tokens, u.input_cached_tokens, hit_pct,
+                    u.input_audio_tokens, u.input_cached_audio_tokens,
+                )
+
+    session.on("session_usage_updated", _log_cache_audit)
+
     assistant = ExecutiveAssistant(
         instructions=instructions,
         supabase=supabase,
