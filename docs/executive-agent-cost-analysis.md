@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-01
 **Trigger:** Sam pushed back on running cost ("what is the cheapest way to run the executive assistant. People will not pay to use this when they can use ChatGPT for free") — see `CLIENT_COMMS_LOG.md`, 2026-07-01 evening.
-**Status:** Research complete, no implementation yet — this is the decision-support doc, discuss before speccing anything.
+**Status:** Research complete. **Cache audit is now live** — `agent/executive_agent.py` logs a running cumulative cache-hit % on every turn (`docs/superpowers/specs/2026-07-01-exec-agent-prompt-cache-audit.md`, commit `9ca7475`). Run a real test session, then check: `docker compose logs sam-executive-agent | grep "Cache audit"`. Last line's `%` decides Option A vs Option B below.
 
 All pricing below was web-searched on 2026-07-01 rather than pulled from memory, per CLAUDE.md Rule 2 ("web search before configuring / adding anything — stale knowledge causes silent bugs," extended here to cost decisions for the same reason).
 

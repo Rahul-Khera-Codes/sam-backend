@@ -443,6 +443,10 @@ Phase 6 (v2 — SHIPPED session 38):
 
 **Proposed sequencing (pending confirmation):** #2 (trivial) → #3/#4/#5 editable draft card (one workstream) → #7 transcript edit/copy → #6 persistent history (biggest, own workstream) → #1 blocked on the Sam cost/scope conversation.
 
+**Cost analysis — full research in `docs/executive-agent-cost-analysis.md`.** Sam's cost pushback researched: optimizing current Realtime architecture vs switching to a separate STT+LLM+TTS pipeline. Which one wins depends entirely on whether OpenAI's prompt caching is actually hitting.
+- [x] **Prompt-cache audit logging shipped** (commit `9ca7475`) — `executive_agent.py` now logs a running cumulative cache-hit % via `session_usage_updated`.
+- [ ] **Run a real test session, then check `docker compose logs sam-executive-agent | grep "Cache audit"`.** Last line's `%` decides: high (~50-90%) → stay on Realtime, take the smaller wins (avatar default-off, idle timeout, `gpt-realtime-mini`). Near-0% → the STT+LLM+TTS pipeline is a real 3–9x win, worth the latency tradeoff.
+
 **Avatar — HeyGen (Sam confirmed in meeting). Integration researched + verified (see memory `reference_heygen_liveavatar_integration`):**
 - [x] Phase-2 avatar = HeyGen **LiveAvatar** plugin, **LITE mode**. ✅ DONE Session 54 (backend live) + Session 55 (avatar toggle). `livekit-plugins-liveavatar~=1.4`, realtime-compatible, female avatar `073b60a9`, voice `marin`. Frontend renders video track at WS4 swap point. Double-audio fix in `useExecutiveSession.ts`. Avatar toggle button in header: `avatar_enabled` sent in session request → agent respects it → frontend locks toggle during active session → localStorage persisted.
 - [ ] **Avatar toggle — live verify** after `docker compose restart sam-executive-agent`. Toggle OFF → "Running without avatar — avatar disabled by user" in logs. Toggle ON → "HeyGen LiveAvatar started" in logs. ✅ Already verified in Docker logs this session.
