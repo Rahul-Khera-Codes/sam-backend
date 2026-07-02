@@ -5,6 +5,17 @@ Most recent entry at top.
 
 ---
 
+## 2026-07-02 — Questions drafted for Sam (NOT yet sent) — ChatGPT scope + cost/value
+
+Rahul decided to talk to Sam before scoping the remaining "ChatGPT-like" item (#1) or the persistent chat history item (#6) — both depend on what Sam actually wants Remi to be. Questions drafted, ready to send:
+
+1. **What do you mean by "ChatGPT-like"?** Remi already answers general questions outside of email/calendar/appointments. What's missing — more casual chit-chat, business advice, help writing things, or something specific? An example would help.
+2. **Should there be things Remi does NOT talk about?** To keep her focused (and cheaper to run) — limit her to business stuff (email, calendar, appointments, general work questions) and steer away from personal chit-chat/random topics? Or should she be open to anything, like ChatGPT?
+3. **Is the cost worry about our running cost, or about convincing customers to pay instead of using free ChatGPT?** Different problems, different fixes. If it's running cost, we can keep trimming it (already cut some this week). If it's customer value, the fix is making it obvious what Remi does that ChatGPT can't (real email, real calendar, real bookings) — not adding more open-ended chat.
+4. **If it's the customer-value problem — should we lean into showing what makes Remi different, instead of adding more general chat?** More general Q&A makes "why not just use ChatGPT" worse, not better — that's literally what ChatGPT already does for free.
+
+---
+
 ## 2026-07-01 (evening) — Sam pushes back on cost/value, 7 new UI requests, ChatGPT-scope question raised
 
 **Note on this whole exchange:** Rahul pushed `feature/exec-agent-improvements` and gave it to Sam for testing yesterday, but it's **unconfirmed whether Sam actually tested it** — he only added the 7-item task list and sent the cost-pushback message below, no explicit test feedback. Don't read Sam's silence on the fixes as approval or as a failed test — it's simply unverified either way.
