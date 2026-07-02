@@ -1122,6 +1122,25 @@ async def executive_agent(ctx: agents.JobContext):
     def _on_user_stopped(_ev) -> None:
         asyncio.ensure_future(_set_state(ctx.room, "thinking"))
 
+    # ── Idle-session auto-disconnect ─────────────────────────────────────────
+    IDLE_DISCONNECT_SECONDS = 180  # how long "away" must persist before we hang up
+
+    _idle_disconnect_task: asyncio.Task | None = None
+
+    async def _idle_disconnect() -> None:
+        await asyncio.sleep(IDLE_DISCONNECT_SECONDS)
+        logger.info("Executive session idle for %ds — auto-disconnecting", IDLE_DISCONNECT_SECONDS)
+        await ctx.room.disconnect()
+
+    @session.on("user_state_changed")
+    def _on_user_state_changed(ev) -> None:
+        nonlocal _idle_disconnect_task
+        if ev.new_state == "away":
+            _idle_disconnect_task = asyncio.ensure_future(_idle_disconnect())
+        elif _idle_disconnect_task and not _idle_disconnect_task.done():
+            _idle_disconnect_task.cancel()
+            _idle_disconnect_task = None
+
     # ── Text input handler (data channel) ────────────────────────────────────
 
     @ctx.room.on("data_received")
