@@ -65,3 +65,28 @@ None identified — mirrors an existing disconnect call and an existing handler 
 | # | Commit | Files |
 |---|---|---|
 | 1 | `feat(exec-agent): auto-disconnect after 3 minutes of user inactivity` | `executive_agent.py` |
+
+---
+
+## Fix — live test found `ctx.room.disconnect()` doesn't disconnect the frontend (2026-07-02)
+
+**Symptom:** live test confirmed the timer fires correctly at 180s and the agent's own logs show a clean disconnect (`"session closed", "reason": "user_initiated"`) — but the frontend UI stayed showing "connected," no auto-disconnect visible in the browser.
+
+**Root cause:** `ctx.room.disconnect()` only detaches the **agent's own participant** from the LiveKit room — it does not close the room or disconnect the frontend's separate WebRTC connection. The frontend (`useExecutiveSession.ts:315`) only listens for `RoomEvent.Disconnected` (fires when *your own* connection ends), not `RoomEvent.ParticipantDisconnected` (fires when *another* participant, e.g. the agent, leaves) — so it never reacted.
+
+**Fix:** delete the room server-side instead, which force-disconnects every participant (agent + frontend) and correctly fires `RoomEvent.Disconnected` on the frontend, triggering its existing (correct) cleanup handler. Precedent for this exact call already exists in `backend/app/services/livekit_service.py:237` (`api.room.delete_room(...)`). `JobContext.api` (a cached property, `job.py:396`, `from livekit import api`) gives the agent process its own authenticated `LiveKitAPI` client for the same call — confirmed `api.DeleteRoomRequest` is importable and `ctx.api.room.delete_room(...)` is the right call.
+
+```python
+from livekit import agents, api, rtc  # add `api` to the existing import
+
+async def _idle_disconnect() -> None:
+    await asyncio.sleep(IDLE_DISCONNECT_SECONDS)
+    logger.info("Executive session idle for %ds — auto-disconnecting", IDLE_DISCONNECT_SECONDS)
+    await ctx.api.room.delete_room(api.DeleteRoomRequest(room=ctx.room.name))
+```
+
+No other change needed — the `user_state_changed` handler and cancellation logic are unaffected.
+
+| # | Commit | Files |
+|---|---|---|
+| 2 | `fix(exec-agent): delete the room on idle-disconnect instead of only leaving it` | `executive_agent.py` |

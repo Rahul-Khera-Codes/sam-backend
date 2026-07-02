@@ -18,7 +18,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
-from livekit import agents, rtc
+from livekit import agents, api, rtc
 from livekit.agents import AgentServer, AgentSession, Agent, function_tool, RunContext, room_io
 from livekit.plugins import openai, liveavatar
 
@@ -1130,7 +1130,10 @@ async def executive_agent(ctx: agents.JobContext):
     async def _idle_disconnect() -> None:
         await asyncio.sleep(IDLE_DISCONNECT_SECONDS)
         logger.info("Executive session idle for %ds — auto-disconnecting", IDLE_DISCONNECT_SECONDS)
-        await ctx.room.disconnect()
+        # ctx.room.disconnect() only leaves the agent's own participant — it doesn't
+        # close the room, so the frontend's separate connection never notices. Delete
+        # the room instead so every participant (agent + frontend) gets disconnected.
+        await ctx.api.room.delete_room(api.DeleteRoomRequest(room=ctx.room.name))
 
     @session.on("user_state_changed")
     def _on_user_state_changed(ev) -> None:
