@@ -532,6 +532,17 @@ class ExecutiveAssistant(Agent):
         email_id is optional — provide it only when sending a reply, to thread it.
         attachment_doc_name is optional — name of a business document to attach as PDF.
         """
+        # Prefer the exact values from the approved preview — the owner may have
+        # edited the card in the UI. The model-supplied args are an unreliable
+        # fallback (same class of bug WS0 fixed for calendar events).
+        draft = self._pending_draft if (self._pending_draft or {}).get("kind") == "email_draft" else None
+        if draft:
+            to = draft.get("to") or to
+            subject = draft.get("subject") or subject
+            body = draft.get("body") or body
+            email_id = draft.get("emailId") or email_id
+            attachment_doc_name = draft.get("attachmentDocName") or attachment_doc_name
+
         import base64
         from email.mime.multipart import MIMEMultipart
         from email.mime.text import MIMEText
@@ -1208,6 +1219,21 @@ async def executive_agent(ctx: agents.JobContext):
                         asyncio.ensure_future(session.generate_reply(user_input=prompt))
                     else:
                         logger.warning("card_action reply_email missing emailId: %s", payload)
+                elif action == "send_email_draft":
+                    # Owner may have edited to/subject/body in the card — write the
+                    # exact edited values into the pending preview BEFORE the model
+                    # acts, so send_email_draft sends precisely what's on screen.
+                    to = (payload.get("to") or "").strip()
+                    subject = (payload.get("subject") or "").strip()
+                    body = payload.get("body") or ""
+                    if to and subject and assistant._pending_draft and assistant._pending_draft.get("kind") == "email_draft":
+                        assistant._pending_draft["to"] = to
+                        assistant._pending_draft["subject"] = subject
+                        assistant._pending_draft["body"] = body
+                        prompt = "The owner confirmed sending the email draft exactly as shown on screen. Call send_email_draft now."
+                        asyncio.ensure_future(session.generate_reply(user_input=prompt))
+                    else:
+                        logger.warning("card_action send_email_draft missing fields or no active preview: %s", payload)
                 else:
                     logger.warning("Unhandled card_action: %s", action)
         except Exception as e:
