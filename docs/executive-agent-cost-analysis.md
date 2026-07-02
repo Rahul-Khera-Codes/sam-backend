@@ -2,7 +2,11 @@
 
 **Date:** 2026-07-01
 **Trigger:** Sam pushed back on running cost ("what is the cheapest way to run the executive assistant. People will not pay to use this when they can use ChatGPT for free") — see `CLIENT_COMMS_LOG.md`, 2026-07-01 evening.
-**Status:** Research complete. **Cache audit is now live** — `agent/executive_agent.py` logs a running cumulative cache-hit % on every turn (`docs/superpowers/specs/2026-07-01-exec-agent-prompt-cache-audit.md`, commit `9ca7475`). Run a real test session, then check: `docker compose logs sam-executive-agent | grep "Cache audit"`. Last line's `%` decides Option A vs Option B below.
+**Status: AUDIT COMPLETE (2026-07-02).** Live voice test (avatar off), job `AJ_nsLdBM8wo5U7`: cache-hit % climbed 0% → 31% → 44% → 60% → 69–71%, plateauing around **69–71%** by the end of the session. That's squarely in the "caching is working" band from the decision framework below.
+
+**Verdict: stay on Option A (optimize current Realtime), do not build the Option B pipeline.** Real-world cost is already in the $0.05–0.10/min range, not the $0.18–0.46/min uncached range — the STT+LLM+TTS pipeline would be roughly a wash on cost while giving up 500–950ms+ of latency and adding 3–4 vendor integrations. Not worth it.
+
+**Next: work Option A's remaining levers** — avatar default-off, idle-session timeout, test `gpt-realtime-mini` for a cheaper per-token rate, and the scope-narrowing conversation with Sam (still the biggest lever on both cost and his "why pay vs. ChatGPT" complaint).
 
 All pricing below was web-searched on 2026-07-01 rather than pulled from memory, per CLAUDE.md Rule 2 ("web search before configuring / adding anything — stale knowledge causes silent bugs," extended here to cost decisions for the same reason).
 
@@ -68,12 +72,15 @@ Industry benchmark for a well-chosen stack (Deepgram Nova-3 + a cheap text LLM +
 
 ---
 
-## 4. Recommendation
+## 4. Recommendation — RESOLVED 2026-07-02
 
-1. **Audit prompt caching first** (Option A, near-free, already recommended). This single check tells us which row of the table above we're actually in, and therefore whether Option B is a 3–9x win or a rough wash.
-2. **If caching is broken/low-hit-rate:** strongly consider Option B (or first just fix caching, which is free and might get us most of the way there without a rearchitecture).
-3. **If caching is working well:** stick with Realtime, take the small wins (avatar default-off, idle timeout, cheaper Realtime-mini model, scope narrowing) — a pipeline isn't worth the latency hit and integration effort for marginal savings.
-4. **Either way**, the general-Q&A scope conversation with Sam matters regardless of architecture — it shrinks the token volume everything else is a percentage of.
+The audit came back at a **~70% cache-hit plateau** — caching is working well. Decision: **stay on Option A, skip the Option B pipeline.**
+
+Remaining work, in order:
+1. **Avatar default-off** — small, already built, just flip the default.
+2. **Idle-session auto-disconnect** — small, isolated, caps abandoned-tab waste.
+3. **Test `gpt-realtime-mini`** — one-line model swap, needs voice/personality re-verification before committing.
+4. **Scope-narrowing conversation with Sam** — still matters regardless of architecture; it shrinks the token volume everything else is a percentage of, and it's also his differentiation complaint, not just the cost one.
 
 ---
 
