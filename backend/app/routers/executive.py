@@ -26,7 +26,7 @@ EXECUTIVE_AGENT_NAME = "executive-agent"
 class ExecutiveSessionRequest(BaseModel):
     business_id: str
     location_id: str | None = None
-    avatar_enabled: bool = True
+    avatar_enabled: bool = False
 
 
 class ExecutiveSessionResponse(BaseModel):
