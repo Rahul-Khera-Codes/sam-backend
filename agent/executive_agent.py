@@ -1225,7 +1225,7 @@ async def executive_agent(ctx: agents.JobContext):
     await session.generate_reply(
         instructions=(
             f"Greet the business owner warmly and introduce yourself by name. Say something like: "
-            f"'Hi, I'm Remi — how can I help you with {business_name} today?' "
+            "'Hi, I'm Remi — how can I help you today?' "
             "Keep it very short — one sentence."
         )
     )
