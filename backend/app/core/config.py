@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     stripe_pro_price_id: str = ""
     stripe_enterprise_price_id: str = ""
     stripe_exec_agent_price_id: str = ""
+    # Free during beta — flip on once Sam names a price and is ready to enforce.
+    # See docs/adr/0001-billing-addon-access-gating.md
+    exec_agent_addon_enforced: bool = False
     
     billing_success_url: str = "http://localhost:8080/dashboard/settings/billing?success=true"
     billing_cancel_url: str = "http://localhost:8080/dashboard/settings/billing"

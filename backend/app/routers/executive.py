@@ -43,16 +43,26 @@ async def create_executive_session(
 ):
     verify_business_access(user_id, body.business_id)
 
-    # Fetch business name for greeting context
+    # Fetch business name for greeting context + add-on state for enforcement
     biz_row = (
         supabase_admin.table("businesses")
-        .select("name")
+        .select("name,stripe_exec_agent_item_id")
         .eq("id", body.business_id)
         .limit(1)
         .execute()
     )
     if not biz_row.data:
         raise HTTPException(status_code=404, detail="Business not found.")
+    biz = biz_row.data[0]
+
+    # Real enforcement layer (see docs/adr/0001-billing-addon-access-gating.md) —
+    # independent of whatever the frontend shows. Off by default (free during
+    # beta); flip settings.exec_agent_addon_enforced once ready to charge.
+    if settings.exec_agent_addon_enforced and not biz.get("stripe_exec_agent_item_id"):
+        raise HTTPException(
+            status_code=403,
+            detail="Executive Agent add-on is not active for this business. Add it in Billing to continue.",
+        )
 
     # Create LiveKit room — prefix "executive-" distinguishes from call rooms
     room_name = f"executive-{body.business_id[:8]}-{uuid.uuid4().hex[:8]}"
