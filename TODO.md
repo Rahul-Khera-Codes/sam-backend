@@ -563,8 +563,9 @@ Sam: "Don't develop the Outbound Calling Employee now, wait until we finish the 
 - Detail: `docs/CLIENT_COMMS_LOG.md` (2026-06-24) + `memory/project_feature_sales_agent.md`.
 - **Recommended build order** (Rahul's read, not yet confirmed with Sam): ship **Lead Researcher** first — most self-contained of the 4, doesn't depend on the others.
 
-### Voice Agents Cost Breakdown Doc — DONE (2026-07-02)
+### Voice Agents Cost Breakdown Doc — DONE, INCLUDES PER-PROVIDER APPENDIX (2026-07-02)
 - [x] `docs/voice-agents-cost-breakdown.md` written — simple English, for Yuvraj/Sam/Charles. Covers both Customer Service agent + Executive Assistant (both confirmed on OpenAI Realtime). Realtime vs separate STT+LLM+TTS pipeline, grounded in this session's real ~70% cache-hit measurement. Reinforces the latency tradeoff already told to Sam. Decision: stay on Realtime for both agents.
+- [x] **Appendix added** (commit `94a31d1`) — per Sam's ask, a specific-provider cost breakdown (Deepgram/Whisper for STT; GPT-4o-mini/GPT-4.1-mini/Claude Haiku 4.5 for the LLM brain; OpenAI/Deepgram Aura/Cartesia/ElevenLabs for TTS) + 3 worked example stacks (cheapest/balanced/premium). Explicit "test before swapping" caveat included, matching what Rahul already told Sam — cost alone isn't the decision.
 
 ### Billing Add-On Toggle for Executive Agent — IMPLEMENTED, MIGRATION APPLIED (2026-07-02)
 - [x] **Fully implemented per ADR 0001** (`docs/adr/0001-billing-addon-access-gating.md`): migration + config + schema + `POST`/`DELETE /billing/addons/executive-agent` + webhook cascade-clear + backend enforcement in `/executive/session` (off by default via `EXEC_AGENT_ADDON_ENFORCED=false`) + `AuthContext.tsx` bootstrap extension + `Billing.tsx` toggle card. Commits: `789e397`, `3df588a`, `ee28543`, `fb177ec`, `ddbb2bc`, `600a0ec`, `573e2fb`.
