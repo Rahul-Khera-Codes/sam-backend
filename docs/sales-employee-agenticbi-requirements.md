@@ -28,7 +28,7 @@ The core screen. The salesperson pastes in a LinkedIn profile URL and clicks "Ge
 - A history of past lookups and a list of saved leads.
 
 ### 2. Competitor Agent
-A list of competitors the business owner is tracking (added by pasting their website URL). For each competitor, there's a "View Report" button that opens intelligence on that specific competitor — pricing changes, feature launches, news, social media activity. New competitors are added just by dropping in a website link.
+A list of competitors the business owner is tracking (added by pasting their website URL). Each competitor row also shows small icons for their **LinkedIn, Facebook, Instagram, and YouTube** presence — these are four separate platforms we'd be pulling data from, not one generic "social media" feed (see the integration requirements section below — each has its own cost and setup). "View Report" opens the full intelligence on that specific competitor: pricing changes, feature launches, news, and activity across those platforms. New competitors are added just by dropping in a website link, and there's a "Schedule Report" shortcut on this screen too, for a report about competitors specifically.
 
 ### 3. Market Agent
 A feed of market intelligence, laid out as cards from different "analyst" angles — think of it like getting a briefing from several specialists at once, each looking at a different piece of the puzzle:
@@ -40,7 +40,7 @@ A feed of market intelligence, laid out as cards from different "analyst" angles
 - **Innovation Strategist** — early signals of new ideas/technologies worth watching
 - **Business Intelligence Analyst** — patterns across the business's own operational data
 
-Each card shows a confidence score, an impact level, or a timeframe, so the owner can judge how seriously to take it. There's also a top-of-page "What's Changing" summary auto-generated from all of the above.
+Each card shows a confidence score, an impact level, or a timeframe, so the owner can judge how seriously to take it, plus a bookmark and share icon on each. There's also a top-of-page "What's Changing" summary auto-generated from all of the above, and an **"Add Custom Report" tile** — the owner can define their own tailored analyst beyond the 7 built-in ones (e.g., something specific to their industry). This screen also has a "Schedule Report" shortcut, same as Competitor Agent.
 
 ### 4. Report Scheduler
 Lets the owner set up an automatic weekly (or daily/monthly/custom) email digest that pulls together highlights from Lead Researcher, Competitor Agent, and Market Agent into one email, sent to a list of recipients (e.g. the exec team, the marketing team). There's a live preview of exactly what the email will look like, and a "Send Test Email" button before turning it on.
@@ -62,6 +62,38 @@ Industry overview, Market trends, Competitor analysis, Pricing intelligence, Dem
 
 ---
 
+## What's Actually Required to Connect Each Platform (and what it costs as usage grows)
+
+This wasn't spelled out clearly before, so here it is platform by platform. The short version: **none of these need us to apply for official developer access from LinkedIn, Facebook, Instagram, or a news outlet** — we go through Apify (a third-party data platform) instead, which is faster to set up but is also exactly where the legal gray area already flagged to Sam comes from. Costs below are all **pay-as-you-go — they grow with how much the product is actually used**, not a flat fee.
+
+### LinkedIn (Lead Researcher + Competitor Agent)
+- **What's needed:** An Apify account + API key. Several LinkedIn data tools on Apify work **without ever logging into a LinkedIn account** (no "cookie," no risk of a personal LinkedIn account getting banned) — trading a bit of data depth for safety. This is the option we'd use.
+- **Cost:** roughly **$4–$10 per 1,000 LinkedIn profiles looked up.** Scales directly with how many leads customers research and how many competitors' LinkedIn pages get checked.
+- **Nothing to apply for.** No waiting on LinkedIn's approval — this is exactly why it's fast to build, and exactly why it's the item Sam is running by his lawyer.
+
+### Facebook (Competitor Agent)
+- **What's needed:** Same Apify account, a different tool within it. No Facebook Developer app or approval needed for this — that's a separate, stricter process for a different kind of access we're not using here.
+- **Cost:** roughly **$2 per 1,000 posts pulled.** Scales with number of competitors tracked and how often we check them.
+
+### Instagram (Competitor Agent)
+- **What's needed:** Same Apify account, another tool within it. No official Instagram API approval needed.
+- **Cost:** roughly **$1.50 per 1,000 posts, $2.30 per 1,000 comments.**
+
+### YouTube (Competitor Agent)
+- **What's needed:** Same Apify account, another tool within it. **Alternative:** YouTube also has its own official, free data API from Google with a daily usage cap — worth considering as a cheaper/safer option for YouTube specifically, since it's an approved, ToS-compliant path (unlike the others).
+- **Cost via Apify:** roughly **$2.40 per 1,000 videos pulled.**
+
+### News Aggregation (Market Agent + the pipeline's "News aggregation" step)
+- **This one is different — it's not an Apify product, it needs its own separate subscription.** This wasn't mentioned before and is a real, additional monthly cost on top of everything else.
+- The best-known option (NewsAPI.org) requires a **$449/month** plan for any real production use — their free tier is explicitly blocked from commercial/live apps.
+- **Cheaper alternatives exist and are worth evaluating first:** Currents API (~$69/month for 75,000 requests/month), TheNewsAPI (~$40–49/month), Mediastack (~$25/month), GNews (~$84/month). These trade off coverage/freshness for price — needs real testing (same "don't just pick the cheapest number" principle from the cost breakdown doc) before picking one.
+- **Cost scales differently than Apify** — it's usually a flat monthly tier with a request cap, not pay-per-record, so as more customers use the Market Agent, we may need to upgrade tiers rather than pay smoothly per use. Worth designing some caching/sharing of news lookups across customers so we're not paying for the same article search repeatedly.
+
+### The bottom line on cost scaling
+Apify-based platforms (LinkedIn, Facebook, Instagram, YouTube) cost **more, the more this product is actually used** — more leads researched, more competitors tracked, more often the reports refresh. News aggregation costs **jump in steps** (subscription tiers) rather than smoothly. Both are separate from — and additional to — the AI "brain" costs already covered in the voice agents cost doc (Sales Employee doesn't use voice, but does still use an AI model to turn the raw scraped data into the actual report text).
+
+---
+
 ## What Is NOT Included in This Version
 
 - **No CRM integration.** The "Push to CRM" button appears in the mockup, but there is nowhere for it to actually push to yet — no CRM has been chosen or connected. Confirmed by Sam: skip for now.
@@ -72,9 +104,10 @@ Industry overview, Market trends, Competitor analysis, Pricing intelligence, Dem
 
 ## Known Technical Risks (for the team, in plain terms)
 
-- **LinkedIn scraping is a legal gray area.** Apify offers this as a service, but LinkedIn's own terms discourage automated scraping of their site. This is exactly the item Sam is running by his lawyer.
+- **Scraping LinkedIn, Facebook, Instagram, and YouTube is a legal gray area on all four, not just LinkedIn.** Apify offers all of these as a service, but each platform's own terms discourage automated scraping of their site. This is exactly the item Sam is running by his lawyer — worth confirming it covers all four platforms, not just LinkedIn specifically, since Competitor Agent touches all of them.
 - **The AI-generated reports (predicted email, pain points, icebreakers) are inherently a best guess, not a guarantee.** The confidence scores shown in the mockup (e.g. "92%") reflect this — they should be understood by the sales rep as "AI's best estimate," not verified fact.
 - **The Market Agent's 7 analyst cards need a real data source behind them**, not just an AI making things up from general knowledge. This will draw on the same pipeline (website/news/competitor data via Apify) rather than being invented by the AI with no grounding.
+- **The "Add Custom Report" feature is open-ended by nature.** The 7 built-in analyst cards are a fixed, known scope. A user-defined custom report could ask for almost anything, which is harder to guarantee quality/data-grounding for. Worth scoping as a later addition rather than day-one, unless Sam wants it in the first release.
 
 ---
 
@@ -83,3 +116,17 @@ Industry overview, Market trends, Competitor analysis, Pricing intelligence, Dem
 Confirmed order: **Executive Assistant (done) → Sales Employee (this one, starting now) → Outbound Calling Employee (deferred, after this)**. Yuvraj is building the UI for this product; Rahul is building the backend/AI pipeline.
 
 Given the size of this (4 real screens, each needing real data pulled from Apify and processed through several AI steps), the fastest path to something usable is to ship **Lead Researcher first** as a standalone piece — it's the most self-contained of the four and doesn't depend on the other three being done.
+
+---
+
+## Sources (platform integration costs, researched 2026-07-02)
+
+- [Best LinkedIn Scrapers on Apify 2026](https://use-apify.com/docs/best-apify-actors/best-linkedin-scrapers)
+- [Apify LinkedIn Profile Scraper — No Cookies](https://apify.com/data-slayer/linkedin-profile-scraper)
+- [Best Social Media Scrapers on Apify 2026](https://use-apify.com/docs/best-apify-actors/best-social-media-scrapers)
+- [Apify Facebook Posts Scraper](https://apify.com/apify/facebook-posts-scraper)
+- [Apify Instagram Scraper](https://apify.com/apidojo/instagram-scraper)
+- [Apify Pricing](https://apify.com/pricing)
+- [NewsAPI.org Pricing](https://newsapi.org/pricing)
+- [Currents API Pricing](https://currentsapi.services/en/pricing)
+- [TheNewsAPI Pricing](https://www.thenewsapi.com/pricing)
