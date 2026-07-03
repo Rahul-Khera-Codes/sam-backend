@@ -554,11 +554,22 @@ _Ship items (housekeeping — deployed already runs from the feature branch):_
 ### BUILD SEQUENCE (Sam, 2026-06-24): Executive Assistant → Sales Employee → Outbound Calling Employee
 Sam: "Don't develop the Outbound Calling Employee now, wait until we finish the Executive Assistant, and Sales Employee." Marketing Employee also being designed (PDF received, future).
 
-### Sales Employee — REQUIREMENTS CONFIRMED (2026-06-24), build AFTER Executive Assistant
+### Sales Employee — REQUIREMENTS CONFIRMED (2026-06-24), BUILD STARTING NOW (2026-07-02)
+- Sam confirmed to Rahul (2026-07-02): start Sales Employee next. Yuvraj builds the UI, Rahul builds backend/AI pipeline.
 - "AgenticBI" B2B sales-intelligence dashboard, NO voice. Modules: Lead Researcher (LinkedIn URL → enriched lead + outreach draft), Competitor Agent (track by URL), Market Agent (intelligence feed), Report Scheduler (weekly email briefing). Mockups: 4 PNGs + `Sales Employee.pdf`.
 - **Sam's answers:** data source = **Apify API** (apify.com); **no Push-to-CRM yet**; pipeline = Company Input → Website scrape → LinkedIn enrichment → LLM industry classification → Competitor discovery → News aggregation → Sentiment analysis → Opportunity report; report sections = Industry overview / Market trends / Competitor analysis / Pricing intelligence / Demand signals / Hiring signals / New opportunities / Risks / Lead opportunities / Recommended sales angles; CASL = Sam runs by lawyer.
 - `Branding.pdf` = expanded Branding tab (logo/palette/fonts/mission/Use-Emojis/Competitive Analysis/Market Insights) — feeds market intel.
-- Detail: `docs/CLIENT_COMMS_LOG.md` (2026-06-24) + `memory/project_feature_sales_agent.md`. Don't start until Executive Assistant is done.
+- [x] **Full requirements doc written** (2026-07-02) — `docs/sales-employee-agenticbi-requirements.md`, simple English, for Yuvraj/Sam/Charles. Covers all 4 screens in detail, the confirmed pipeline, what's NOT included (CRM, cold-calling, legal sign-off), and known risks. Rahul converting to docx to send.
+- Detail: `docs/CLIENT_COMMS_LOG.md` (2026-06-24) + `memory/project_feature_sales_agent.md`.
+- **Recommended build order** (Rahul's read, not yet confirmed with Sam): ship **Lead Researcher** first — most self-contained of the 4, doesn't depend on the others.
+
+### Voice Agents Cost Breakdown Doc — DONE (2026-07-02)
+- [x] `docs/voice-agents-cost-breakdown.md` written — simple English, for Yuvraj/Sam/Charles. Covers both Customer Service agent + Executive Assistant (both confirmed on OpenAI Realtime). Realtime vs separate STT+LLM+TTS pipeline, grounded in this session's real ~70% cache-hit measurement. Reinforces the latency tradeoff already told to Sam. Decision: stay on Realtime for both agents.
+
+### Billing Add-On Toggle for Executive Agent — SPEC AGREED, ONE OPEN QUESTION (2026-07-02)
+- Verified: zero add-on concept exists today (single-plan Stripe subscriptions only, no line items, no `active_agents` tracking).
+- **Spec agreed:** Stripe subscription line-item add-on (not a separate subscription); new `businesses.stripe_exec_agent_item_id` column; new `STRIPE_EXEC_AGENT_PRICE_ID` env var (created in Stripe dashboard whenever Sam names a price — code doesn't need the number today); new `POST`/`DELETE /billing/addons/executive-agent` endpoints; new toggle card in `Billing.tsx`.
+- **Open question (discussing with Rahul):** should the toggle also gate `/dashboard/executive` page access for non-payers, or is this just billing infrastructure while everything stays free during beta? Today access is role-gated only, not subscription-gated — a toggle with no access enforcement is billing-only, not a real usage restriction. Decide before implementing.
 
 ### Outbound Calling Employee — DEFERRED (Sam 2026-06-24)
 - VOICE / cold-calling product (original 7 screens `Screen 1-7.png` + `Outbound Caller.pdf`).
