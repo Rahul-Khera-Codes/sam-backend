@@ -12,6 +12,7 @@ class SubscriptionResponse(BaseModel):
     minutes_used: Optional[int] = None
     period_start: Optional[str] = None
     period_end: Optional[str] = None
+    executive_agent_addon_enabled: bool = False
 
 
 class CreateCheckoutSessionRequest(BaseModel):
