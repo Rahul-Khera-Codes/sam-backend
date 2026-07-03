@@ -26,3 +26,7 @@ class CreateCheckoutSessionResponse(BaseModel):
 
 class CustomerPortalResponse(BaseModel):
     portal_url: str
+
+
+class ExecutiveAgentAddonResponse(BaseModel):
+    executive_agent_addon_enabled: bool
