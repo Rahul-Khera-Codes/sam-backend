@@ -5,6 +5,19 @@ Most recent entry at top.
 
 ---
 
+## 2026-07-02 (evening) — Sam sent the ChatGPT-scope questions, reported a calendar bug, asked about billing add-on
+
+**Rahul → Sam (07:02 PM):** sent the 4 drafted questions on ChatGPT scope + cost/value (see 2026-07-02 entry below). No reply yet as of this log.
+
+**Sam → Rahul (08:40 PM): "I tried to setup an appointment, but got error message 'was not able to setup an appointment, google calendar is not connected.' I checked and it is connected."**
+- **Root cause (confirmed by Rahul independently, same day):** local dev environment and the production server use **different** Google OAuth client credentials, but both read/write the **same** Supabase DB (same `google_oauth_tokens`-type rows). Whichever environment last refreshed a token stamps it with that environment's client — so the *other* environment's calendar/Gmail calls fail with an `invalid_client`-class error until someone reconnects (Integrations → Manage → disconnect/reconnect), which just re-issues a fresh token under whichever environment did the reconnecting. **This is a known, previously-flagged, never-fully-fixed risk** — see `docs/SESSION_HANDOFF.md` "Project/client-id discrepancy" note. Reconnecting is a workaround, not a fix — it will keep recurring as long as local dev shares the production DB with different credentials.
+- **Not yet replied to Sam** — no fix applied yet, root cause understood but structural decision needed (see TODO.md).
+
+**Sam → Rahul (08:43 PM): "Also, under the billing section where is the toggle to addon the executive assistant?"**
+- **Rahul → Sam (09:54 PM): "The billing section need to be updated, I'm working on it currently."** Matches the already-tracked "Billing UI update" blocker (`memory/project_blockers.md`) — Executive Agent isn't wired into billing yet (still free during beta).
+
+---
+
 ## 2026-07-02 — Questions drafted for Sam (NOT yet sent) — ChatGPT scope + cost/value
 
 Rahul decided to talk to Sam before scoping the remaining "ChatGPT-like" item (#1) or the persistent chat history item (#6) — both depend on what Sam actually wants Remi to be. Questions drafted, ready to send:
