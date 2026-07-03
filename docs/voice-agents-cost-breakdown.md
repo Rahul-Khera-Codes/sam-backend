@@ -61,6 +61,73 @@ If our real usage patterns change significantly down the road (much longer calls
 
 ---
 
+## Appendix — If We Ever Revisit Option B: Cost by Specific Provider
+
+The decision above is settled for now, but Sam asked for a clearer view of what Option B would actually cost with real, named products (not just a range) — so here's every piece broken out, plus a warning about how NOT to use this table.
+
+### Speech-to-Text options (converts the caller's voice to text)
+
+| Provider | Cost |
+|---|---|
+| Deepgram Nova-3 | $0.0065–$0.0077/min |
+| OpenAI Whisper / gpt-4o-transcribe | $0.006/min |
+| OpenAI gpt-4o-mini-transcribe | ~$0.003/min |
+
+### AI "brain" options (reads the text, decides what to say)
+
+| Provider | Cost per million words of text* | What this means per minute of conversation |
+|---|---|---|
+| GPT-4o-mini | $0.15 in / $0.60 out | Cheapest — a rounding error next to the audio costs above and below |
+| GPT-4.1-mini | $0.40 in / $1.60 out | Still cheap, noticeably pricier than 4o-mini for the same job |
+| Claude Haiku 4.5 | $1.00 in / $5.00 out | The most expensive of the three here — about 6–7x GPT-4o-mini |
+
+*Loosely, "tokens" — AI providers charge per chunk of text, not literally per word, but it's close enough for comparing options.
+
+### Text-to-Speech options (converts the AI's reply back into a voice)
+
+| Provider | Cost |
+|---|---|
+| OpenAI tts-1 / gpt-4o-mini-tts | ~$0.011–$0.015/min |
+| Deepgram Aura-2 | ~$0.020–$0.023/min |
+| Cartesia Sonic | $0.02–$0.06/min |
+| ElevenLabs | $0.10–$0.50/min (priciest, but generally considered the most natural-sounding voices) |
+
+### Three example full stacks, put together
+
+| Stack | STT | Brain | Voice | Total per minute |
+|---|---|---|---|---|
+| **Cheapest possible** | gpt-4o-mini-transcribe (~$0.003) | GPT-4o-mini (~$0.01) | OpenAI tts-1 (~$0.012) | **~$0.025/min** |
+| **Balanced (what a "well-chosen stack" usually means)** | Deepgram Nova-3 (~$0.007) | GPT-4o-mini (~$0.01) | Cartesia Sonic (~$0.04) | **~$0.06/min** |
+| **Premium voice quality** | Deepgram Nova-3 (~$0.007) | Claude Haiku 4.5 (~$0.03) | ElevenLabs (~$0.25) | **~$0.29/min** |
+
+For comparison: our current one-model setup (Option A) is running at roughly **$0.05–$0.10/min** with the memory-reuse we measured. So even the "cheapest possible" three-tool stack above ($0.025/min) only wins by a small margin once you account for the delay it adds — and the "premium" stack is dramatically more expensive than what we have now.
+
+### The important caveat — don't just pick the cheapest number and swap
+
+**This table is for comparing sticker prices, not for making a decision on its own.** A cheaper number on paper doesn't tell you:
+- Whether that specific voice actually sounds good for our use case, or robotic.
+- Whether that specific transcription tool handles accents, background noise, or interruptions as well as what we have now.
+- Whether the AI "brain" gives replies that are as accurate and on-topic as what we have now.
+
+**Before switching anything, we test it for real** — run real conversations through the candidate combination, listen to it, and measure how it actually performs, not just what it costs. Cost is one input into that decision, not the whole decision. This applies to any future provider swap, not just a full architecture change.
+
+---
+
 ## Questions?
 
 If anything above isn't clear, or you want the underlying numbers/sources this is based on, just ask — happy to walk through it.
+
+---
+
+## Sources (appendix pricing, researched 2026-07-02)
+
+- [Deepgram Pricing](https://deepgram.com/pricing)
+- [Deepgram Pricing 2026 breakdown](https://diyai.io/ai-tools/speech-to-text/deepgram-pricing-2026/)
+- [Whisper API Pricing 2026](https://tokenmix.ai/blog/whisper-api-pricing)
+- [GPT-4o mini API Pricing 2026](https://pricepertoken.com/pricing-page/model/openai-gpt-4o-mini)
+- [Claude Haiku 4.5 API Pricing 2026](https://pricepertoken.com/pricing-page/model/anthropic-claude-haiku-4.5)
+- [Anthropic API Pricing 2026](https://pecollective.com/tools/anthropic-api-pricing/)
+- [OpenAI TTS Pricing 2026 comparison](https://texttolab.com/blog/openai-tts-pricing)
+- [OpenAI TTS Cost breakdown](https://www.s-anand.net/blog/openai-tts-cost/)
+- [Cartesia vs ElevenLabs for Voice AI 2026](https://burki.dev/blog/41-cartesia-vs-elevenlabs-tts)
+- [ElevenLabs Pricing 2026](https://www.cekura.ai/blogs/elevenlabs-pricing)
