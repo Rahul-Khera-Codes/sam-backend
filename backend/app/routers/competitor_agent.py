@@ -146,6 +146,16 @@ async def _fetch_via_jina(url: str, client: httpx.AsyncClient) -> str:
     return r.text
 
 
+def _head_and_tail(text: str, limit: int = 20_000) -> str:
+    """Social links live in the footer, which is almost always at the END of a
+    scraped homepage — a blind head-truncate silently drops them on longer pages.
+    Keep both ends instead of just the head."""
+    if len(text) <= limit:
+        return text
+    half = limit // 2
+    return text[:half] + "\n\n...[middle of page omitted]...\n\n" + text[-half:]
+
+
 async def _discover_social_links(website_url: str) -> dict:
     async with httpx.AsyncClient() as client:
         content = await _fetch_via_jina(website_url, client)
@@ -156,11 +166,21 @@ async def _discover_social_links(website_url: str) -> dict:
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": DISCOVERY_PROMPT},
-            {"role": "user", "content": content[:20_000]},
+            {"role": "user", "content": _head_and_tail(content)},
         ],
         temperature=0,
     )
-    return json.loads(response.choices[0].message.content)
+    discovered = json.loads(response.choices[0].message.content)
+
+    # Strip tracking query strings/fragments before these get used as scraper
+    # input or parsed for a YouTube channel ref — real-world tested against
+    # HubSpot's homepage, which appends ?hubs_content=... to every social link.
+    for key in ("linkedin_url", "facebook_url", "instagram_url", "youtube_url"):
+        if discovered.get(key):
+            parsed = urlparse(discovered[key])
+            discovered[key] = parsed._replace(query="", fragment="").geturl()
+
+    return discovered
 
 
 def _platform_actor_input(platform: str, url: str) -> dict:
@@ -202,13 +222,17 @@ async def _start_platform_apify_run(platform: str, url: str) -> dict:
 
 
 def _parse_youtube_channel_ref(youtube_url: str) -> dict:
-    """Supports the two current common YouTube URL forms: /@handle and /channel/UC...
-    Older /c/CustomName and /user/Username forms aren't handled — fails clearly rather than guessing."""
+    """Supports /@handle, /channel/UC..., and the legacy /user/Username form
+    (still live on the API via forUsername — confirmed against current docs,
+    and real-world tested: HubSpot's own YouTube link is this legacy form).
+    Older /c/CustomName isn't handled — fails clearly rather than guessing."""
     path = urlparse(youtube_url).path.strip("/")
     if path.startswith("@"):
         return {"forHandle": path}
     if path.startswith("channel/"):
         return {"id": path.split("/", 1)[1]}
+    if path.startswith("user/"):
+        return {"forUsername": path.split("/", 1)[1]}
     raise ValueError(f"Unsupported YouTube URL format: {youtube_url}")
 
 
