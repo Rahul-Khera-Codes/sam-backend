@@ -110,6 +110,10 @@ async def get_subscription(
         period_start=biz.get("subscription_period_start"),
         period_end=biz.get("subscription_period_end"),
         executive_agent_addon_enabled=bool(biz.get("stripe_exec_agent_item_id")),
+        # Lets the frontend gate stay in sync with the backend's actual
+        # enforcement switch instead of guessing (ADR 0001) — both driven by
+        # the same settings.exec_agent_addon_enforced flag.
+        executive_agent_addon_required=settings.exec_agent_addon_enforced,
     )
 
 
