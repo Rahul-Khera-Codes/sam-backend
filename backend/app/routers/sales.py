@@ -81,7 +81,8 @@ async def _start_apify_run(linkedin_url: str) -> dict:
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             f"https://api.apify.com/v2/actors/{APIFY_ACTOR_ID}/runs",
-            params={"token": settings.apify_api_token, "webhooks": webhooks_b64},
+            params={"webhooks": webhooks_b64},
+            headers={"Authorization": f"Bearer {settings.apify_api_token}"},
             json={"linkedin_urls": [linkedin_url], "extract_email": True},
         )
         resp.raise_for_status()
@@ -168,7 +169,7 @@ async def apify_webhook(
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(
             f"https://api.apify.com/v2/datasets/{dataset_id}/items",
-            params={"token": settings.apify_api_token},
+            headers={"Authorization": f"Bearer {settings.apify_api_token}"},
         )
         resp.raise_for_status()
         items = resp.json()

@@ -1,7 +1,7 @@
 # Sales Employee — Lead Researcher (backend, MVP)
 **Date:** 2026-07-06
 **Branch:** `feature/exec-agent-improvements` (or split to a new branch before implementing — TBD)
-**Status:** Spec — pending implementation go-ahead
+**Status:** Implemented and verified — Lead Researcher backend MVP complete on `feature/sales-lead-researcher` (both repos). Live-tested end-to-end 3x via curl against a real Apify actor run + real ngrok webhook round-trip; all 3 completed correctly (one was an accidental duplicate request, not a bug). Security review caught 2 secrets-in-URL issues (webhook secret, Apify API token) — both moved to headers and fixed before this was marked done.
 
 ---
 
@@ -71,6 +71,12 @@ The 5 endpoints described above (lookup, webhook, status, history, save-toggle).
 - CRM push (explicitly deferred by Sam).
 - Legal sign-off on scraped-lead outreach (Sam running by his lawyer — doesn't block build, blocks public launch).
 
-## Open items
-- Which branch this lands on — currently sitting on `feature/exec-agent-improvements`, may want a dedicated branch for the Sales Employee build.
-- Exact router-registration location in `backend/app/main.py` — to confirm at implementation time.
+## Open items — resolved
+- Branch: created `feature/sales-lead-researcher` in both repos (not `feature/exec-agent-improvements`).
+- Router registered in `backend/app/main.py` alongside the other routers (`app.include_router(sales_router.router)`).
+
+## Remaining before this ships to real users
+- Frontend UI (Yuvraj's scope) — needs the JSON contract for `POST /lookup`, `GET /lookup/{id}`, `GET /history`, `PATCH /lookup/{id}/save`.
+- Production `.env` needs real values for `APIFY_API_TOKEN` (currently Rahul's personal/temporary key), `APIFY_WEBHOOK_BASE_URL` (a real deployed subdomain, not the ngrok tunnel used for local testing), `APIFY_WEBHOOK_SECRET`.
+- Apify account is still Rahul's personal one — message to Sam about a company account still pending (see TODO.md).
+- Legal sign-off on scraped-lead outreach — Sam running by his lawyer, doesn't block build.
