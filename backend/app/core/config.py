@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     billing_success_url: str = "http://localhost:8080/dashboard/settings/billing?success=true"
     billing_cancel_url: str = "http://localhost:8080/dashboard/settings/billing"
 
+    # Apify (Sales Employee — Lead Researcher)
+    apify_api_token: str = ""
+    apify_webhook_base_url: str = ""  # public backend URL Apify calls on run completion — set in prod, use ngrok for local testing
+
     # App
     environment: str = "development"
     cors_origins: str = "http://localhost:5173,http://localhost:8081,http://localhost:8080"
