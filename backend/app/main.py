@@ -25,6 +25,7 @@ from app.routers import (
     knowledge_base as knowledge_base_router,
     executive as executive_router,
     sales as sales_router,
+    competitor_agent as competitor_agent_router,
 )
 from app.services.scheduler_service import start_scheduler, stop_scheduler
 
@@ -72,6 +73,7 @@ app.include_router(documents_router.router)
 app.include_router(knowledge_base_router.router, prefix="/knowledge-base", tags=["knowledge-base"])
 app.include_router(executive_router.router)
 app.include_router(sales_router.router)
+app.include_router(competitor_agent_router.router)
 
 
 # ── Health check ──────────────────────────────
