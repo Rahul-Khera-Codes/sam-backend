@@ -5,6 +5,14 @@ Most recent entry at top.
 
 ---
 
+## 2026-07-06 — Sales Employee requirements doc sent to the group
+
+**Rahul → Yuvraj/Sam/Charles:** converted `docs/sales-employee-agenticbi-requirements.md` (re-verified against the PDF mockups, 2026-07-02) to docx and sent it to the group. Covers all 4 modules, the confirmed Apify pipeline, what's NOT included, and the platform-integration cost breakdown for LinkedIn/Facebook/Instagram/YouTube/news sources.
+
+Billing add-on live-test (Stripe test-mode price for Executive Agent) put on hold at Rahul's request — he'll provide test details later rather than picking a placeholder value now.
+
+---
+
 ## 2026-07-02 (evening) — Sam sent the ChatGPT-scope questions, reported a calendar bug, asked about billing add-on
 
 **Rahul → Sam (07:02 PM):** sent the 4 drafted questions on ChatGPT scope + cost/value (see 2026-07-02 entry below). No reply yet as of this log.
