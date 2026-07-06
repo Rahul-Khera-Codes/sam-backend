@@ -80,3 +80,10 @@ The 5 endpoints described above (lookup, webhook, status, history, save-toggle).
 - Production `.env` needs real values for `APIFY_API_TOKEN` (currently Rahul's personal/temporary key), `APIFY_WEBHOOK_BASE_URL` (a real deployed subdomain, not the ngrok tunnel used for local testing), `APIFY_WEBHOOK_SECRET`.
 - Apify account is still Rahul's personal one — message to Sam about a company account still pending (see TODO.md).
 - Legal sign-off on scraped-lead outreach — Sam running by his lawyer, doesn't block build.
+
+## Gaps found in a follow-up review (2026-07-06, after the 3x live test)
+1. **Missing RLS on `lead_lookups`** — every comparable business-scoped table in this schema (e.g. `business_documents`) has Row Level Security enabled even though the backend only reads via the service-role key; this table didn't. Fixed: `20260706000001_lead_lookups_rls.sql`, matching the `business_documents` policy pattern (members can read their business's rows, service role has full access). **Written and committed, not yet applied to the DB.**
+2. **No duplicate-request protection** — nothing stops two rapid `POST /lookup` calls for the same business+URL from starting two paid Apify runs. Directly observed: a 3rd row appeared during testing from what was very likely an accidental duplicate curl execution. Fix in progress: skip starting a new run if a `pending`/`running` lookup already exists for the same `business_id` + `linkedin_url`.
+3. **No stuck-job handling** — if Apify's webhook never fires (network blip, actor timeout), a lookup sits in `running` forever with no retry or timeout. Fix in progress.
+4. **Scope reminder** — this is 1 of 4 Sales Employee modules (Lead Researcher only). Competitor Agent, Market Agent, Report Scheduler not started.
+5. **Production config** — still running on Rahul's personal Apify token + an ngrok tunnel for the webhook URL, not real deployed values.
