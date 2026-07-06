@@ -1,4 +1,4 @@
-# Session Handoff — 2026-07-01 (Session 55)
+# Session Handoff — 2026-07-02 (Session 56)
 
 Read this at the start of every session. It captures the full current state so you can pick up immediately.
 
@@ -17,7 +17,7 @@ Two repos:
 - **Backend + Agent:** `/home/lap-68/Documents/gt-rahul/sam-backend`
 - **Frontend:** `/home/lap-68/Documents/gt-rahul/ai-employees-app`
 
-Backend + agent on `feature/exec-agent-improvements` (session 55 work). Frontend on same branch. **Session 55 shipped:** attach-doc bug, center Start/Mic buttons, avatar toggle (user-controlled HeyGen on/off, persisted in localStorage, fully drop-safe). Docker log verified. **Pending before merge:** live-verify WS4/10/11/12/13 action cards, apply timezone migration, then merge to main.
+Backend + agent on `feature/exec-agent-improvements` (sessions 55–56). Frontend on same branch. **Session 56 shipped a huge batch** — see "What Was Done This Session" below. Cost decision made (stay on Realtime), billing add-on fully built (migration applied, one visibility bug found+fixed), Sales Employee build confirmed to start next. **Pending before merge:** live-verify WS4/10/11/12/13 action cards, reconcile `fix/avatar-aec`, apply timezone migration, then merge to main.
 
 > **Restart needed:** `docker compose restart sam-executive-agent` after any backend/agent code changes.
 
@@ -180,6 +180,9 @@ Key env files:
 
 ## Pending Manual Steps
 
+- [ ] **Live-test the billing add-on** (session 56) — needs a real Stripe test-mode subscription on at least one business, since the toggle is currently disabled for all of them (none has a base plan). Confirm enable/disable creates/removes the Stripe subscription item, and confirm `/dashboard/executive` stays accessible either way (enforcement is off by default).
+- [ ] **Sales Employee — Lead Researcher build** (session 56, confirmed to start) — needs an Apify account/API key set up before any code gets written. See `docs/sales-employee-agenticbi-requirements.md`.
+- [ ] **Whole-product billing enforcement gap** (session 56, found + deliberately deferred) — no subscription status is checked anywhere outside the Billing page's display, for any feature. See `TODO.md` + `memory/project_blockers.md` for the agreed architecture. Don't rush this.
 - [ ] **Reconcile `fix/avatar-aec` with `feature/exec-agent-improvements` before merge.** `fix/avatar-aec` (both repos, session 54) fixes avatar-audio/mic echo via `AudioContext`/`webAudioMix` routing + headphone notice — NOT merged into this branch. Frontend commits `486cedd`/`6002792`/`eeca509` heavily rewrite `useExecutiveSession.ts`, the same file session 55 touched for the avatar toggle. Diff the two branches on that file and manually reconcile; do not assume a clean auto-merge.
 - [ ] **Live-verify Executive Agent UI** (after `docker compose restart sam-executive-agent` + reload `/dashboard/executive`): WS4 avatar states; WS10 activity caption (spinner→✓, no stuck spinner on error); WS11 free_slots tap→preview→approve→booked; WS12 appointment Cancel(confirm)/Reschedule; WS13 email_detail + Reply. WS3 A.2 draft/event previews still approve/send. **Session-55 additions:** avatar toggle Video/VideoOff persists across page reload; attach-doc sends PDF in email; Start Session + Unmute Mic centered.
 - [ ] **Dev OAuth client for local Gmail testing** — own Google project, Testing mode, localhost redirect URIs (`http://localhost:5173/integrations/{gmail,google}/callback`), scopes gmail.send+gmail.readonly+calendar.events+userinfo.email+openid, dev as test user; put client id/secret in local `backend/.env` AND `agent/.env.local`.
@@ -205,6 +208,46 @@ Key env files:
 
 ## Pending Migrations (not yet applied)
 - `20260618000000_businesses_timezone.sql` — add `timezone TEXT DEFAULT 'America/Toronto'` to businesses. File exists in `ai-employees-app/supabase/migrations/`. Run `supabase db push`.
+
+---
+
+## What Was Done This Session (Session 56, 2026-07-02)
+
+**Huge session, branch `feature/exec-agent-improvements` (both repos). Grouped by thread.**
+
+### 1. Deep-verify pass on prior session's memory (housekeeping, found real errors)
+Corrected a hallucinated branch name in memory (`fix/avatar-aec` → `feature/exec-agent-improvements`) and discovered `fix/avatar-aec` is a **real, separate, unmerged branch** (audio echo-cancellation fix) that heavily rewrites `useExecutiveSession.ts` — same file this session touched repeatedly. Flagged as a real merge-conflict risk, not yet reconciled.
+
+### 2. Two more attach-doc bugs found via live re-test, both fixed
+- **Document library cached at session start instead of live per-call** — a document added mid-session was invisible until a new session started. Fixed: `_fetch_doc_by_name()` now fetches live on every call, matching how `list_emails`/`get_schedule` already worked.
+- **Model answered "no documents" from its own earlier turn instead of re-checking** — classic LLM tool-reliance-on-context behavior. Fixed with an explicit prompt rule: documents can change mid-conversation, always check fresh.
+
+### 3. Cost research + real audit → decision made: stay on OpenAI Realtime
+Two research passes (`docs/executive-agent-cost-analysis.md`): optimizing the current Realtime setup vs. a separate STT+LLM+TTS pipeline. Shipped a `session_usage_updated` listener logging real cache-hit % — live-tested, **plateaued at ~69–71%**, squarely in the "caching works" band. **Decision: stay on Realtime for both voice agents, don't build the pipeline.** Wrote `docs/voice-agents-cost-breakdown.md` (simple English, covers both CS agent + Remi) plus a per-provider appendix (specific LinkedIn/Deepgram/Cartesia/ElevenLabs/Claude-Haiku numbers) after Sam asked for one, with an explicit "test before swapping, cost isn't the whole decision" caveat.
+
+### 4. Small cost levers shipped
+- **Avatar default-off** — backend Pydantic default + frontend localStorage fallback both flipped to `False`.
+- **Idle-session auto-disconnect** — 3 minutes of inactivity (via LiveKit's built-in `user_state_changed`) hangs up the session. **Found + fixed a real bug live-testing this:** `ctx.room.disconnect()` only detaches the agent's own participant, not the frontend's separate WebRTC connection — frontend never noticed. Fixed by deleting the room server-side (`ctx.api.room.delete_room(...)`) instead, which force-disconnects everyone. Confirmed working by Rahul.
+
+### 5. Sam's remaining UI requests — 3 more shipped, live-verified
+- **Greeting** — dropped the business name from the opening hello.
+- **Editable email draft card** — recipient/subject/body all editable before Send. Found + fixed the same class of bug WS0 fixed for calendar events: `send_email_draft` now reads from the server-side pending preview instead of trusting the model to retype edited text.
+- **Transcript edit + copy buttons** — copy on every bubble; edit on the owner's own bubbles resends a correction as a new turn (can't rewrite what the model already heard) rather than literally editing history. Live-verified by Rahul with screenshots.
+
+### 6. Billing add-on for Executive Agent — built end-to-end, one real bug found
+Wrote **ADR 0001** (`docs/adr/0001-billing-addon-access-gating.md`) — first ADR in this repo — documenting: Stripe subscription *line item* (not separate subscription), price ID as a deploy-time env var, two independent gating layers (frontend `AuthContext` bootstrap extension for UX, mandatory backend check in `/executive/session` for real enforcement), both driven by one shared `EXEC_AGENT_ADDON_ENFORCED` flag (defaults **off** — free during beta). Implemented across ~9 commits, both repos. Migration applied. **Found + fixed a real bug:** queried the DB directly — every business, including Sam's own, has `stripe_subscription_id = NULL` (nobody's ever gone through real Stripe Checkout) — the add-on card was nested inside a check that only shows for paying businesses, so it was invisible to everyone. Fixed: card now always shows, disabled with an explanatory note when there's no base plan.
+
+**Bigger finding, logged and deliberately deferred, NOT fixed:** searched the whole backend — zero subscription/billing enforcement exists anywhere in the product, for any feature, outside the Billing page's own display. Whole-product gap, pre-dates this session, tracked in `TODO.md` + `memory/project_blockers.md` with the agreed architecture for whenever it's picked up (same two-layer pattern as the exec-agent add-on).
+
+### 7. Sales Employee — confirmed to start, full requirements doc written + re-verified
+Sam confirmed: start Sales Employee next, Yuvraj on UI. Wrote `docs/sales-employee-agenticbi-requirements.md` (simple English, for Yuvraj/Sam/Charles) covering all 4 screens (Lead Researcher, Competitor Agent, Market Agent, Report Scheduler), the confirmed pipeline, what's NOT included, and known risks. **Re-verified against the actual PDF mockups and found 2 real gaps**, both fixed: Competitor Agent tracks 4 named platforms (LinkedIn/Facebook/Instagram/YouTube), not generic "social media"; Market Agent has an "Add Custom Report" feature that was missing entirely. Added the platform-integration-requirements section Rahul flagged as missing — real researched costs (Apify per-1000-record pricing per platform; news aggregation as a separate, non-Apify subscription cost) and what's actually needed to connect each (no official developer approval needed from any platform — that's also why it's a legal gray area on all four, not just LinkedIn).
+
+### 8. Client communications logged
+- Drafted (not yet sent) 4 questions for Sam on the "ChatGPT-like" scope + cost/value complaint.
+- Logged Sam's calendar bug report ("Google Calendar is not connected" despite being connected) — root cause: local dev and production use different Google OAuth credentials against the same shared Supabase DB. Rahul is handling this himself.
+- Logged Sam's billing UI question ("where's the add-on toggle") — this session's billing work directly answers it.
+
+### Files touched (session 56) — too many for a full list; see the ~35 commits on `feature/exec-agent-improvements` this session, or the specs in `docs/superpowers/specs/2026-07-02-*.md` and `docs/adr/0001-*.md` for the authoritative per-change detail.
 
 ---
 
