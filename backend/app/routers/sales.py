@@ -10,9 +10,10 @@ PATCH /sales/lead-researcher/lookup/{id}/save — toggle saved
 import base64
 import json
 import logging
+import secrets
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
@@ -62,10 +63,7 @@ def _row_to_response(row: dict) -> LeadLookupResponse:
 
 
 async def _start_apify_run(linkedin_url: str) -> dict:
-    webhook_url = (
-        f"{settings.apify_webhook_base_url.rstrip('/')}/sales/lead-researcher/webhook"
-        f"?secret={settings.apify_webhook_secret}"
-    )
+    webhook_url = f"{settings.apify_webhook_base_url.rstrip('/')}/sales/lead-researcher/webhook"
     webhooks = [
         {
             "eventTypes": [
@@ -75,6 +73,7 @@ async def _start_apify_run(linkedin_url: str) -> dict:
                 "ACTOR.RUN.TIMED_OUT",
             ],
             "requestUrl": webhook_url,
+            "headersTemplate": json.dumps({"X-Webhook-Secret": settings.apify_webhook_secret}),
         }
     ]
     webhooks_b64 = base64.b64encode(json.dumps(webhooks).encode()).decode()
@@ -140,9 +139,11 @@ class ApifyWebhookPayload(BaseModel):
 @router.post("/webhook")
 async def apify_webhook(
     payload: ApifyWebhookPayload,
-    secret: str = Query(...),
+    x_webhook_secret: str = Header(..., alias="X-Webhook-Secret"),
 ):
-    if not settings.apify_webhook_secret or secret != settings.apify_webhook_secret:
+    if not settings.apify_webhook_secret or not secrets.compare_digest(
+        x_webhook_secret, settings.apify_webhook_secret
+    ):
         raise HTTPException(status_code=403, detail="Invalid webhook secret.")
 
     run_id = payload.resource.get("id")
