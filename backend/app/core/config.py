@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     # Apify (Sales Employee — Lead Researcher)
     apify_api_token: str = ""
     apify_webhook_base_url: str = ""  # public backend URL Apify calls on run completion — set in prod, use ngrok for local testing
+    apify_webhook_secret: str = ""  # random string, checked on inbound webhook calls so randoms can't spoof "run finished" events
 
     # App
     environment: str = "development"
