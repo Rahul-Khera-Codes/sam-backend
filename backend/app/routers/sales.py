@@ -11,6 +11,7 @@ import base64
 import json
 import logging
 import secrets
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -34,6 +35,11 @@ router = APIRouter(prefix="/sales/lead-researcher", tags=["sales"])
 
 APIFY_ACTOR_ID = "data-slayer~linkedin-profile-scraper"
 
+# Real runs complete in ~2-3 min (base scrape + email lookup, live-tested). If a
+# lookup is still "running" well past that, Apify's webhook likely never
+# arrived (network blip, actor timeout) — don't leave the frontend polling forever.
+STALE_RUNNING_TIMEOUT = timedelta(minutes=10)
+
 ENRICHMENT_PROMPT = """You turn a raw LinkedIn profile scrape into a sales lead card.
 Given the profile JSON below, return a JSON object with these exact keys:
 - job_role_insights: 1-2 sentences on what this person's role likely involves and what they'd care about professionally
@@ -43,6 +49,28 @@ Given the profile JSON below, return a JSON object with these exact keys:
 - outreach_email_draft: a short, personalized cold outreach email draft (3-4 sentences) referencing something specific from their profile
 
 Be honest about uncertainty — do not invent specific facts not supported by the profile data."""
+
+
+def _mark_stale_if_needed(row: dict) -> dict:
+    if row["status"] != "running":
+        return row
+    updated_at = datetime.fromisoformat(row["updated_at"])
+    if datetime.now(timezone.utc) - updated_at < STALE_RUNNING_TIMEOUT:
+        return row
+
+    stale_update = (
+        supabase_admin.table("lead_lookups")
+        .update(
+            {
+                "status": "failed",
+                "error_message": "Timed out waiting for Apify — the webhook never arrived.",
+            }
+        )
+        .eq("id", row["id"])
+        .execute()
+    )
+    logger.warning("Lead lookup %s marked failed after exceeding stale timeout.", row["id"])
+    return stale_update.data[0]
 
 
 def _row_to_response(row: dict) -> LeadLookupResponse:
@@ -100,6 +128,26 @@ async def create_lead_lookup(
         raise HTTPException(status_code=503, detail="Apify is not configured yet.")
     if not settings.apify_webhook_base_url:
         raise HTTPException(status_code=503, detail="Apify webhook base URL is not configured yet.")
+
+    # Avoid starting a second paid Apify run for a lookup that's already in flight
+    # (e.g. a double-click or an accidental duplicate request for the same URL).
+    in_flight = (
+        supabase_admin.table("lead_lookups")
+        .select("id,status")
+        .eq("business_id", body.business_id)
+        .eq("linkedin_url", body.linkedin_url)
+        .in_("status", ["pending", "running"])
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if in_flight.data:
+        existing = in_flight.data[0]
+        logger.info(
+            "Lead lookup already in flight for this business+URL, reusing: id=%s status=%s",
+            existing["id"], existing["status"],
+        )
+        return LeadLookupCreatedResponse(id=existing["id"], status=existing["status"])
 
     insert_row = (
         supabase_admin.table("lead_lookups")
@@ -243,6 +291,7 @@ async def get_lead_lookup(
         raise HTTPException(status_code=404, detail="Lookup not found.")
     row = row_result.data[0]
     verify_business_access(user_id, row["business_id"])
+    row = _mark_stale_if_needed(row)
     return _row_to_response(row)
 
 
@@ -259,6 +308,7 @@ async def get_lead_lookup_history(
         .order("created_at", desc=True)
         .execute()
     )
+    rows.data = [_mark_stale_if_needed(r) for r in rows.data]
     return LeadLookupHistoryResponse(lookups=[_row_to_response(r) for r in rows.data])
 
 
