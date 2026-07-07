@@ -1,7 +1,21 @@
 from __future__ import annotations
+import re
 from typing import Optional
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+# Basic format check, not deliverability — also rejects embedded whitespace/newlines,
+# which matters since this value flows into an email "To" header (header-injection safety).
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _validate_recipients(recipients: Optional[list[str]]) -> Optional[list[str]]:
+    if recipients is None:
+        return None
+    for email in recipients:
+        if not _EMAIL_RE.match(email):
+            raise ValueError(f"'{email}' is not a valid email address.")
+    return recipients
 
 
 class CreateScheduleRequest(BaseModel):
@@ -14,6 +28,11 @@ class CreateScheduleRequest(BaseModel):
     include_market_agent: bool = True
     is_active: bool = False
 
+    @field_validator("recipients")
+    @classmethod
+    def validate_recipients(cls, v):
+        return _validate_recipients(v)
+
 
 class UpdateScheduleRequest(BaseModel):
     name: Optional[str] = None
@@ -23,6 +42,11 @@ class UpdateScheduleRequest(BaseModel):
     include_competitor_agent: Optional[bool] = None
     include_market_agent: Optional[bool] = None
     is_active: Optional[bool] = None
+
+    @field_validator("recipients")
+    @classmethod
+    def validate_recipients(cls, v):
+        return _validate_recipients(v)
 
 
 class ScheduleResponse(BaseModel):

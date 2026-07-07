@@ -644,33 +644,45 @@ def build_sales_digest_email(
     Returns (subject, html_body) for a Report Scheduler digest email.
     Each `*_items` list is already filtered to only what should be shown —
     an empty list means that section is simply omitted, not shown empty.
+
+    Every interpolated field is HTML-escaped: this content is indirectly
+    sourced from scraped competitor social posts and Exa web search results —
+    both attacker-adjacent (a competitor's own post, or a page Exa indexes,
+    could contain markup) — not fully trusted internal data.
     """
+    from html import escape
+
     subject = f"{business_name} — Sales Intelligence Digest"
+    business_name_safe = escape(business_name)
 
     sections = ""
 
     if lead_researcher_items:
         rows = "".join(
-            f"<div class='row'><span class='label'>{item.get('full_name') or 'Unknown'}"
-            f" ({item.get('company_name') or '—'})</span>"
-            f"<span class='value'>{item.get('headline') or item.get('job_role_insights') or ''}</span></div>"
+            f"<div class='row'><span class='label'>{escape(item.get('full_name') or 'Unknown')}"
+            f" ({escape(item.get('company_name') or '—')})</span>"
+            f"<span class='value'>{escape(item.get('headline') or item.get('job_role_insights') or '')}</span></div>"
             for item in lead_researcher_items
         )
         sections += f"""<div class="card"><h3>Lead Researcher</h3>{rows}</div>"""
 
     if competitor_agent_items:
         rows = "".join(
-            f"<div class='row'><span class='label'>{item.get('competitor_name') or 'Competitor'}</span>"
-            f"<span class='value'>{item.get('overview') or 'No summary available'}</span></div>"
+            f"<div class='row'><span class='label'>{escape(item.get('competitor_name') or 'Competitor')}</span>"
+            f"<span class='value'>{escape(item.get('overview') or 'No summary available')}</span></div>"
             for item in competitor_agent_items
         )
         sections += f"""<div class="card"><h3>Competitor Agent</h3>{rows}</div>"""
 
     if market_agent_summary or market_agent_items:
-        summary_html = f"<p style='margin:0 0 12px;color:#18181b;font-size:13px;'>{market_agent_summary}</p>" if market_agent_summary else ""
+        summary_html = (
+            f"<p style='margin:0 0 12px;color:#18181b;font-size:13px;'>{escape(market_agent_summary)}</p>"
+            if market_agent_summary
+            else ""
+        )
         rows = "".join(
-            f"<div class='row'><span class='label'>{item.get('analyst_name') or 'Analyst'}</span>"
-            f"<span class='value'>{item.get('headline') or ''}</span></div>"
+            f"<div class='row'><span class='label'>{escape(item.get('analyst_name') or 'Analyst')}</span>"
+            f"<span class='value'>{escape(item.get('headline') or '')}</span></div>"
             for item in market_agent_items
         )
         sections += f"""<div class="card"><h3>Market Agent — What's Changing</h3>{summary_html}{rows}</div>"""
@@ -702,11 +714,11 @@ def build_sales_digest_email(
 <body>
   <div class="wrapper">
     <div class="header">
-      <h1>{business_name}</h1>
+      <h1>{business_name_safe}</h1>
       <p>Sales Intelligence Digest</p>
     </div>
     <div class="body">{sections}</div>
-    <div class="footer">&copy; {business_name} &bull; Sent by your Sales Employee — AgenticBI.</div>
+    <div class="footer">&copy; {business_name_safe} &bull; Sent by your Sales Employee — AgenticBI.</div>
   </div>
 </body>
 </html>"""
