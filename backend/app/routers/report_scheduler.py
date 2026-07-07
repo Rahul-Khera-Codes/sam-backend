@@ -127,6 +127,46 @@ def build_digest_data(schedule: dict) -> dict:
     }
 
 
+async def _get_business_gmail_token_row(business_id: str) -> dict | None:
+    """Report Scheduler is business-level, not location-scoped, but
+    gmail_tokens rows can be tied to a specific location_id (confirmed via
+    live testing — email_service.get_token_row's business-wide NULL-location
+    lookup found nothing for a business whose Gmail connection is
+    location-scoped). Take any connected location's token — prefer a
+    business-wide (NULL location_id) one if it exists, else the first
+    location-scoped one found."""
+    rows = supabase_admin.table("gmail_tokens").select("*").eq("business_id", business_id).execute().data
+    if not rows:
+        return None
+    business_wide = [r for r in rows if r.get("location_id") is None]
+    return business_wide[0] if business_wide else rows[0]
+
+
+async def _get_business_gmail_access_token(business_id: str) -> tuple[str, str] | tuple[None, None]:
+    """Returns (access_token, sender_email), refreshing if needed. Mirrors
+    email_service.get_valid_access_token's logic but against a
+    location-agnostic row (see _get_business_gmail_token_row)."""
+    row = await _get_business_gmail_token_row(business_id)
+    if not row:
+        return None, None
+
+    if email_service.is_token_expired(row["token_expiry"]):
+        try:
+            refreshed = await email_service.refresh_access_token(
+                row["refresh_token"], settings.google_client_id, settings.google_client_secret
+            )
+            new_expiry = email_service.token_expiry_from_response(refreshed)
+            supabase_admin.table("gmail_tokens").update(
+                {"access_token": refreshed["access_token"], "token_expiry": new_expiry.isoformat()}
+            ).eq("id", row["id"]).execute()
+            return refreshed["access_token"], row["google_email"]
+        except Exception as e:
+            logger.error("Gmail token refresh failed for business %s: %s", business_id, e)
+            return None, None
+
+    return row["access_token"], row["google_email"]
+
+
 async def send_digest(schedule: dict, recipients: list[str]) -> bool:
     """Builds and sends the digest to the given recipients. Used by both
     send-test (one recipient, the requester) and the scheduled sweep (all
@@ -145,15 +185,10 @@ async def send_digest(schedule: dict, recipients: list[str]) -> bool:
         market_agent_items=data["market_agent_items"],
     )
 
-    access_token = await email_service.get_valid_access_token(
-        supabase_admin, schedule["business_id"], settings.google_client_id, settings.google_client_secret
-    )
+    access_token, sender = await _get_business_gmail_access_token(schedule["business_id"])
     if not access_token:
         logger.info("Gmail not connected for business %s — cannot send digest", schedule["business_id"])
         return False
-
-    token_row = email_service.get_token_row(supabase_admin, schedule["business_id"])
-    sender = token_row["google_email"] if token_row else "noreply@example.com"
 
     sent_any = False
     for recipient in recipients:
