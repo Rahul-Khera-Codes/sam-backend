@@ -21,6 +21,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.core.supabase import supabase_admin
 from app.services import livekit_service
 from app.routers.market_agent import run_market_agent_refresh
+from app.routers.report_scheduler import send_digest
 
 logger = logging.getLogger(__name__)
 
@@ -421,6 +422,56 @@ async def run_market_agent_daily_refresh() -> None:
     logger.info("Scheduler: Market Agent daily refresh finished")
 
 
+async def run_report_scheduler_digests() -> None:
+    """
+    Hourly sweep for Report Scheduler (Sales Employee) — check every active
+    schedule and send if due per its frequency. Marks last_sent_at
+    immediately before sending, same double-send prevention pattern as the
+    reminder/reschedule/no-show jobs above.
+    """
+    logger.info("Scheduler: Report Scheduler digest sweep started")
+    now = datetime.now(timezone.utc)
+    due_after = {"daily": timedelta(hours=24), "weekly": timedelta(days=7), "monthly": timedelta(days=30)}
+
+    try:
+        schedules = (
+            supabase_admin.table("report_schedules").select("*").eq("is_active", True).execute().data
+        )
+    except Exception as e:
+        logger.error("Scheduler: failed to fetch report_schedules: %s", e)
+        return
+
+    for schedule in schedules:
+        recipients = schedule.get("recipients") or []
+        if not recipients:
+            continue
+
+        last_sent_at = schedule.get("last_sent_at")
+        if last_sent_at:
+            elapsed = now - datetime.fromisoformat(last_sent_at)
+            if elapsed < due_after.get(schedule["frequency"], timedelta(days=7)):
+                continue
+
+        try:
+            supabase_admin.table("report_schedules").update(
+                {"last_sent_at": now.isoformat()}
+            ).eq("id", schedule["id"]).execute()
+        except Exception as e:
+            logger.error("Scheduler: failed to mark last_sent_at for schedule %s: %s", schedule["id"], e)
+            continue
+
+        try:
+            sent = await send_digest(schedule, recipients)
+            logger.info(
+                "Scheduler: Report Scheduler digest sent=%s schedule=%s business=%s",
+                sent, schedule["id"], schedule["business_id"],
+            )
+        except Exception as e:
+            logger.error("Scheduler: Report Scheduler digest failed for schedule %s: %s", schedule["id"], e)
+
+    logger.info("Scheduler: Report Scheduler digest sweep finished")
+
+
 # ── Scheduler lifecycle ───────────────────────────────────────────────────────
 
 def start_scheduler() -> None:
@@ -456,8 +507,19 @@ def start_scheduler() -> None:
         replace_existing=True,
         misfire_grace_time=3600,  # allow up to 1 hour late start
     )
+    scheduler.add_job(
+        run_report_scheduler_digests,
+        trigger="interval",
+        hours=1,
+        id="report_scheduler_digests",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
     scheduler.start()
-    logger.info("Scheduler started — reminder + reschedule + no-show calls run every hour, Market Agent refresh runs daily")
+    logger.info(
+        "Scheduler started — reminder + reschedule + no-show + report-scheduler-digest calls run hourly, "
+        "Market Agent refresh runs daily"
+    )
 
 
 def stop_scheduler() -> None:
