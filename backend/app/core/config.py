@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     # Calendar/Gmail. Enable "YouTube Data API v3" on the same Google Cloud project.
     youtube_api_key: str = ""
 
+    # Exa.ai (Sales Employee — Market Agent). Sent via x-api-key header, not Authorization.
+    exa_api_key: str = ""
+
     # App
     environment: str = "development"
     cors_origins: str = "http://localhost:5173,http://localhost:8081,http://localhost:8080"
