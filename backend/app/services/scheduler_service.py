@@ -20,6 +20,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.core.supabase import supabase_admin
 from app.services import livekit_service
+from app.routers.market_agent import run_market_agent_refresh
 
 logger = logging.getLogger(__name__)
 
@@ -387,6 +388,39 @@ async def run_noshow_calls() -> None:
     logger.info("Scheduler: no-show calls check finished")
 
 
+async def run_market_agent_daily_refresh() -> None:
+    """
+    Daily refresh for Market Agent (Sales Employee) — only for businesses that
+    have actually used the feature before (a prior run, or a custom analyst
+    defined), to avoid spending Exa/OpenAI money on businesses that have
+    never opened this screen.
+    """
+    logger.info("Scheduler: Market Agent daily refresh started")
+
+    try:
+        run_biz_ids = {
+            r["business_id"]
+            for r in supabase_admin.table("market_analysis_runs").select("business_id").execute().data
+        }
+        custom_biz_ids = {
+            r["business_id"]
+            for r in supabase_admin.table("market_custom_analysts").select("business_id").execute().data
+        }
+    except Exception as e:
+        logger.error("Scheduler: failed to fetch Market Agent business list: %s", e)
+        return
+
+    business_ids = run_biz_ids | custom_biz_ids
+    for business_id in business_ids:
+        try:
+            run_id = await run_market_agent_refresh(business_id, triggered_by="scheduled")
+            logger.info("Scheduler: Market Agent refresh triggered — business=%s run=%s", business_id, run_id)
+        except Exception as e:
+            logger.error("Scheduler: Market Agent refresh failed for business %s: %s", business_id, e)
+
+    logger.info("Scheduler: Market Agent daily refresh finished")
+
+
 # ── Scheduler lifecycle ───────────────────────────────────────────────────────
 
 def start_scheduler() -> None:
@@ -414,8 +448,16 @@ def start_scheduler() -> None:
         replace_existing=True,
         misfire_grace_time=300,
     )
+    scheduler.add_job(
+        run_market_agent_daily_refresh,
+        trigger="interval",
+        hours=24,
+        id="market_agent_daily_refresh",
+        replace_existing=True,
+        misfire_grace_time=3600,  # allow up to 1 hour late start
+    )
     scheduler.start()
-    logger.info("Scheduler started — reminder + reschedule + no-show calls run every hour")
+    logger.info("Scheduler started — reminder + reschedule + no-show calls run every hour, Market Agent refresh runs daily")
 
 
 def stop_scheduler() -> None:
