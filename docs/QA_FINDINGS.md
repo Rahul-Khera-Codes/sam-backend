@@ -10,14 +10,14 @@
 
 | Metric | Count |
 |---|---|
-| Total Tests Run | 51 |
-| Total Passed | 34 |
-| Total Failed | 5 |
+| Total Tests Run | 76 |
+| Total Passed | 56 |
+| Total Failed | 8 |
 | Total Blocked | 13 |
-| Open Failures | 2 (TC-TEAM-006, TC-ROLES-002 — real bugs) |
+| Open Failures | 5 (TC-TEAM-006, TC-ROLES-002 — real bugs; TC-SALES-LR-003, TC-SALES-CA-004, TC-SALES-MA-001 — real bugs, Sales Employee session 58) |
 | Resolved Failures | 0 |
 | Hard Blockers (pre-existing) | 1 (Billing — Stripe not integrated) |
-| Last Updated | 2026-04-29 (Session 7) |
+| Last Updated | 2026-07-08 (Session 58 — Sales Employee full E2E, real browser via Canary/Playwright) |
 
 ---
 
@@ -47,6 +47,107 @@
 ## Active Failures
 > Claude appends new failures here chronologically.
 > Move entry to Resolved section once developer fixes and Claude re-verifies.
+
+---
+**ID**: TC-SALES-MA-001
+**Session**: 58 (Sales Employee full E2E QA)
+**Date**: 2026-07-08
+**Area**: Sales Employee — Market Agent
+**Description**: "What's Changing" banner never shows on page load, even though a valid summary exists from a prior completed run — only appears after triggering a brand-new refresh in the current browser session
+
+**Preconditions**:
+- Logged in as rahul.excel2011@gmail.com, business "Woyce Tech"
+- A completed Market Agent run already exists from a prior session (it does — 7 cards with real data, confirmed in DB with `whats_changing_summary` populated on that run)
+
+**Steps**:
+1. Navigate to /dashboard/sales/market-agent (fresh page load, no refresh triggered in this session)
+2. Look for the "What's Changing" banner above/among the analyst cards
+
+**Expected**: Per the API contract (`docs/market-agent-api-contract.md`): "For the 'What's Changing' top-of-page summary, use the whats_changing_summary from the most recent run." All 7 cards render correctly with real data, so a completed run clearly exists — the summary should be derivable and shown.
+**Actual**: Banner text "What's Changing" does not appear anywhere on the page (confirmed via full page text search). All 7 analyst cards render correctly.
+**Status**: ❌ FAIL
+
+**Cause (Claude's Analysis)**:
+> `MarketAgent.tsx` — the `whatsChanging` state is ONLY ever set inside the `useEffect` watching `polledRun` (line ~50-56), which is only populated after the user actively triggers a new refresh via the "Refresh" button in the current session. The initial-mount `fetchCards()` call only hits `GET /cards` and never fetches a run's summary, so on a fresh page load `whatsChanging` stays `null` and `MarketWhatsChangingBanner` correctly renders nothing (`if (!summary) return null`) — the component itself is fine, it's just never fed data on load.
+>
+> **This is fixable without any backend change**: `listMarketCards`'s response already includes `run_id` on every card (confirmed directly against the DB — all 7 cards from the same refresh share one `run_id`). The frontend could take `cards[0]?.run_id` after the initial fetch and call the existing `GET /sales/market-agent/runs/{run_id}` endpoint to populate `whatsChanging` on mount, instead of waiting for an actively-triggered refresh.
+
+**Evidence**:
+- Full-page text search for "What's Changing" returned no match on a freshly-loaded page with 7 real, populated cards
+- DB confirms `market_analysis_cards` rows all share `run_id: fc330b92-83fd-426a-b565-7adc1c9c1226`, and that run's `whats_changing_summary` is populated (verified in an earlier backend session)
+- Source: `ai-employees-app/src/pages/dashboard/sales/MarketAgent.tsx:47-56` (state logic), `src/components/sales/MarketWhatsChangingBanner.tsx:9` (correctly returns `null` when unfed)
+
+**Severity**: Medium — not a crash, but a real user-facing feature (the "what changed" summary explicitly called for in the mockup/contract) is silently absent on every normal page visit, only appearing right after the user personally triggers a refresh
+**Reproducible**: Always, on any page load/navigation that isn't immediately preceded by a refresh triggered in that same session
+**Workaround**: No — would need a source change (not made — QA session, findings only)
+---
+
+---
+**ID**: TC-SALES-LR-003
+**Session**: 58 (Sales Employee full E2E QA)
+**Date**: 2026-07-08
+**Area**: Sales Employee — Lead Researcher
+**Description**: No URL format validation anywhere (frontend or backend) — a real, paid Apify run is started for any string at all, even obvious garbage
+
+**Preconditions**:
+- Logged in as rahul.excel2011@gmail.com, business "Woyce Tech"
+- On the Lead Researcher "New Analysis" tab
+
+**Steps**:
+1. Enter `not-a-real-url` (not even URL-shaped, let alone a LinkedIn URL) into the profile URL field
+2. Click "Generate Report"
+
+**Expected**: A validation error should be shown immediately (client-side, or at minimum a fast 4xx from the backend) rejecting non-LinkedIn-URL input before any external API call is made.
+**Actual**: The frontend accepted the input with no validation, disabled the form (loading state), and the backend (`POST /sales/lead-researcher/lookup`, `LeadLookupRequest.linkedin_url: str` — no format constraint) accepted it and started a real Apify actor run (`lnVTmjsFDAq2eZrru`). The run eventually "succeeded" on Apify's side (cost: $0.00005 — negligible but non-zero) with zero results, and our own webhook correctly detected the empty dataset and marked the lookup `failed` with a clear message ("Apify run finished but returned no profile data."). So the end state is graceful (no crash, no stuck job, clear error), but a real external API call and real (if tiny) cost is spent on input that's trivially rejectable in under a millisecond client-side.
+
+**Status**: ❌ FAIL
+
+**Cause (Claude's Analysis)**:
+> Two independent gaps, either of which alone would fix this: (1) Frontend — `NewAnalysisTab.tsx`'s input has no pattern/format validation before calling `startLeadLookup`. (2) Backend — `backend/app/schemas/sales.py`'s `LeadLookupRequest.linkedin_url` is a bare `str`, no regex/format validator (unlike the recipient-email validator added to `report_scheduler.py`'s schema in the same session, which shows the pattern already exists elsewhere in this codebase and could be reused here).
+
+**Evidence**:
+- Backend logs: `POST /sales/lead-researcher/lookup` returned 200 for `linkedin_url: "not-a-real-url"`, followed by a real Apify run start
+- Apify run `lnVTmjsFDAq2eZrru`: status SUCCEEDED, usageTotalUsd 0.00005
+- DB: `lead_lookups` row `3110faa5-2ab6-43f0-a42c-70dcf17cc0d1` — status `failed`, error "Apify run finished but returned no profile data."
+- Source: `ai-employees-app/src/components/sales/NewAnalysisTab.tsx`, `backend/app/schemas/sales.py`
+
+**Severity**: Low-Medium — no crash or data corruption, cost per bad submission is negligible today, but this scales linearly with how many bad submissions happen (typos, copy-paste errors, or repeated misuse) and burns real Apify quota/time (2-3 min wait, one Apify run) for something a regex could reject instantly
+**Reproducible**: Always
+**Workaround**: No — would need a source change (not made — QA session, findings only)
+---
+
+---
+**ID**: TC-SALES-CA-004
+**Session**: 58 (Sales Employee full E2E QA)
+**Date**: 2026-07-08
+**Area**: Sales Employee — Competitor Agent
+**Description**: Sparse-data detection regex never matches real backend output — "Limited data available for this platform" note never renders, even when data genuinely is sparse
+
+**Preconditions**:
+- Logged in as rahul.excel2011@gmail.com, business "Woyce Tech"
+- A competitor report exists with at least one platform having thin/no data (tested with HubSpot's Instagram section)
+
+**Steps**:
+1. Navigate to /dashboard/sales/competitor-agent
+2. Click "View Report" on a competitor whose report includes a sparse platform (e.g. Instagram with little activity)
+3. Read the platform's Summary, Pricing signals, Feature launches, and General activity text
+
+**Expected**: Per the platform's own API contract (`docs/competitor-agent-api-contract.md`) and the frontend's own intent (`SPARSE_DATA_PATTERN` in `CompetitorReportDialog.tsx:28`), sparse/empty data should show "Limited data available for this platform." instead of being presented as confirmed fact.
+**Actual**: Real report data for HubSpot's Instagram section reads: "There is no recent activity found on HubSpot's Instagram account, indicating a lack of engagement or content updates on this platform." — the regex `/no (activity|data|signal)s? found/i` requires "no" to be immediately followed by "activity/data/signal(s)" then "found", with nothing in between. The real LLM phrasing almost always inserts a qualifier ("no **recent** activity found"), so the pattern never matches. Verified in isolation with Node: the exact real-world string returns `false` against the regex, while only a highly literal "No activity found." (not real output) returns `true`. Also affects `pricing_signals`/`feature_launches`, which our own backend prompt (`competitor_agent.py` `SYNTHESIS_PROMPT`) explicitly instructs to output the literal string `"Nothing found."` for absent data — that string also does not match the regex at all (no "no X found" phrase present). Net effect: the sparse-data indicator has never actually fired against real production-shaped data in this test.
+**Status**: ❌ FAIL
+
+**Cause (Claude's Analysis)**:
+> `ai-employees-app/src/components/sales/CompetitorReportDialog.tsx:28` — `SPARSE_DATA_PATTERN = /no (activity|data|signal)s? found/i` is too narrow for the actual phrasing GPT produces and for the backend's own literal `"Nothing found."` placeholder string. A broader pattern (e.g. matching "nothing found" OR "no [adjective]* (activity|data|signal)" with an optional word in between) would need to be verified against a larger sample of real outputs before considering it fixed — not just patched to match this one observed phrase.
+
+**Evidence**:
+- Screenshot: docs/qa-screenshots/TC-SALES-CA-004-sparse-data.png
+- Node verification: `/no (activity|data|signal)s? found/i` tested `false` against the real Instagram summary text, `false` against literal `"Nothing found."`, `true` only against the contrived exact phrase `"No activity found."`
+- Source: `ai-employees-app/src/components/sales/CompetitorReportDialog.tsx:28-35,166-185`
+
+**Severity**: Medium — not a crash or data-loss bug, but it silently defeats a specific, deliberate honesty safeguard requested in the API contract (don't present sparse/unreliable scraped data as confirmed fact)
+**Reproducible**: Always, for any report where a platform's data is genuinely sparse
+**Workaround**: No — purely a frontend detection-logic issue, would need a source change (not made — QA session, findings only)
+---
 
 ---
 **ID**: TC-TEAM-006
@@ -365,6 +466,21 @@
 - TC-ROLES-002: ❌ INDETERMINATE — "Saving…" indicator confirmed API was called; Playwright read stale checkbox state; manual re-test needed
 - Note: "QA Test Role" created in DB — needs manual cleanup
 - Next: Session 5 → Phone Numbers + Locations + manual verify TC-ROLES-002
+
+---
+
+### Session 58 — 2026-07-08 — Sales Employee full E2E (Canary/Playwright, real browser)
+- Status: ✅ Complete
+- Tool: Canary session recording (real Playwright browser, trace/video/HAR/console) — session `sales-employee-e2e-qa-mrbvotec-32a925`, report at `~/.canary/sessions/sales-employee-e2e-qa-mrbvotec-32a925/report.html`
+- Tests Run: 25 | Passed: 22 | Failed: 3 (all real bugs)
+- Scope: full logged-in flow (rahul.excel2011@gmail.com, business "Woyce Tech") across all 4 Sales Employee modules — first time this product's frontend was QA'd end-to-end in a real browser, not just backend curl testing
+- TC-SALES-NAV-001/002: login + navigation across all 4 sub-pages ✅
+- Lead Researcher (6 tests, 5 pass 1 fail): real LinkedIn lookup → full card render ✅ (honest "Unverified guess" confidence framing confirmed), History/Saved Leads tabs ✅, bookmark toggle ✅, dedupe across 2 browser tabs ✅ (backend log confirmed "already in flight ... reusing"). TC-SALES-LR-003 ❌ REAL BUG — no URL validation anywhere, a real paid Apify run starts for garbage input (e.g. "not-a-real-url"), fails gracefully but wastefully.
+- Competitor Agent (6 tests, 5 pass 1 fail): add competitor with strong (hubspot.com) and weak (example.com) social presence both handled correctly, report generation/history ✅. TC-SALES-CA-004 ❌ REAL BUG — sparse-data detection regex (`SPARSE_DATA_PATTERN`) never matches real LLM output phrasing or the backend's own literal "Nothing found." placeholder; "Limited data available" indicator has never actually fired against real data.
+- Market Agent (5 tests, 4 pass 1 fail): manual refresh ✅, bookmark ✅, custom analyst creation + inclusion in next refresh ✅ (confirmed real Exa-sourced content for the custom "Pricing Watchdog" analyst). TC-SALES-MA-001 ❌ REAL BUG — "What's Changing" banner never populates on page load despite valid data existing, only appears right after an actively-triggered refresh in the same session; root cause confirmed fixable without backend changes (cards already carry `run_id`, frontend just never fetches the run's summary on mount).
+- Report Scheduler (6 tests, all pass): empty-recipient guard ✅ (exact expected text), live preview via sandboxed iframe ✅ (no script tags — safe), real test-send confirmed via direct API response capture (`{"sent":true,"detail":"Test email sent to rahul.excel2011@gmail.com."}`), module-toggle preview update ✅.
+- All 3 failures logged to Active Failures above: TC-SALES-LR-003, TC-SALES-CA-004, TC-SALES-MA-001. Test sheet: `docs/sales-employee-qa-test-sheet.md`.
+- Next: fixes for the 3 findings (not made this session — QA only, no source edits); re-verify once fixed.
 
 ---
 *Maintained by Claude Code during QA sessions. Source code is never modified.*

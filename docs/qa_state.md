@@ -1,10 +1,22 @@
 # QA State
 > Managed by Claude during QA sessions. Do not edit manually.
-> Last updated: 2026-04-29 (Session 6)
+> Last updated: 2026-07-08 (Session 58)
 
 ---
 
 ## Last Session
+| Field | Value |
+|---|---|
+| Session # | 58 |
+| Date | 2026-07-08 |
+| Tester | Claude Code (Canary/Playwright, real browser) |
+| Tests Run | 25 (22 pass, 3 fail) |
+| Passed | 22 |
+| Failed | 3 |
+| Blocked | 0 |
+| Next Priority | Sales Employee: TC-SALES-LR-003 (no URL validation), TC-SALES-CA-004 (sparse-data regex never matches real output), TC-SALES-MA-001 ("What's Changing" banner never populates on page load) — all 3 need developer fixes, then re-verify. Older platform items unchanged: TC-ROLES-002 + TC-TEAM-006 still open. |
+
+## Previous Session
 | Field | Value |
 |---|---|
 | Session # | 7 |
@@ -152,6 +164,26 @@
 | Feature | Last Tested | Status |
 |---|---|---|
 | Email → support@aiemployeesinc.com | Session 7 | ✅ PASS (env constraint) — POST /support/submit functional; 409 in test env (Gmail OAuth not connected); works when Gmail connected |
+
+---
+
+### Sales Employee (full E2E, real browser — see `docs/sales-employee-qa-test-sheet.md`)
+| Feature | Last Tested | Status |
+|---|---|---|
+| Lead Researcher — submit + poll + card render | Session 58 | ✅ PASS |
+| Lead Researcher — invalid URL handling | Session 58 | ❌ FAIL — TC-SALES-LR-003, no validation anywhere |
+| Lead Researcher — History/Saved Leads tabs | Session 58 | ✅ PASS |
+| Lead Researcher — bookmark toggle | Session 58 | ✅ PASS |
+| Lead Researcher — dedupe across tabs | Session 58 | ✅ PASS |
+| Competitor Agent — add + discover (strong/weak presence) | Session 58 | ✅ PASS |
+| Competitor Agent — generate report + view | Session 58 | ✅ PASS (report renders correctly) |
+| Competitor Agent — sparse-data indicator | Session 58 | ❌ FAIL — TC-SALES-CA-004, regex never matches real output |
+| Market Agent — manual refresh, all 7 cards | Session 58 | ✅ PASS |
+| Market Agent — "What's Changing" banner on page load | Session 58 | ❌ FAIL — TC-SALES-MA-001, only shows after live-triggered refresh |
+| Market Agent — bookmark, custom analyst | Session 58 | ✅ PASS |
+| Report Scheduler — CRUD, preview, empty-recipient guard | Session 58 | ✅ PASS |
+| Report Scheduler — send-test (real email confirmed) | Session 58 | ✅ PASS |
+| Report Scheduler — module-toggle preview update | Session 58 | ✅ PASS |
 
 ---
 
