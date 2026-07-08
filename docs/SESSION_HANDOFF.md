@@ -1,4 +1,4 @@
-# Session Handoff — 2026-07-07 (Session 58)
+# Session Handoff — 2026-07-08 (Session 59)
 
 Read this at the start of every session. It captures the full current state so you can pick up immediately.
 
@@ -17,7 +17,7 @@ Two repos:
 - **Backend + Agent:** `/home/lap-68/Documents/gt-rahul/sam-backend`
 - **Frontend:** `/home/lap-68/Documents/gt-rahul/ai-employees-app`
 
-Backend + agent on `feature/exec-agent-improvements` (sessions 55–56, unmerged, pending items below). **Sessions 57–58 are on a NEW branch, `feature/sales-lead-researcher`** (both repos) — the entire Sales Employee backend build (all 4 modules: Lead Researcher, Competitor Agent, Market Agent, Report Scheduler), now complete and live-verified end-to-end. See "What Was Done This Session (Session 58)" below for full detail. **Pending before merge of the OLDER branch:** live-verify WS4/10/11/12/13 action cards, reconcile `fix/avatar-aec`, apply timezone migration, then merge to main — these are unrelated/unaffected by the new Sales Employee work.
+Backend + agent on `feature/exec-agent-improvements` (sessions 55–56, unmerged, pending items below). **Sessions 57–59 are on a NEW branch, `feature/sales-lead-researcher`** (both repos) — the entire Sales Employee backend build (all 4 modules: Lead Researcher, Competitor Agent, Market Agent, Report Scheduler), now complete, full-E2E QA'd via real browser, and all bugs found have been fixed and re-verified. See "What Was Done This Session (Session 59)" below for full detail. **Pending before merge of the OLDER branch:** live-verify WS4/10/11/12/13 action cards, reconcile `fix/avatar-aec`, apply timezone migration, then merge to main — these are unrelated/unaffected by the new Sales Employee work.
 
 > **Restart needed:** `docker compose restart sam-executive-agent` after any backend/agent code changes.
 
@@ -218,6 +218,27 @@ Key env files:
 ## Pending Migrations (not yet applied)
 - `20260618000000_businesses_timezone.sql` — add `timezone TEXT DEFAULT 'America/Toronto'` to businesses. File exists in `ai-employees-app/supabase/migrations/`. Run `supabase db push`.
 - `20260707000002_sales_employee_updated_at_triggers.sql` — adds the `public.handle_updated_at()` trigger (already used by every other table in this schema) to all 8 new Sales Employee tables. Written session 58, verified via live test that it's NOT yet firing.
+
+---
+
+## What Was Done This Session (Session 59, 2026-07-08)
+
+**Branch `feature/sales-lead-researcher` (both repos). Full end-to-end QA of all 4 Sales Employee modules via real browser (Canary/Playwright) against the live frontend + backend + real external APIs — no curl shortcuts — followed by fixing and re-verifying every bug found in the same session.**
+
+### 1. QA pass
+Created `docs/sales-employee-qa-test-sheet.md` (20 test cases, realistic + dummy data) and ran 25 tests total across Lead Researcher, Competitor Agent, Market Agent, Report Scheduler, plus cross-cutting login/nav. 22 passed outright; 3 real, reproducible bugs found — none caught by earlier backend-only testing. Findings logged in `docs/QA_FINDINGS.md` per CLAUDE.md QA rules (no source touched during this pass).
+
+### 2. Bugs found + fixed (user said "move on to fixes" after the QA pass)
+- **TC-SALES-LR-003** — no URL format validation anywhere; garbage input started a real paid Apify run before failing. Fixed with a matching LinkedIn-URL regex validator on both frontend (`NewAnalysisTab.tsx`, pre-submit check) and backend (`schemas/sales.py`, Pydantic `field_validator` on `LeadLookupRequest`) — defense in depth, same pattern as the existing `report_schedules` recipient validator. Commits `ad8c6fc`, `3d4ccdc`.
+- **TC-SALES-CA-004** — the "sparse/limited data" regex in `CompetitorReportDialog.tsx` never matched real backend prose, so the honesty safeguard never fired. Root-caused as a fundamentally fragile approach (regex over free-form LLM text) rather than patched with a better regex — fixed by having the LLM directly judge and return an explicit `data_availability: "sparse"|"sufficient"` field per platform (`competitor_agent.py` synthesis prompt + `PlatformActivity` schema), with the old regex kept only as a fallback for pre-existing reports. Commits `43cd1b7` (backend), `d9aba07` (frontend, also consolidated 4 repeated per-field notes into one badge).
+- **TC-SALES-MA-001** — "What's Changing" banner never populated on a normal page load, only right after a live-triggered refresh, even though a valid summary already existed in the DB. Fixed in `MarketAgent.tsx`: `fetchCards()` now fetches the latest run's stored summary via its existing `run_id` instead of only setting it from a live-triggered response. Commit `fd0c281`.
+
+All 3 fixes re-verified live in a fresh browser session (not just re-read code) — see `docs/QA_FINDINGS.md` Resolved Failures for full before/after evidence. **All 25 test cases now pass.**
+
+### 3. Docs closed out
+`docs/QA_FINDINGS.md` (findings moved Active → Resolved, dashboard counts updated), `docs/qa_state.md` (coverage map + Last Session block updated to reflect the fixes), `docs/sales-employee-qa-test-sheet.md` (status cells + execution log updated) — all committed together.
+
+**Still open:** ngrok static domain (task in progress, waiting on a reserved domain from `dashboard.ngrok.com/domains`), `updated_at` trigger migration (written session 58, not yet applied), production deploy, Sam's lawyer sign-off — see Pending Manual Steps below, unchanged by this session.
 
 ---
 
