@@ -10,11 +10,11 @@
 | Session # | 58 |
 | Date | 2026-07-08 |
 | Tester | Claude Code (Canary/Playwright, real browser) |
-| Tests Run | 25 (22 pass, 3 fail) |
-| Passed | 22 |
-| Failed | 3 |
+| Tests Run | 25 (22 pass, 3 fail — all 3 fixed + re-verified same session) |
+| Passed | 25 (after fixes) |
+| Failed | 0 |
 | Blocked | 0 |
-| Next Priority | Sales Employee: TC-SALES-LR-003 (no URL validation), TC-SALES-CA-004 (sparse-data regex never matches real output), TC-SALES-MA-001 ("What's Changing" banner never populates on page load) — all 3 need developer fixes, then re-verify. Older platform items unchanged: TC-ROLES-002 + TC-TEAM-006 still open. |
+| Next Priority | Sales Employee: all 3 same-session bugs resolved (TC-SALES-LR-003 validators, TC-SALES-CA-004 `data_availability` field, TC-SALES-MA-001 latest-run fetch on load) — see `docs/QA_FINDINGS.md` Resolved Failures. Older platform items unchanged: TC-ROLES-002 + TC-TEAM-006 still open. |
 
 ## Previous Session
 | Field | Value |
@@ -171,15 +171,15 @@
 | Feature | Last Tested | Status |
 |---|---|---|
 | Lead Researcher — submit + poll + card render | Session 58 | ✅ PASS |
-| Lead Researcher — invalid URL handling | Session 58 | ❌ FAIL — TC-SALES-LR-003, no validation anywhere |
+| Lead Researcher — invalid URL handling | Session 58 | ✅ FIXED — TC-SALES-LR-003, frontend+backend validators added, re-verified |
 | Lead Researcher — History/Saved Leads tabs | Session 58 | ✅ PASS |
 | Lead Researcher — bookmark toggle | Session 58 | ✅ PASS |
 | Lead Researcher — dedupe across tabs | Session 58 | ✅ PASS |
 | Competitor Agent — add + discover (strong/weak presence) | Session 58 | ✅ PASS |
 | Competitor Agent — generate report + view | Session 58 | ✅ PASS (report renders correctly) |
-| Competitor Agent — sparse-data indicator | Session 58 | ❌ FAIL — TC-SALES-CA-004, regex never matches real output |
+| Competitor Agent — sparse-data indicator | Session 58 | ✅ FIXED — TC-SALES-CA-004, AI-judged `data_availability` field, re-verified |
 | Market Agent — manual refresh, all 7 cards | Session 58 | ✅ PASS |
-| Market Agent — "What's Changing" banner on page load | Session 58 | ❌ FAIL — TC-SALES-MA-001, only shows after live-triggered refresh |
+| Market Agent — "What's Changing" banner on page load | Session 58 | ✅ FIXED — TC-SALES-MA-001, fetches latest run's summary via `run_id` on load, re-verified |
 | Market Agent — bookmark, custom analyst | Session 58 | ✅ PASS |
 | Report Scheduler — CRUD, preview, empty-recipient guard | Session 58 | ✅ PASS |
 | Report Scheduler — send-test (real email confirmed) | Session 58 | ✅ PASS |

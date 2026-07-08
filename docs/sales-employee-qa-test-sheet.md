@@ -42,7 +42,7 @@
 |---|---|---|---|---|
 | TC-SALES-LR-001 | Page loads | — | Empty/new-analysis state renders | ✅ PASS |
 | TC-SALES-LR-002 | Submit a real LinkedIn URL, wait for completion | `https://www.linkedin.com/in/arun-kumar-64450b278/` (realistic, already scraped once before) | Card renders with name, company, email confidence ("Unverified guess"), insights, outreach draft | ✅ PASS — full card verified, all fields populated correctly, honest "Unverified guess (catch_all)" framing confirmed |
-| TC-SALES-LR-003 | Submit an invalid/malformed URL | `not-a-real-url` (dummy) | Client or server validation error shown, no lookup created | ❌ FAIL — see QA_FINDINGS.md. No validation anywhere; a real (if tiny) paid Apify run was started for garbage input. Eventually fails gracefully, but wastefully. |
+| TC-SALES-LR-003 | Submit an invalid/malformed URL | `not-a-real-url` (dummy) | Client or server validation error shown, no lookup created | ✅ FIXED — matching frontend+backend validators added same session, re-verified live: invalid input now rejected with an inline toast, zero backend requests made. See QA_FINDINGS.md Resolved Failures. |
 | TC-SALES-LR-004 | View History tab | — | Past lookups list renders, including recovered ones from session 58 | ✅ PASS |
 | TC-SALES-LR-005 | Save/bookmark a completed lead from history | — | Save state toggles and persists on reload | ✅ PASS — confirmed `is_saved` flips correctly in DB for the exact clicked row |
 | TC-SALES-LR-006 | Submit the same URL twice quickly (dedupe check) | Same URL as TC-002, resubmitted while first is still `running` | Second submit reuses the same lookup id, not a new one | ✅ PASS — tested via 2 separate browser tabs (same session), backend log confirmed "already in flight ... reusing" |
@@ -54,7 +54,7 @@
 | TC-SALES-CA-001 | Page loads | — | Empty/add-competitor state renders | ✅ PASS |
 | TC-SALES-CA-002 | Add competitor with strong social presence | `https://www.hubspot.com` (realistic, matches earlier backend test) | Discovery completes, all 4 platform icons populate | ✅ PASS (pre-existing from backend session, re-confirmed rendering correctly) |
 | TC-SALES-CA-003 | Add competitor with a site likely to have minimal social presence | `https://example.com` (dummy) | Discovery completes with `discovery_status: completed` but most/all platform URLs null — graceful empty icon state, not an error | ✅ PASS — confirmed in DB and UI, no icons shown, no crash |
-| TC-SALES-CA-004 | Generate report for the HubSpot competitor | — | Report dialog shows fan-out progress, completes with per-platform breakdown, sparse-data platforms show "Limited data available" | ❌ FAIL — see QA_FINDINGS.md. Report itself renders correctly (all 4 platforms, full text), but the sparse-data detection regex never matches real output, so "Limited data available" never shows even for genuinely thin data (HubSpot's Instagram). |
+| TC-SALES-CA-004 | Generate report for the HubSpot competitor | — | Report dialog shows fan-out progress, completes with per-platform breakdown, sparse-data platforms show "Limited data available" | ✅ FIXED — replaced regex detection with an AI-judged `data_availability` field, verified against real stored data (Instagram correctly judged "sparse", others "sufficient") and live in the browser. See QA_FINDINGS.md Resolved Failures. |
 | TC-SALES-CA-005 | View monitored competitors list | — | Both added competitors appear | ✅ PASS — 3 competitors visible (Higgsfield AI from Yuvraj's testing, HubSpot, example.com) |
 | TC-SALES-CA-006 | View past reports for a competitor | — | Report history list renders | ✅ PASS — date-selector combobox in the report dialog correctly shows prior report |
 
@@ -62,7 +62,7 @@
 
 | ID | Flow | Test Data | Expected | Status |
 |---|---|---|---|---|
-| TC-SALES-MA-001 | Page loads | — | Existing cards (from session 58 backend test) or empty state renders | ❌ FAIL — cards render correctly, but see QA_FINDINGS.md: "What's Changing" banner is silently absent on page load despite a valid summary existing |
+| TC-SALES-MA-001 | Page loads | — | Existing cards (from session 58 backend test) or empty state renders | ✅ FIXED — `fetchCards()` now fetches the latest run's summary via its existing `run_id`, re-verified live: banner shows correctly on a fresh page load. See QA_FINDINGS.md Resolved Failures. |
 | TC-SALES-MA-002 | Trigger manual refresh, wait for completion | — | All 7 analyst cards complete (6 Exa + Business Intelligence), "What's Changing" banner populates | ✅ PASS — banner correctly appears right after an active trigger, confirming the bug is specifically about initial page load, not the refresh flow |
 | TC-SALES-MA-003 | Bookmark a card | — | Bookmark state toggles and persists | ✅ PASS — confirmed in DB, button label correctly changes to "Remove bookmark" |
 | TC-SALES-MA-004 | Add a custom analyst | Name: "Pricing Watchdog" (dummy), prompt: "Watch for pricing changes among AI voice agent competitors" | Analyst saved; note per Yuvraj's audit — no "view existing custom analysts" list UI exists yet, verify this gap is real | ✅ PASS — clear toast confirmation "will appear on the next refresh"; confirmed no list-existing-analysts UI exists (matches Yuvraj's audit) |
@@ -91,5 +91,7 @@
 1. **TC-SALES-LR-003** — No URL format validation anywhere (frontend or backend); a real, paid Apify run starts for any garbage input. Fails gracefully in the end, but wastefully.
 2. **TC-SALES-CA-004** — The "sparse/limited data" detection regex in `CompetitorReportDialog.tsx` never actually matches real backend output (verified with Node against the exact real string), so the honesty safeguard requested in the API contract has never fired.
 3. **TC-SALES-MA-001** — The "What's Changing" summary banner never populates on a normal page load, only right after the user personally triggers a refresh in that same session — even though a valid summary already exists in the DB. Confirmed fixable without backend changes (cards already carry `run_id`).
+
+**Update, same session:** all 3 findings fixed immediately after this QA pass (user asked to move from QA to fixing) and re-verified live in a fresh browser session — see `docs/QA_FINDINGS.md` Resolved Failures for fix details and commit hashes. All 25 test cases now pass.
 
 No source code was modified during this QA pass, per the QA Agent Rules — findings only. Test data created during this session (competitor "example.com", lead lookups for "Arun Kumar", custom analyst "Pricing Watchdog", schedule for "Woyce Tech") was left in place as realistic ongoing test fixtures rather than cleaned up, since this is a shared team test business.
