@@ -1,12 +1,26 @@
 from __future__ import annotations
+import re
 from typing import Optional
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+# Matches a LinkedIn profile URL (with or without www/https, trailing slash, or query string).
+# Mandatory server-side check — the frontend has the same check, but this endpoint must not
+# trust that alone (defense in depth; also protects direct API callers) and must reject
+# obviously-invalid input before spending a real, paid Apify run on it.
+_LINKEDIN_PROFILE_URL_RE = re.compile(r"^https?://(www\.)?linkedin\.com/in/[^\s/]+/?(\?[^\s]*)?$", re.IGNORECASE)
 
 
 class LeadLookupRequest(BaseModel):
     business_id: str
     linkedin_url: str
+
+    @field_validator("linkedin_url")
+    @classmethod
+    def validate_linkedin_url(cls, v: str) -> str:
+        if not _LINKEDIN_PROFILE_URL_RE.match(v.strip()):
+            raise ValueError("linkedin_url must be a LinkedIn profile URL, e.g. https://www.linkedin.com/in/your-profile")
+        return v
 
 
 class LeadLookupCreatedResponse(BaseModel):
