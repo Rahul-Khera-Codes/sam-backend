@@ -73,6 +73,10 @@ Return a JSON object with exactly these keys:
   - pricing_signals: anything suggesting a pricing change or offer, else "Nothing found."
   - feature_launches: anything suggesting a new feature/product launch, else "Nothing found."
   - general_activity: general posting/activity level and tone
+  - data_availability: "sparse" if the raw data for this platform had little to no real content to work
+    with (empty results, minimal posts, nothing substantive), otherwise "sufficient". Judge this yourself —
+    do not rely on any particular wording; just judge whether there was genuinely enough raw data to say
+    something meaningful about this platform.
 
 Be honest about uncertainty — do not invent specifics not supported by the raw data. If a platform's raw
 data is sparse, say so rather than filling in plausible-sounding details."""

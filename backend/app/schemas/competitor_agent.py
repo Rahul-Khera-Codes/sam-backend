@@ -41,6 +41,9 @@ class PlatformActivity(BaseModel):
     pricing_signals: Optional[str] = None
     feature_launches: Optional[str] = None
     general_activity: Optional[str] = None
+    # AI-judged directly, not inferred from text pattern-matching after the fact — "sparse" | "sufficient" | None
+    # (None for reports generated before this field existed).
+    data_availability: Optional[str] = None
 
 
 class CompetitorReportResult(BaseModel):
