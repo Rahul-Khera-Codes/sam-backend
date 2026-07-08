@@ -28,10 +28,6 @@ class CompetitorListResponse(BaseModel):
     competitors: list[CompetitorResponse]
 
 
-class GenerateReportRequest(BaseModel):
-    business_id: str
-
-
 class ReportCreatedResponse(BaseModel):
     id: str
     status: str
