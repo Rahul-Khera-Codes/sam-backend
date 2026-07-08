@@ -1,4 +1,4 @@
-# Session Handoff — 2026-07-02 (Session 56)
+# Session Handoff — 2026-07-07 (Session 58)
 
 Read this at the start of every session. It captures the full current state so you can pick up immediately.
 
@@ -17,7 +17,7 @@ Two repos:
 - **Backend + Agent:** `/home/lap-68/Documents/gt-rahul/sam-backend`
 - **Frontend:** `/home/lap-68/Documents/gt-rahul/ai-employees-app`
 
-Backend + agent on `feature/exec-agent-improvements` (sessions 55–56). Frontend on same branch. **Session 56 shipped a huge batch** — see "What Was Done This Session" below. Cost decision made (stay on Realtime), billing add-on fully built (migration applied, one visibility bug found+fixed), Sales Employee build confirmed to start next. **Pending before merge:** live-verify WS4/10/11/12/13 action cards, reconcile `fix/avatar-aec`, apply timezone migration, then merge to main.
+Backend + agent on `feature/exec-agent-improvements` (sessions 55–56, unmerged, pending items below). **Sessions 57–58 are on a NEW branch, `feature/sales-lead-researcher`** (both repos) — the entire Sales Employee backend build (all 4 modules: Lead Researcher, Competitor Agent, Market Agent, Report Scheduler), now complete and live-verified end-to-end. See "What Was Done This Session (Session 58)" below for full detail. **Pending before merge of the OLDER branch:** live-verify WS4/10/11/12/13 action cards, reconcile `fix/avatar-aec`, apply timezone migration, then merge to main — these are unrelated/unaffected by the new Sales Employee work.
 
 > **Restart needed:** `docker compose restart sam-executive-agent` after any backend/agent code changes.
 
@@ -180,8 +180,11 @@ Key env files:
 
 ## Pending Manual Steps
 
+- [ ] **Apply the `updated_at`-trigger migration** (session 58) — `ai-employees-app/supabase/migrations/20260707000002_sales_employee_updated_at_triggers.sql`. Written + committed, verified via a live test that it is NOT yet firing (checked 2026-07-07). Run `supabase db push`.
+- [ ] **Set up a persistent ngrok static domain** (session 58) — reserve one at `dashboard.ngrok.com/domains` (free tier includes 1), restart the tunnel as `ngrok http --url=<reserved-domain> 8003`, then send the domain to update `APIFY_WEBHOOK_BASE_URL` in `.env` + restart backend. Root cause of a real bug Yuvraj hit: Apify's webhook got a 404 **from ngrok itself** because the tunnel wasn't running — not a code bug, but a real fragility while multiple people test against this.
+- [ ] **Real production deploy for Sales Employee** — still running on ngrok (Apify webhook) + a personal Exa/Apify/YouTube setup in places. Needed before any real customer uses Lead Researcher/Competitor Agent/Market Agent/Report Scheduler.
+- [ ] **Sam's lawyer sign-off** on scraped-lead outreach sourcing (CASL/ToS) — doesn't block the build, blocks public launch of Sales Employee.
 - [ ] **Live-test the billing add-on** (session 56) — needs a real Stripe test-mode subscription on at least one business, since the toggle is currently disabled for all of them (none has a base plan). Confirm enable/disable creates/removes the Stripe subscription item, and confirm `/dashboard/executive` stays accessible either way (enforcement is off by default).
-- [ ] **Sales Employee — Lead Researcher build** (session 56, confirmed to start) — needs an Apify account/API key set up before any code gets written. See `docs/sales-employee-agenticbi-requirements.md`.
 - [ ] **Whole-product billing enforcement gap** (session 56, found + deliberately deferred) — no subscription status is checked anywhere outside the Billing page's display, for any feature. See `TODO.md` + `memory/project_blockers.md` for the agreed architecture. Don't rush this.
 - [ ] **Reconcile `fix/avatar-aec` with `feature/exec-agent-improvements` before merge.** `fix/avatar-aec` (both repos, session 54) fixes avatar-audio/mic echo via `AudioContext`/`webAudioMix` routing + headphone notice — NOT merged into this branch. Frontend commits `486cedd`/`6002792`/`eeca509` heavily rewrite `useExecutiveSession.ts`, the same file session 55 touched for the avatar toggle. Diff the two branches on that file and manually reconcile; do not assume a clean auto-merge.
 - [ ] **Live-verify Executive Agent UI** (after `docker compose restart sam-executive-agent` + reload `/dashboard/executive`): WS4 avatar states; WS10 activity caption (spinner→✓, no stuck spinner on error); WS11 free_slots tap→preview→approve→booked; WS12 appointment Cancel(confirm)/Reschedule; WS13 email_detail + Reply. WS3 A.2 draft/event previews still approve/send. **Session-55 additions:** avatar toggle Video/VideoOff persists across page reload; attach-doc sends PDF in email; Start Session + Unmute Mic centered.
@@ -205,9 +208,37 @@ Key env files:
 - All through `20260428000003` ✅ applied
 - `20260522000001` — profiles team visibility RLS ✅
 - `20260522000000` — business_documents table ✅
+- `20260702000000` — businesses exec-agent addon (`stripe_exec_agent_item_id`) ✅
+- `20260706000000` — `lead_lookups` table ✅
+- `20260706000001` — `lead_lookups` RLS ✅
+- `20260706000002` — `competitors`/`competitor_reports`/`competitor_report_platform_runs` + RLS ✅
+- `20260707000000` — `market_custom_analysts`/`market_analysis_runs`/`market_analysis_cards` + RLS ✅
+- `20260707000001` — `report_schedules` + RLS ✅
 
 ## Pending Migrations (not yet applied)
 - `20260618000000_businesses_timezone.sql` — add `timezone TEXT DEFAULT 'America/Toronto'` to businesses. File exists in `ai-employees-app/supabase/migrations/`. Run `supabase db push`.
+- `20260707000002_sales_employee_updated_at_triggers.sql` — adds the `public.handle_updated_at()` trigger (already used by every other table in this schema) to all 8 new Sales Employee tables. Written session 58, verified via live test that it's NOT yet firing.
+
+---
+
+## What Was Done This Session (Session 58, 2026-07-07)
+
+**Branch `feature/sales-lead-researcher` (both repos), continued from session 57. Built and live-verified the remaining 3 of 4 Sales Employee backend modules (Lead Researcher shipped session 57), then investigated a real bug report from Yuvraj's own testing.**
+
+### 1. Competitor Agent (backend, verified 2026-07-06 — carried into this handoff since not previously recorded here)
+Fan-out design: `POST /competitors` discovers LinkedIn/Facebook/Instagram/YouTube from a website URL (Jina Reader + GPT, SSRF-safe — never fetches the user-supplied URL directly). `POST /competitors/{id}/report` fans out to up to 4 platforms concurrently (LinkedIn/Facebook/Instagram via Apify + webhooks, YouTube via the official free Data API v3) with a concurrency-safe atomic-claim join step before synthesizing. 3 new tables + RLS from the start. Live-tested against hubspot.com — found + fixed 2 real bugs: a footer-truncation bug (`content[:20_000]` silently dropped every social link, which sat past the cutoff on a 60K-char page) and an unhandled legacy `/user/Username` YouTube URL format. API contract: `docs/competitor-agent-api-contract.md`.
+
+### 2. Market Agent (backend)
+Sam confirmed Exa.ai for this module (not the traditional news-API list originally being evaluated) after Rahul directly asked for confirmation. Yuvraj's own scoping doc raised 4 open questions (agent ownership, card purpose, trigger, execution model) — all resolved by product-owner+engineer reasoning grounded in the already-confirmed spec + Sales Employee's own constraints (no voice/chat component), confirmed back to Sam/Yuvraj. Architecture: 7 cards per refresh — 6 via Exa's `/search` with `outputSchema`+grounding (live-verified against a real query before building: `output.content`/`output.grounding` work exactly as documented), 7th "Business Intelligence" card reads the business's own `analytics.py` call-volume summary instead of the web. All run concurrently via `asyncio.gather` — Exa is synchronous (~40s worst case), no webhook infra needed unlike Apify. New daily APScheduler job. 3 new tables + RLS. Live-tested against a real business — all 7 cards completed cleanly on the first try, no bugs found. API contract: `docs/market-agent-api-contract.md`.
+
+### 3. Report Scheduler (backend) — last of the 4 modules, all now shipped
+No external API — pure aggregation of the other 3 modules' existing data, sent via the business's existing connected Gmail integration (same `send_email` path as appointment confirmations). CRUD + synchronous `/preview` + `/send-test` (sends to the requester's own email, doesn't touch `last_sent_at`). New hourly sweep job checks every active schedule against its daily/weekly/monthly frequency. Live-tested: real schedule created, previewed, and a real test email received via Gmail. Found + fixed 2 real issues: (1) Gmail token lookup was location-scoped and found nothing for a business whose Gmail connection was tied to a specific location, not business-wide — added a location-agnostic lookup specific to this module; (2) a security review caught HTML/XSS injection risk in the digest (content indirectly sourced from scraped competitor posts + Exa results, both attacker-adjacent) — fixed with HTML escaping + recipient email format validation. API contract: `docs/report-scheduler-api-contract.md`.
+
+### 4. Real bug investigation from Yuvraj's own testing
+Yuvraj reported 2 failed Lead Researcher lookups ("Timed out waiting for Apify — the webhook never arrived"). Root-caused via Apify's webhook-dispatch API rather than assuming: the actual Apify scrapes **succeeded** (confirmed via `actor-runs` API), but webhook delivery got **HTTP 404 from ngrok itself** (tunnel not running at that moment) — not a code bug. Manually recovered both lookups from Apify's already-succeeded dataset (re-ran the enrichment step against the existing scrape data) rather than making Yuvraj retry and spend more Apify credits — both now `status: completed` with real data (Arun Kumar, Yuvraj Singh). Separately found (while investigating timestamps) that `updated_at` was never being bumped on any `.update()` call across all 4 new modules (~28 call sites) — every other table in this schema already has a `public.handle_updated_at()` trigger for this, the 8 new tables were just missing it. Fixed at the DB level via a new migration (not by patching each Python call site, which would be fragile for any future update call) — **written, committed, not yet applied.**
+
+### 5. Infra/access resolved
+Sam added Rahul + Yuvraj to his real Apify organization and his Exa.ai organization (both confirmed access 2026-07-07). `APIFY_API_TOKEN` swapped from the personal/testing token to the new one, verified valid via a live API call. Still pending: a persistent ngrok static domain (task in progress, waiting on Rahul to reserve one) so the webhook tunnel URL survives restarts — the real fix is production deploy, separately tracked.
 
 ---
 
