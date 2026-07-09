@@ -292,12 +292,25 @@ async def delete_schedule(
 async def preview_schedule(
     schedule_id: str,
     user_id: str = Depends(get_user_id),
+    # Optional overrides so the frontend can preview unsaved module toggles
+    # without persisting them first — None means "use the saved schedule's value".
+    include_lead_researcher: bool | None = Query(default=None),
+    include_competitor_agent: bool | None = Query(default=None),
+    include_market_agent: bool | None = Query(default=None),
 ):
     schedule = await _get_schedule_or_404(schedule_id, user_id)
     biz = supabase_admin.table("businesses").select("name").eq("id", schedule["business_id"]).limit(1).execute().data
     business_name = biz[0]["name"] if biz else "Your business"
 
-    data = build_digest_data(schedule)
+    preview_schedule_state = {**schedule}
+    if include_lead_researcher is not None:
+        preview_schedule_state["include_lead_researcher"] = include_lead_researcher
+    if include_competitor_agent is not None:
+        preview_schedule_state["include_competitor_agent"] = include_competitor_agent
+    if include_market_agent is not None:
+        preview_schedule_state["include_market_agent"] = include_market_agent
+
+    data = build_digest_data(preview_schedule_state)
     subject, html_body = email_service.build_sales_digest_email(
         business_name=business_name,
         lead_researcher_items=data["lead_researcher_items"],
