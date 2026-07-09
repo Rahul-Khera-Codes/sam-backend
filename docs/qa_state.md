@@ -1,10 +1,22 @@
 # QA State
 > Managed by Claude during QA sessions. Do not edit manually.
-> Last updated: 2026-07-08 (Session 58)
+> Last updated: 2026-07-09 (Session 59)
 
 ---
 
 ## Last Session
+| Field | Value |
+|---|---|
+| Session # | 59 |
+| Date | 2026-07-09 |
+| Tester | Claude Code (Canary/Playwright, real browser, LIVE PRODUCTION deployment) |
+| Tests Run | 6 (assertion-backed, all pass) |
+| Passed | 6 |
+| Failed | 0 |
+| Blocked | 0 |
+| Next Priority | Sales Employee production QA complete for Lead Researcher, Competitor Agent, Market Agent — all 3 session-58 same-day fixes (webhook-stuck-generating, competitor sparse-data/platform-drop, market-agent-banner-blank-on-load) confirmed holding under real production conditions (`https://portal.aiemployeesinc.com/`) with real paid Apify/Exa.ai calls. Report Scheduler not covered this session (deferred — already verified locally session 58). Observation (non-blocking): production app is serving a Vite dev client trying to HMR-connect to `localhost:8080` — worth checking the prod build/deploy config separately. Older platform items unchanged: TC-ROLES-002 + TC-TEAM-006 still open. |
+
+## Previous Session
 | Field | Value |
 |---|---|
 | Session # | 58 |
@@ -16,17 +28,6 @@
 | Blocked | 0 |
 | Next Priority | Sales Employee: all 3 same-session bugs resolved (TC-SALES-LR-003 validators, TC-SALES-CA-004 `data_availability` field, TC-SALES-MA-001 latest-run fetch on load) — see `docs/QA_FINDINGS.md` Resolved Failures. Older platform items unchanged: TC-ROLES-002 + TC-TEAM-006 still open. |
 
-## Previous Session
-| Field | Value |
-|---|---|
-| Session # | 7 |
-| Date | 2026-04-29 |
-| Tester | Claude Code (Playwright) |
-| Tests Run | 3 (1 pass, 1 fail, 1 blocked) |
-| Passed | 1 |
-| Failed | 1 |
-| Blocked | 1 |
-| Next Priority | TC-ROLES-002 (stale closure fix needed) + TC-TEAM-006 (confirmation dialog) — developer fixes required; AI behavior via live voice call; clean up QA Test Role + QA Test Location from DB |
 
 ---
 
@@ -184,6 +185,10 @@
 | Report Scheduler — CRUD, preview, empty-recipient guard | Session 58 | ✅ PASS |
 | Report Scheduler — send-test (real email confirmed) | Session 58 | ✅ PASS |
 | Report Scheduler — module-toggle preview update | Session 58 | ✅ PASS |
+| Lead Researcher — invalid URL rejected (PRODUCTION) | Session 59 | ✅ PASS — verified live on portal.aiemployeesinc.com, fix holds |
+| Lead Researcher — valid URL → full card (PRODUCTION) | Session 59 | ✅ PASS — verified live, no stuck loading state |
+| Competitor Agent — generate report, all 4 platforms (PRODUCTION) | Session 59 | ✅ PASS — verified live, not stuck generating, 4/4 platforms incl. sparse-data indicator |
+| Market Agent — banner on page load (PRODUCTION) | Session 59 | ✅ PASS — verified live, real content on load, no manual refresh needed |
 
 ---
 
@@ -221,6 +226,7 @@
 | 5 | 2026-04-29 | 5 | 3 | 1 | 1 | Roles verify + Phone Numbers + Locations |
 | 6 | 2026-04-29 | 16 | 6 | 0 | 10 | CSE structural + AI behavior blocked |
 | 7 | 2026-04-29 | 3 | 1 | 1 | 1 | TC-ROLES-002 retest + TC-TEAM-006 blocked + Support email |
+| 59 | 2026-07-09 | 6 | 6 | 0 | 0 | Sales Employee PRODUCTION QA (Lead Researcher, Competitor Agent, Market Agent — live deployment, real paid API calls) |
 
 ---
 

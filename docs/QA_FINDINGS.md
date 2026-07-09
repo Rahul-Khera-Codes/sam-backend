@@ -10,14 +10,14 @@
 
 | Metric | Count |
 |---|---|
-| Total Tests Run | 76 |
-| Total Passed | 56 |
+| Total Tests Run | 82 |
+| Total Passed | 62 |
 | Total Failed | 8 |
 | Total Blocked | 13 |
 | Open Failures | 2 (TC-TEAM-006, TC-ROLES-002 — real bugs, older platform sessions) |
 | Resolved Failures | 3 (TC-SALES-LR-003, TC-SALES-CA-004, TC-SALES-MA-001 — Sales Employee session 58, fixed same session and re-verified live) |
 | Hard Blockers (pre-existing) | 1 (Billing — Stripe not integrated) |
-| Last Updated | 2026-07-08 (Session 58 — Sales Employee full E2E QA + same-session fixes, real browser via Canary/Playwright) |
+| Last Updated | 2026-07-09 (Session 59 — Sales Employee production QA, live deployment, real browser via Canary/Playwright) |
 
 ---
 
@@ -408,4 +408,21 @@
 - **Update, same session**: all 3 findings fixed and live-verified immediately after this QA pass (user explicitly asked to move from QA mode to fixing). See Resolved Failures above for fix details + commits. TC-SALES-MA-001 fixed with a frontend-only change (reuses existing `run_id` on cards). TC-SALES-LR-003 fixed with matching frontend+backend URL validators. TC-SALES-CA-004 fixed at the root — replaced regex-based sparse-data detection with an AI-judged `data_availability` field, verified against real stored data.
 
 ---
+
+### Session 59 — 2026-07-09 — Sales Employee production QA (live deployment, Canary/Playwright, real browser)
+- Status: ✅ Complete — 0 new failures (both same-day fixes hold in production)
+- Tool: Canary session recording (real Playwright browser, trace/video/HAR/console) — session `sales-employee-prod-qa-mrd8vzh3-a48d3c`, report at `~/.canary/sessions/sales-employee-prod-qa-mrd8vzh3-a48d3c/report.html`
+- Scope: first-ever test against the LIVE production deployment (`https://portal.aiemployeesinc.com/`), not localhost — real Apify scrapes, real Exa.ai searches, real webhook config. Logged in as `rahul.excel2011@gmail.com`; only one location available on this account ("Eifel Tower 8" — "Woyce Tech" business/location did not exist for this login, used the only selector option per task fallback instruction).
+- Tests Run: 6 (assertion-backed) | Passed: 6 | Failed: 0
+- **Lead Researcher** — ✅ PASS end-to-end:
+  - Invalid URL (`not-a-real-url`) rejected client-side with clear toast: "That doesn't look like a LinkedIn profile URL — expected something like linkedin.com/in/your-profile" — no backend call fired, no paid Apify run wasted. Confirms TC-SALES-LR-003 fix holds in prod.
+  - Valid URL (`https://www.linkedin.com/in/arun-kumar-64450b278/`, previously scraped) → completed in ~1 min to a full lead card (name, role, predicted email w/ confidence framing, best time to reach, job role insights, pain points, outreach template). No stuck loading state.
+- **Competitor Agent** — ✅ PASS end-to-end, TC-SALES-CA-004 fix confirmed live:
+  - HubSpot found in existing monitored competitors (3 total: example.com, Higgsfield AI, HubSpot).
+  - Pre-existing report (generated before today's fix) showed only 2/4 platforms (LinkedIn, Facebook) — reproduces the original bug symptom as a baseline.
+  - Clicked "Generate New Report" → real Apify scrape completed in ~80 seconds, did NOT get stuck in "Generating..." (confirms webhook-crash fix holds in prod's separate webhook/ngrok config). New report rendered all 4/4 platforms (YouTube, LinkedIn, Instagram, Facebook), including a "Limited data available for this platform" sparse-data indicator on Facebook — confirms the AI-judged `data_availability` fix is live and firing correctly against real production data.
+- **Market Agent** — ✅ PASS:
+  - Page already had prior data; "What's Changing" AI Generated Summary banner showed real content immediately on page load (restaurant-industry trend summary), no blank state, no manual refresh triggered (per task instruction — page was not empty/never-tested). Confirms TC-SALES-MA-001 fix holds in prod. 8 analyst cards rendered with real content (Business Intelligence, Pricing Watchdog, Innovation Strategist, Consumer Insights, Market Research, Cultural, Futurist, Trend Analyst).
+- No non-Vite-HMR console errors observed across the entire session (the app appears to be served with a Vite dev client trying to connect to `localhost:8080` from production, worth a separate look but did not block functionality — noted as observation, not a failure).
+- All 3 same-day fixes (webhook-stuck-generating, competitor sparse-data/platform-drop, market-agent-banner-blank-on-load) verified holding under real production conditions with real paid API calls.
 *Maintained by Claude Code during QA sessions. Source code is never modified.*
