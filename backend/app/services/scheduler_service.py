@@ -20,6 +20,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.core.supabase import supabase_admin
 from app.services import livekit_service
+from app.routers.market_agent import run_market_agent_refresh
+from app.routers.report_scheduler import send_digest
 
 logger = logging.getLogger(__name__)
 
@@ -387,6 +389,89 @@ async def run_noshow_calls() -> None:
     logger.info("Scheduler: no-show calls check finished")
 
 
+async def run_market_agent_daily_refresh() -> None:
+    """
+    Daily refresh for Market Agent (Sales Employee) — only for businesses that
+    have actually used the feature before (a prior run, or a custom analyst
+    defined), to avoid spending Exa/OpenAI money on businesses that have
+    never opened this screen.
+    """
+    logger.info("Scheduler: Market Agent daily refresh started")
+
+    try:
+        run_biz_ids = {
+            r["business_id"]
+            for r in supabase_admin.table("market_analysis_runs").select("business_id").execute().data
+        }
+        custom_biz_ids = {
+            r["business_id"]
+            for r in supabase_admin.table("market_custom_analysts").select("business_id").execute().data
+        }
+    except Exception as e:
+        logger.error("Scheduler: failed to fetch Market Agent business list: %s", e)
+        return
+
+    business_ids = run_biz_ids | custom_biz_ids
+    for business_id in business_ids:
+        try:
+            run_id = await run_market_agent_refresh(business_id, triggered_by="scheduled")
+            logger.info("Scheduler: Market Agent refresh triggered — business=%s run=%s", business_id, run_id)
+        except Exception as e:
+            logger.error("Scheduler: Market Agent refresh failed for business %s: %s", business_id, e)
+
+    logger.info("Scheduler: Market Agent daily refresh finished")
+
+
+async def run_report_scheduler_digests() -> None:
+    """
+    Hourly sweep for Report Scheduler (Sales Employee) — check every active
+    schedule and send if due per its frequency. Marks last_sent_at
+    immediately before sending, same double-send prevention pattern as the
+    reminder/reschedule/no-show jobs above.
+    """
+    logger.info("Scheduler: Report Scheduler digest sweep started")
+    now = datetime.now(timezone.utc)
+    due_after = {"daily": timedelta(hours=24), "weekly": timedelta(days=7), "monthly": timedelta(days=30)}
+
+    try:
+        schedules = (
+            supabase_admin.table("report_schedules").select("*").eq("is_active", True).execute().data
+        )
+    except Exception as e:
+        logger.error("Scheduler: failed to fetch report_schedules: %s", e)
+        return
+
+    for schedule in schedules:
+        recipients = schedule.get("recipients") or []
+        if not recipients:
+            continue
+
+        last_sent_at = schedule.get("last_sent_at")
+        if last_sent_at:
+            elapsed = now - datetime.fromisoformat(last_sent_at)
+            if elapsed < due_after.get(schedule["frequency"], timedelta(days=7)):
+                continue
+
+        try:
+            supabase_admin.table("report_schedules").update(
+                {"last_sent_at": now.isoformat()}
+            ).eq("id", schedule["id"]).execute()
+        except Exception as e:
+            logger.error("Scheduler: failed to mark last_sent_at for schedule %s: %s", schedule["id"], e)
+            continue
+
+        try:
+            sent = await send_digest(schedule, recipients)
+            logger.info(
+                "Scheduler: Report Scheduler digest sent=%s schedule=%s business=%s",
+                sent, schedule["id"], schedule["business_id"],
+            )
+        except Exception as e:
+            logger.error("Scheduler: Report Scheduler digest failed for schedule %s: %s", schedule["id"], e)
+
+    logger.info("Scheduler: Report Scheduler digest sweep finished")
+
+
 # ── Scheduler lifecycle ───────────────────────────────────────────────────────
 
 def start_scheduler() -> None:
@@ -414,8 +499,27 @@ def start_scheduler() -> None:
         replace_existing=True,
         misfire_grace_time=300,
     )
+    scheduler.add_job(
+        run_market_agent_daily_refresh,
+        trigger="interval",
+        hours=24,
+        id="market_agent_daily_refresh",
+        replace_existing=True,
+        misfire_grace_time=3600,  # allow up to 1 hour late start
+    )
+    scheduler.add_job(
+        run_report_scheduler_digests,
+        trigger="interval",
+        hours=1,
+        id="report_scheduler_digests",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
     scheduler.start()
-    logger.info("Scheduler started — reminder + reschedule + no-show calls run every hour")
+    logger.info(
+        "Scheduler started — reminder + reschedule + no-show + report-scheduler-digest calls run hourly, "
+        "Market Agent refresh runs daily"
+    )
 
 
 def stop_scheduler() -> None:

@@ -629,3 +629,98 @@ async def send_staff_cancellation_notification(
             to=staff_email, subject=subject, html_body=html_body, plain_body=plain_body)
     except Exception:
         return False
+
+
+# ── Sales Employee — Report Scheduler digest ──────────────────────────────────
+
+def build_sales_digest_email(
+    business_name: str,
+    lead_researcher_items: list[dict],
+    competitor_agent_items: list[dict],
+    market_agent_summary: Optional[str],
+    market_agent_items: list[dict],
+) -> tuple[str, str]:
+    """
+    Returns (subject, html_body) for a Report Scheduler digest email.
+    Each `*_items` list is already filtered to only what should be shown —
+    an empty list means that section is simply omitted, not shown empty.
+
+    Every interpolated field is HTML-escaped: this content is indirectly
+    sourced from scraped competitor social posts and Exa web search results —
+    both attacker-adjacent (a competitor's own post, or a page Exa indexes,
+    could contain markup) — not fully trusted internal data.
+    """
+    from html import escape
+
+    subject = f"{business_name} — Sales Intelligence Digest"
+    business_name_safe = escape(business_name)
+
+    sections = ""
+
+    if lead_researcher_items:
+        rows = "".join(
+            f"<div class='row'><span class='label'>{escape(item.get('full_name') or 'Unknown')}"
+            f" ({escape(item.get('company_name') or '—')})</span>"
+            f"<span class='value'>{escape(item.get('headline') or item.get('job_role_insights') or '')}</span></div>"
+            for item in lead_researcher_items
+        )
+        sections += f"""<div class="card"><h3>Lead Researcher</h3>{rows}</div>"""
+
+    if competitor_agent_items:
+        rows = "".join(
+            f"<div class='row'><span class='label'>{escape(item.get('competitor_name') or 'Competitor')}</span>"
+            f"<span class='value'>{escape(item.get('overview') or 'No summary available')}</span></div>"
+            for item in competitor_agent_items
+        )
+        sections += f"""<div class="card"><h3>Competitor Agent</h3>{rows}</div>"""
+
+    if market_agent_summary or market_agent_items:
+        summary_html = (
+            f"<p style='margin:0 0 12px;color:#18181b;font-size:13px;'>{escape(market_agent_summary)}</p>"
+            if market_agent_summary
+            else ""
+        )
+        rows = "".join(
+            f"<div class='row'><span class='label'>{escape(item.get('analyst_name') or 'Analyst')}</span>"
+            f"<span class='value'>{escape(item.get('headline') or '')}</span></div>"
+            for item in market_agent_items
+        )
+        sections += f"""<div class="card"><h3>Market Agent — What's Changing</h3>{summary_html}{rows}</div>"""
+
+    if not sections:
+        sections = "<p style='color:#71717a;font-size:13px;'>No new data since the last digest.</p>"
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {{ margin: 0; padding: 0; background: #f4f4f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }}
+    .wrapper {{ max-width: 600px; margin: 32px auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.08); }}
+    .header {{ background: #18181b; padding: 28px 32px; }}
+    .header h1 {{ margin: 0; color: #ffffff; font-size: 20px; font-weight: 600; }}
+    .header p {{ margin: 4px 0 0; color: #a1a1aa; font-size: 13px; }}
+    .body {{ padding: 28px 32px; }}
+    .card {{ background: #f9f9f9; border: 1px solid #e4e4e7; border-radius: 8px; padding: 20px 24px; margin-bottom: 20px; }}
+    .card h3 {{ margin: 0 0 12px; font-size: 15px; color: #18181b; }}
+    .row {{ display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; border-bottom: 1px solid #e4e4e7; }}
+    .row:last-child {{ border-bottom: none; }}
+    .label {{ color: #18181b; font-size: 13px; font-weight: 600; white-space: nowrap; }}
+    .value {{ color: #52525b; font-size: 13px; text-align: right; }}
+    .footer {{ padding: 20px 32px; background: #f4f4f5; font-size: 12px; color: #71717a; text-align: center; }}
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="header">
+      <h1>{business_name_safe}</h1>
+      <p>Sales Intelligence Digest</p>
+    </div>
+    <div class="body">{sections}</div>
+    <div class="footer">&copy; {business_name_safe} &bull; Sent by your Sales Employee — AgenticBI.</div>
+  </div>
+</body>
+</html>"""
+
+    return subject, html

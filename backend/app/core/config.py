@@ -50,9 +50,26 @@ class Settings(BaseSettings):
     stripe_growth_price_id: str = ""
     stripe_pro_price_id: str = ""
     stripe_enterprise_price_id: str = ""
+    stripe_exec_agent_price_id: str = ""
+    # Free during beta — flip on once Sam names a price and is ready to enforce.
+    # See docs/adr/0001-billing-addon-access-gating.md
+    exec_agent_addon_enforced: bool = False
     
     billing_success_url: str = "http://localhost:8080/dashboard/settings/billing?success=true"
     billing_cancel_url: str = "http://localhost:8080/dashboard/settings/billing"
+
+    # Apify (Sales Employee — Lead Researcher + Competitor Agent)
+    apify_api_token: str = ""
+    apify_webhook_base_url: str = ""  # public backend URL Apify calls on run completion — set in prod, use ngrok for local testing
+    apify_webhook_secret: str = ""  # random string, checked on inbound webhook calls so randoms can't spoof "run finished" events
+
+    # YouTube Data API v3 (Sales Employee — Competitor Agent). Plain API key, not
+    # OAuth — separate from the google_client_id/secret above, which are for
+    # Calendar/Gmail. Enable "YouTube Data API v3" on the same Google Cloud project.
+    youtube_api_key: str = ""
+
+    # Exa.ai (Sales Employee — Market Agent). Sent via x-api-key header, not Authorization.
+    exa_api_key: str = ""
 
     # App
     environment: str = "development"

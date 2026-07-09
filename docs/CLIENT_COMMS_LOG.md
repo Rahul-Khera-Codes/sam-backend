@@ -5,6 +5,69 @@ Most recent entry at top.
 
 ---
 
+## 2026-07-06 — Sales Employee requirements doc sent to the group
+
+**Rahul → Yuvraj/Sam/Charles:** converted `docs/sales-employee-agenticbi-requirements.md` (re-verified against the PDF mockups, 2026-07-02) to docx and sent it to the group. Covers all 4 modules, the confirmed Apify pipeline, what's NOT included, and the platform-integration cost breakdown for LinkedIn/Facebook/Instagram/YouTube/news sources.
+
+Billing add-on live-test (Stripe test-mode price for Executive Agent) put on hold at Rahul's request — he'll provide test details later rather than picking a placeholder value now.
+
+---
+
+## 2026-07-02 (evening) — Sam sent the ChatGPT-scope questions, reported a calendar bug, asked about billing add-on
+
+**Rahul → Sam (07:02 PM):** sent the 4 drafted questions on ChatGPT scope + cost/value (see 2026-07-02 entry below). No reply yet as of this log.
+
+**Sam → Rahul (08:40 PM): "I tried to setup an appointment, but got error message 'was not able to setup an appointment, google calendar is not connected.' I checked and it is connected."**
+- **Root cause (confirmed by Rahul independently, same day):** local dev environment and the production server use **different** Google OAuth client credentials, but both read/write the **same** Supabase DB (same `google_oauth_tokens`-type rows). Whichever environment last refreshed a token stamps it with that environment's client — so the *other* environment's calendar/Gmail calls fail with an `invalid_client`-class error until someone reconnects (Integrations → Manage → disconnect/reconnect), which just re-issues a fresh token under whichever environment did the reconnecting. **This is a known, previously-flagged, never-fully-fixed risk** — see `docs/SESSION_HANDOFF.md` "Project/client-id discrepancy" note. Reconnecting is a workaround, not a fix — it will keep recurring as long as local dev shares the production DB with different credentials.
+- **Not yet replied to Sam** — no fix applied yet, root cause understood but structural decision needed (see TODO.md).
+
+**Sam → Rahul (08:43 PM): "Also, under the billing section where is the toggle to addon the executive assistant?"**
+- **Rahul → Sam (09:54 PM): "The billing section need to be updated, I'm working on it currently."** Matches the already-tracked "Billing UI update" blocker (`memory/project_blockers.md`) — Executive Agent isn't wired into billing yet (still free during beta).
+
+---
+
+## 2026-07-02 — Questions drafted for Sam (NOT yet sent) — ChatGPT scope + cost/value
+
+Rahul decided to talk to Sam before scoping the remaining "ChatGPT-like" item (#1) or the persistent chat history item (#6) — both depend on what Sam actually wants Remi to be. Questions drafted, ready to send:
+
+1. **What do you mean by "ChatGPT-like"?** Remi already answers general questions outside of email/calendar/appointments. What's missing — more casual chit-chat, business advice, help writing things, or something specific? An example would help.
+2. **Should there be things Remi does NOT talk about?** To keep her focused (and cheaper to run) — limit her to business stuff (email, calendar, appointments, general work questions) and steer away from personal chit-chat/random topics? Or should she be open to anything, like ChatGPT?
+3. **Is the cost worry about our running cost, or about convincing customers to pay instead of using free ChatGPT?** Different problems, different fixes. If it's running cost, we can keep trimming it (already cut some this week). If it's customer value, the fix is making it obvious what Remi does that ChatGPT can't (real email, real calendar, real bookings) — not adding more open-ended chat.
+4. **If it's the customer-value problem — should we lean into showing what makes Remi different, instead of adding more general chat?** More general Q&A makes "why not just use ChatGPT" worse, not better — that's literally what ChatGPT already does for free.
+
+---
+
+## 2026-07-01 (evening) — Sam pushes back on cost/value, 7 new UI requests, ChatGPT-scope question raised
+
+**Note on this whole exchange:** Rahul pushed `feature/exec-agent-improvements` and gave it to Sam for testing yesterday, but it's **unconfirmed whether Sam actually tested it** — he only added the 7-item task list and sent the cost-pushback message below, no explicit test feedback. Don't read Sam's silence on the fixes as approval or as a failed test — it's simply unverified either way.
+
+**Rahul → Sam (06:19 PM):** sent the day's bug-fix summary for attach-document-to-email — three layered issues found and fixed in this session: (1) no attachment capability existed at all, (2) document library was cached once at session start instead of checked live, (3) the model answered "no documents" from its own earlier turn instead of re-checking. All three fixed, committed, agent restarted.
+
+**Rahul (06:20 PM, internal):** raised the open question already tracked in TODO.md — the "ChatGPT-like" general Q&A has no defined scope or boundary. Without one, Remi can answer literally anything, with no limit. Needs a decision before building more of it. (This turned out to be directly related to Sam's message below.)
+
+**Rahul → Sam (08:40 PM):** "Also, I've updated the Executive Agent visibility so it can be offered as a subscription add-on. I've implemented toggle-based availability for now, and later we can control access based on whether the user has purchased the subscription." — **Note:** what was actually built this session is the **avatar** on/off toggle (`avatar_enabled`), not a whole-Executive-Agent visibility/subscription gate. Worth clarifying with Sam so expectations match what's actually shipped — the avatar toggle does not currently gate access to the Executive Agent itself.
+
+**Sam → Rahul (11:42 PM):** **"Rahul what is the cheapest way to run the executive assistant. People will not pay to use this when they can use ChatGPT for free."** Direct pushback on running cost and on value/differentiation versus free ChatGPT. Connects straight to Rahul's 06:20 PM note: Remi currently runs on OpenAI's Realtime API for every interaction (not a cheap text-only model), and the prompt has no topic boundary — the same lack of scope is both the expensive part and the undifferentiated part. **Needs a strategy conversation with Sam** — what Remi is actually *for* versus general chat, and the cheapest architecture that still delivers that — not a pure engineering fix.
+
+**Sam — 7 new requests logged (kanban board), "check everything thoroughly first":**
+1. Add more functionality "like ChatGPT" — blocked on the cost/scope conversation above.
+2. Remove business name from the opening greeting — target: "Hi, I'm Remi—how can I help you today?"
+3. Editable email **body** in the draft/preview card (fix a typo without re-dictating the whole email).
+4. Editable **recipient address** in the draft/preview card.
+5. Editable **subject** in the draft/preview card.
+6. Persistent chat memory / sidebar — access previous conversations. Currently the transcript resets to empty on every new session; no history is saved anywhere.
+7. Edit + copy buttons on the transcript/speech-to-text bubbles, to fix minor mistakes without repeating the whole utterance.
+
+**Rahul verified against current code (2026-07-01) before scoping any of the above:**
+- #2 — one-line fix, `agent/executive_agent.py:1188-1189`.
+- #3/#4/#5 — all in `AgentCardView.tsx`'s `email_draft` card (L245-260): currently 100% read-only text, no input fields at all. One workstream.
+- #6 — confirmed zero persistence anywhere: `useExecutiveSession.ts` wipes the transcript on every `connect()`; no DB table or endpoint stores exec-agent conversation history. The biggest of the 7 — new schema + save-on-message + history UI.
+- #7 — `TranscriptPanel.tsx` bubbles are plain text, no buttons.
+
+**Proposed sequencing (pending confirmation):** #2 now (trivial) → editable email draft fields (#3–5, one workstream) → transcript edit/copy (#7) → persistent chat history (#6, biggest, own workstream) → #1 blocked on the cost/scope conversation with Sam.
+
+---
+
 ## SAM ITEMS — re-triaged 2026-06-25 (Sam is non-technical: only surface what he must ACT on, or build-and-demo for feedback)
 
 **Build now, don't ask — show Sam for feedback when ready:**

@@ -1,4 +1,4 @@
-# Session Handoff — 2026-06-25 (Session 53)
+# Session Handoff — 2026-07-08 (Session 59)
 
 Read this at the start of every session. It captures the full current state so you can pick up immediately.
 
@@ -17,13 +17,13 @@ Two repos:
 - **Backend + Agent:** `/home/lap-68/Documents/gt-rahul/sam-backend`
 - **Frontend:** `/home/lap-68/Documents/gt-rahul/ai-employees-app`
 
-Both repos are on `feature/google-calendar-timezone`, deployed to VPS. **Executive Assistant Phase-1 is now essentially code-complete** (session 53). **Pending before merge:** live-verify the new UI (WS4 avatar, WS10 activity feed, WS11–13 Phase B action cards), apply the timezone migration, then merge to main. Earlier "calendar-create broken" is FIXED + live-verified (WS0).
+Backend + agent on `feature/exec-agent-improvements` (sessions 55–56, unmerged, pending items below). **Sessions 57–59 are on a NEW branch, `feature/sales-lead-researcher`** (both repos) — the entire Sales Employee backend build (all 4 modules: Lead Researcher, Competitor Agent, Market Agent, Report Scheduler), now complete, full-E2E QA'd via real browser, and all bugs found have been fixed and re-verified. See "What Was Done This Session (Session 59)" below for full detail. **Pending before merge of the OLDER branch:** live-verify WS4/10/11/12/13 action cards, reconcile `fix/avatar-aec`, apply timezone migration, then merge to main — these are unrelated/unaffected by the new Sales Employee work.
 
-> **Restart needed to pick up session-53 code:** `docker compose restart sam-executive-agent` (backend agent changes) + frontend is on Vite HMR (just reload `/dashboard/executive`).
+> **Restart needed:** `docker compose restart sam-executive-agent` after any backend/agent code changes.
 
 ---
 
-## System Status (2026-06-20)
+## System Status (2026-07-01)
 
 ### Core — Working end-to-end ✅
 - Inbound SIP call → agent answers → books appointment → transcript + summary → emails → shows in UI
@@ -49,8 +49,8 @@ Both repos are on `feature/google-calendar-timezone`, deployed to VPS. **Executi
 - Agent OFF → silent SIP REFER to business phone
 - Google OAuth token refresh logging — all 4 paths log exact error on failure
 
-### Executive Agent "Remi" — Phase-1 essentially CODE-COMPLETE (sessions 52–53) ⚠️ pending live verify + merge
-Backend + frontend committed on `feature/google-calendar-timezone` (both repos), deployed and running from that branch. Worked as separate trackable workstreams (verify → spec → implement → commit); specs in `docs/superpowers/specs/2026-06-2{4,5}-executive-agent-*`.
+### Executive Agent "Remi" — Phase-1 CODE-COMPLETE (sessions 52–55) ⚠️ pending live verify + merge
+Backend + frontend on `feature/exec-agent-improvements` (session 55). Session 55 shipped attach-doc, center buttons, avatar toggle. Earlier workstreams (sessions 52–53) on `feature/google-calendar-timezone`; both branches need merging. Worked as separate trackable workstreams (verify → spec → implement → commit); specs in `docs/superpowers/specs/2026-06-2{4,5}-executive-agent-*` + `docs/superpowers/specs/2026-07-01-exec-agent-avatar-toggle.md`.
 
 **✅ DONE + live-verified:** WS0 calendar-create tz fix · WS1 naming "Remi" · WS2 personality (`voice="cedar"`, `temp=0.9`, English-lock, `generate_reply(user_input=text)`) · WS5 Gmail location_id · WS6 `gmail.readonly` scope · WS7 list_emails perf (~11s→~2s) · WS8 compose/send NEW email (`email_id` optional + `draft_email`) · WS3 A.1 info cards (email_list, calendar_schedule) · WS9 email-IDs back in model context (fixed hallucinated `read_email` IDs) + hpack/httpx log quieting.
 
@@ -180,7 +180,14 @@ Key env files:
 
 ## Pending Manual Steps
 
-- [ ] **Live-verify the session-53 Executive Assistant UI** (after `docker compose restart sam-executive-agent` + reload `/dashboard/executive`): WS4 avatar states; WS10 activity caption (spinner→✓, no stuck spinner on error); WS11 free_slots tap→preview→approve→booked; WS12 appointment Cancel(confirm)/Reschedule; WS13 email_detail + Reply. WS3 A.2 draft/event previews still approve/send.
+- [ ] **Apply the `updated_at`-trigger migration** (session 58) — `ai-employees-app/supabase/migrations/20260707000002_sales_employee_updated_at_triggers.sql`. Written + committed, verified via a live test that it is NOT yet firing (checked 2026-07-07). Run `supabase db push`.
+- [ ] **Set up a persistent ngrok static domain** (session 58) — reserve one at `dashboard.ngrok.com/domains` (free tier includes 1), restart the tunnel as `ngrok http --url=<reserved-domain> 8003`, then send the domain to update `APIFY_WEBHOOK_BASE_URL` in `.env` + restart backend. Root cause of a real bug Yuvraj hit: Apify's webhook got a 404 **from ngrok itself** because the tunnel wasn't running — not a code bug, but a real fragility while multiple people test against this.
+- [ ] **Real production deploy for Sales Employee** — still running on ngrok (Apify webhook) + a personal Exa/Apify/YouTube setup in places. Needed before any real customer uses Lead Researcher/Competitor Agent/Market Agent/Report Scheduler.
+- [ ] **Sam's lawyer sign-off** on scraped-lead outreach sourcing (CASL/ToS) — doesn't block the build, blocks public launch of Sales Employee.
+- [ ] **Live-test the billing add-on** (session 56) — needs a real Stripe test-mode subscription on at least one business, since the toggle is currently disabled for all of them (none has a base plan). Confirm enable/disable creates/removes the Stripe subscription item, and confirm `/dashboard/executive` stays accessible either way (enforcement is off by default).
+- [ ] **Whole-product billing enforcement gap** (session 56, found + deliberately deferred) — no subscription status is checked anywhere outside the Billing page's display, for any feature. See `TODO.md` + `memory/project_blockers.md` for the agreed architecture. Don't rush this.
+- [ ] **Reconcile `fix/avatar-aec` with `feature/exec-agent-improvements` before merge.** `fix/avatar-aec` (both repos, session 54) fixes avatar-audio/mic echo via `AudioContext`/`webAudioMix` routing + headphone notice — NOT merged into this branch. Frontend commits `486cedd`/`6002792`/`eeca509` heavily rewrite `useExecutiveSession.ts`, the same file session 55 touched for the avatar toggle. Diff the two branches on that file and manually reconcile; do not assume a clean auto-merge.
+- [ ] **Live-verify Executive Agent UI** (after `docker compose restart sam-executive-agent` + reload `/dashboard/executive`): WS4 avatar states; WS10 activity caption (spinner→✓, no stuck spinner on error); WS11 free_slots tap→preview→approve→booked; WS12 appointment Cancel(confirm)/Reschedule; WS13 email_detail + Reply. WS3 A.2 draft/event previews still approve/send. **Session-55 additions:** avatar toggle Video/VideoOff persists across page reload; attach-doc sends PDF in email; Start Session + Unmute Mic centered.
 - [ ] **Dev OAuth client for local Gmail testing** — own Google project, Testing mode, localhost redirect URIs (`http://localhost:5173/integrations/{gmail,google}/callback`), scopes gmail.send+gmail.readonly+calendar.events+userinfo.email+openid, dev as test user; put client id/secret in local `backend/.env` AND `agent/.env.local`.
 - [ ] **Decision (Sam): Gmail CASA** — commit to restricted-scope assessment for launch, or narrow feature. Don't escalate the core product's pending verification.
 - [ ] **Merge `feature/google-calendar-timezone` → main** on both repos (deployed to VPS, NOT ready until exec-agent hardening + timezone migration done)
@@ -201,9 +208,159 @@ Key env files:
 - All through `20260428000003` ✅ applied
 - `20260522000001` — profiles team visibility RLS ✅
 - `20260522000000` — business_documents table ✅
+- `20260702000000` — businesses exec-agent addon (`stripe_exec_agent_item_id`) ✅
+- `20260706000000` — `lead_lookups` table ✅
+- `20260706000001` — `lead_lookups` RLS ✅
+- `20260706000002` — `competitors`/`competitor_reports`/`competitor_report_platform_runs` + RLS ✅
+- `20260707000000` — `market_custom_analysts`/`market_analysis_runs`/`market_analysis_cards` + RLS ✅
+- `20260707000001` — `report_schedules` + RLS ✅
 
 ## Pending Migrations (not yet applied)
 - `20260618000000_businesses_timezone.sql` — add `timezone TEXT DEFAULT 'America/Toronto'` to businesses. File exists in `ai-employees-app/supabase/migrations/`. Run `supabase db push`.
+- `20260707000002_sales_employee_updated_at_triggers.sql` — adds the `public.handle_updated_at()` trigger (already used by every other table in this schema) to all 8 new Sales Employee tables. Written session 58, verified via live test that it's NOT yet firing.
+
+---
+
+## What Was Done This Session (Session 59, 2026-07-08)
+
+**Branch `feature/sales-lead-researcher` (both repos). Full end-to-end QA of all 4 Sales Employee modules via real browser (Canary/Playwright) against the live frontend + backend + real external APIs — no curl shortcuts — followed by fixing and re-verifying every bug found in the same session.**
+
+### 1. QA pass
+Created `docs/sales-employee-qa-test-sheet.md` (20 test cases, realistic + dummy data) and ran 25 tests total across Lead Researcher, Competitor Agent, Market Agent, Report Scheduler, plus cross-cutting login/nav. 22 passed outright; 3 real, reproducible bugs found — none caught by earlier backend-only testing. Findings logged in `docs/QA_FINDINGS.md` per CLAUDE.md QA rules (no source touched during this pass).
+
+### 2. Bugs found + fixed (user said "move on to fixes" after the QA pass)
+- **TC-SALES-LR-003** — no URL format validation anywhere; garbage input started a real paid Apify run before failing. Fixed with a matching LinkedIn-URL regex validator on both frontend (`NewAnalysisTab.tsx`, pre-submit check) and backend (`schemas/sales.py`, Pydantic `field_validator` on `LeadLookupRequest`) — defense in depth, same pattern as the existing `report_schedules` recipient validator. Commits `ad8c6fc`, `3d4ccdc`.
+- **TC-SALES-CA-004** — the "sparse/limited data" regex in `CompetitorReportDialog.tsx` never matched real backend prose, so the honesty safeguard never fired. Root-caused as a fundamentally fragile approach (regex over free-form LLM text) rather than patched with a better regex — fixed by having the LLM directly judge and return an explicit `data_availability: "sparse"|"sufficient"` field per platform (`competitor_agent.py` synthesis prompt + `PlatformActivity` schema), with the old regex kept only as a fallback for pre-existing reports. Commits `43cd1b7` (backend), `d9aba07` (frontend, also consolidated 4 repeated per-field notes into one badge).
+- **TC-SALES-MA-001** — "What's Changing" banner never populated on a normal page load, only right after a live-triggered refresh, even though a valid summary already existed in the DB. Fixed in `MarketAgent.tsx`: `fetchCards()` now fetches the latest run's stored summary via its existing `run_id` instead of only setting it from a live-triggered response. Commit `fd0c281`.
+
+All 3 fixes re-verified live in a fresh browser session (not just re-read code) — see `docs/QA_FINDINGS.md` Resolved Failures for full before/after evidence. **All 25 test cases now pass.**
+
+### 3. Docs closed out
+`docs/QA_FINDINGS.md` (findings moved Active → Resolved, dashboard counts updated), `docs/qa_state.md` (coverage map + Last Session block updated to reflect the fixes), `docs/sales-employee-qa-test-sheet.md` (status cells + execution log updated) — all committed together.
+
+**Still open:** ngrok static domain (task in progress, waiting on a reserved domain from `dashboard.ngrok.com/domains`), `updated_at` trigger migration (written session 58, not yet applied), production deploy, Sam's lawyer sign-off — see Pending Manual Steps below, unchanged by this session.
+
+---
+
+## What Was Done This Session (Session 58, 2026-07-07)
+
+**Branch `feature/sales-lead-researcher` (both repos), continued from session 57. Built and live-verified the remaining 3 of 4 Sales Employee backend modules (Lead Researcher shipped session 57), then investigated a real bug report from Yuvraj's own testing.**
+
+### 1. Competitor Agent (backend, verified 2026-07-06 — carried into this handoff since not previously recorded here)
+Fan-out design: `POST /competitors` discovers LinkedIn/Facebook/Instagram/YouTube from a website URL (Jina Reader + GPT, SSRF-safe — never fetches the user-supplied URL directly). `POST /competitors/{id}/report` fans out to up to 4 platforms concurrently (LinkedIn/Facebook/Instagram via Apify + webhooks, YouTube via the official free Data API v3) with a concurrency-safe atomic-claim join step before synthesizing. 3 new tables + RLS from the start. Live-tested against hubspot.com — found + fixed 2 real bugs: a footer-truncation bug (`content[:20_000]` silently dropped every social link, which sat past the cutoff on a 60K-char page) and an unhandled legacy `/user/Username` YouTube URL format. API contract: `docs/competitor-agent-api-contract.md`.
+
+### 2. Market Agent (backend)
+Sam confirmed Exa.ai for this module (not the traditional news-API list originally being evaluated) after Rahul directly asked for confirmation. Yuvraj's own scoping doc raised 4 open questions (agent ownership, card purpose, trigger, execution model) — all resolved by product-owner+engineer reasoning grounded in the already-confirmed spec + Sales Employee's own constraints (no voice/chat component), confirmed back to Sam/Yuvraj. Architecture: 7 cards per refresh — 6 via Exa's `/search` with `outputSchema`+grounding (live-verified against a real query before building: `output.content`/`output.grounding` work exactly as documented), 7th "Business Intelligence" card reads the business's own `analytics.py` call-volume summary instead of the web. All run concurrently via `asyncio.gather` — Exa is synchronous (~40s worst case), no webhook infra needed unlike Apify. New daily APScheduler job. 3 new tables + RLS. Live-tested against a real business — all 7 cards completed cleanly on the first try, no bugs found. API contract: `docs/market-agent-api-contract.md`.
+
+### 3. Report Scheduler (backend) — last of the 4 modules, all now shipped
+No external API — pure aggregation of the other 3 modules' existing data, sent via the business's existing connected Gmail integration (same `send_email` path as appointment confirmations). CRUD + synchronous `/preview` + `/send-test` (sends to the requester's own email, doesn't touch `last_sent_at`). New hourly sweep job checks every active schedule against its daily/weekly/monthly frequency. Live-tested: real schedule created, previewed, and a real test email received via Gmail. Found + fixed 2 real issues: (1) Gmail token lookup was location-scoped and found nothing for a business whose Gmail connection was tied to a specific location, not business-wide — added a location-agnostic lookup specific to this module; (2) a security review caught HTML/XSS injection risk in the digest (content indirectly sourced from scraped competitor posts + Exa results, both attacker-adjacent) — fixed with HTML escaping + recipient email format validation. API contract: `docs/report-scheduler-api-contract.md`.
+
+### 4. Real bug investigation from Yuvraj's own testing
+Yuvraj reported 2 failed Lead Researcher lookups ("Timed out waiting for Apify — the webhook never arrived"). Root-caused via Apify's webhook-dispatch API rather than assuming: the actual Apify scrapes **succeeded** (confirmed via `actor-runs` API), but webhook delivery got **HTTP 404 from ngrok itself** (tunnel not running at that moment) — not a code bug. Manually recovered both lookups from Apify's already-succeeded dataset (re-ran the enrichment step against the existing scrape data) rather than making Yuvraj retry and spend more Apify credits — both now `status: completed` with real data (Arun Kumar, Yuvraj Singh). Separately found (while investigating timestamps) that `updated_at` was never being bumped on any `.update()` call across all 4 new modules (~28 call sites) — every other table in this schema already has a `public.handle_updated_at()` trigger for this, the 8 new tables were just missing it. Fixed at the DB level via a new migration (not by patching each Python call site, which would be fragile for any future update call) — **written, committed, not yet applied.**
+
+### 5. Infra/access resolved
+Sam added Rahul + Yuvraj to his real Apify organization and his Exa.ai organization (both confirmed access 2026-07-07). `APIFY_API_TOKEN` swapped from the personal/testing token to the new one, verified valid via a live API call. Still pending: a persistent ngrok static domain (task in progress, waiting on Rahul to reserve one) so the webhook tunnel URL survives restarts — the real fix is production deploy, separately tracked.
+
+---
+
+## What Was Done This Session (Session 56, 2026-07-02)
+
+**Huge session, branch `feature/exec-agent-improvements` (both repos). Grouped by thread.**
+
+### 1. Deep-verify pass on prior session's memory (housekeeping, found real errors)
+Corrected a hallucinated branch name in memory (`fix/avatar-aec` → `feature/exec-agent-improvements`) and discovered `fix/avatar-aec` is a **real, separate, unmerged branch** (audio echo-cancellation fix) that heavily rewrites `useExecutiveSession.ts` — same file this session touched repeatedly. Flagged as a real merge-conflict risk, not yet reconciled.
+
+### 2. Two more attach-doc bugs found via live re-test, both fixed
+- **Document library cached at session start instead of live per-call** — a document added mid-session was invisible until a new session started. Fixed: `_fetch_doc_by_name()` now fetches live on every call, matching how `list_emails`/`get_schedule` already worked.
+- **Model answered "no documents" from its own earlier turn instead of re-checking** — classic LLM tool-reliance-on-context behavior. Fixed with an explicit prompt rule: documents can change mid-conversation, always check fresh.
+
+### 3. Cost research + real audit → decision made: stay on OpenAI Realtime
+Two research passes (`docs/executive-agent-cost-analysis.md`): optimizing the current Realtime setup vs. a separate STT+LLM+TTS pipeline. Shipped a `session_usage_updated` listener logging real cache-hit % — live-tested, **plateaued at ~69–71%**, squarely in the "caching works" band. **Decision: stay on Realtime for both voice agents, don't build the pipeline.** Wrote `docs/voice-agents-cost-breakdown.md` (simple English, covers both CS agent + Remi) plus a per-provider appendix (specific LinkedIn/Deepgram/Cartesia/ElevenLabs/Claude-Haiku numbers) after Sam asked for one, with an explicit "test before swapping, cost isn't the whole decision" caveat.
+
+### 4. Small cost levers shipped
+- **Avatar default-off** — backend Pydantic default + frontend localStorage fallback both flipped to `False`.
+- **Idle-session auto-disconnect** — 3 minutes of inactivity (via LiveKit's built-in `user_state_changed`) hangs up the session. **Found + fixed a real bug live-testing this:** `ctx.room.disconnect()` only detaches the agent's own participant, not the frontend's separate WebRTC connection — frontend never noticed. Fixed by deleting the room server-side (`ctx.api.room.delete_room(...)`) instead, which force-disconnects everyone. Confirmed working by Rahul.
+
+### 5. Sam's remaining UI requests — 3 more shipped, live-verified
+- **Greeting** — dropped the business name from the opening hello.
+- **Editable email draft card** — recipient/subject/body all editable before Send. Found + fixed the same class of bug WS0 fixed for calendar events: `send_email_draft` now reads from the server-side pending preview instead of trusting the model to retype edited text.
+- **Transcript edit + copy buttons** — copy on every bubble; edit on the owner's own bubbles resends a correction as a new turn (can't rewrite what the model already heard) rather than literally editing history. Live-verified by Rahul with screenshots.
+
+### 6. Billing add-on for Executive Agent — built end-to-end, one real bug found
+Wrote **ADR 0001** (`docs/adr/0001-billing-addon-access-gating.md`) — first ADR in this repo — documenting: Stripe subscription *line item* (not separate subscription), price ID as a deploy-time env var, two independent gating layers (frontend `AuthContext` bootstrap extension for UX, mandatory backend check in `/executive/session` for real enforcement), both driven by one shared `EXEC_AGENT_ADDON_ENFORCED` flag (defaults **off** — free during beta). Implemented across ~9 commits, both repos. Migration applied. **Found + fixed a real bug:** queried the DB directly — every business, including Sam's own, has `stripe_subscription_id = NULL` (nobody's ever gone through real Stripe Checkout) — the add-on card was nested inside a check that only shows for paying businesses, so it was invisible to everyone. Fixed: card now always shows, disabled with an explanatory note when there's no base plan.
+
+**Bigger finding, logged and deliberately deferred, NOT fixed:** searched the whole backend — zero subscription/billing enforcement exists anywhere in the product, for any feature, outside the Billing page's own display. Whole-product gap, pre-dates this session, tracked in `TODO.md` + `memory/project_blockers.md` with the agreed architecture for whenever it's picked up (same two-layer pattern as the exec-agent add-on).
+
+### 7. Sales Employee — confirmed to start, full requirements doc written + re-verified
+Sam confirmed: start Sales Employee next, Yuvraj on UI. Wrote `docs/sales-employee-agenticbi-requirements.md` (simple English, for Yuvraj/Sam/Charles) covering all 4 screens (Lead Researcher, Competitor Agent, Market Agent, Report Scheduler), the confirmed pipeline, what's NOT included, and known risks. **Re-verified against the actual PDF mockups and found 2 real gaps**, both fixed: Competitor Agent tracks 4 named platforms (LinkedIn/Facebook/Instagram/YouTube), not generic "social media"; Market Agent has an "Add Custom Report" feature that was missing entirely. Added the platform-integration-requirements section Rahul flagged as missing — real researched costs (Apify per-1000-record pricing per platform; news aggregation as a separate, non-Apify subscription cost) and what's actually needed to connect each (no official developer approval needed from any platform — that's also why it's a legal gray area on all four, not just LinkedIn).
+
+### 8. Client communications logged
+- Drafted (not yet sent) 4 questions for Sam on the "ChatGPT-like" scope + cost/value complaint.
+- Logged Sam's calendar bug report ("Google Calendar is not connected" despite being connected) — root cause: local dev and production use different Google OAuth credentials against the same shared Supabase DB. Rahul is handling this himself.
+- Logged Sam's billing UI question ("where's the add-on toggle") — this session's billing work directly answers it.
+
+### Files touched (session 56) — too many for a full list; see the ~35 commits on `feature/exec-agent-improvements` this session, or the specs in `docs/superpowers/specs/2026-07-02-*.md` and `docs/adr/0001-*.md` for the authoritative per-change detail.
+
+---
+
+## What Was Done This Session (Session 55, 2026-07-01)
+
+**Avatar toggle + attach-doc bug fix + center buttons. All on branch `feature/exec-agent-improvements`.**
+
+### 1. Avatar toggle — end-to-end (WS: verify → spec → implement)
+
+User-controlled Video/VideoOff toggle for the HeyGen LiveAvatar, persisted in localStorage. Drop-safe by design: one extra condition in agent (`if _avatar_id and avatar_enabled:`), one-line revert to remove.
+
+**Backend (`backend/app/routers/executive.py`):**
+- Added `import os`.
+- Added `avatar_enabled: bool = True` to `ExecutiveSessionRequest`.
+- Added `avatar_available: bool` to `ExecutiveSessionResponse` (returned from `bool(os.environ.get("LIVEAVATAR_AVATAR_ID", ""))`).
+- `avatar_enabled` passed in agent dispatch metadata. Backwards-compatible default = `True`.
+
+**Agent (`agent/executive_agent.py`):**
+- Added `avatar_enabled: bool = True` variable.
+- Job metadata parsing: reads `avatar_enabled` from `jm["avatar_enabled"]` when present.
+- Avatar gate changed from `if _avatar_id:` → `if _avatar_id and avatar_enabled:`.
+- Else-branch log: `"avatar disabled by user"` vs `"LIVEAVATAR_AVATAR_ID not set"`.
+
+**Frontend:**
+- `lib/voiceAgentApi.ts` — added `avatar_available: boolean` to `ExecutiveSessionResponse`; added `avatarEnabled` param to `createExecutiveSession()`.
+- `hooks/useExecutiveSession.ts` — `avatarEnabled` state (localStorage-persisted, default `true`); `avatarAvailable` state (cached from session response); `toggleAvatarEnabled()` (no-op when connected/connecting); all three exported.
+- `components/executive/AgentStatusHeader.tsx` — Video/VideoOff `lucide-react` icon button, always rendered (no `avatarAvailable` gate — frontend can't know backend capability before a session). Button disabled during active session; `_avatarAvailable` renamed to suppress unused TS warning. Uses `cn` for colour state.
+- `pages/dashboard/ExecutiveAgent.tsx` — wires `avatarEnabled`, `avatarAvailable`, `toggleAvatarEnabled` into `AgentStatusHeader`.
+
+**Verified live (Docker logs):**
+- Session 1&2: `avatar_enabled=True` → `"HeyGen LiveAvatar started"`.
+- Session 3: `avatar_enabled=False` → `"Running without avatar — avatar disabled by user"`.
+- Agent tools (`list_emails`) worked correctly in the avatar-disabled session.
+
+**Drop-safety confirmed:** avatar lifecycle is fully isolated in `executive_agent.py` L1064–1076. Agent core (session, tools, state) has zero coupling to avatar state. Remove = one-line revert of the gate condition.
+
+**Debug trace (three attempts):**
+1. `avatarAvailable=false` on first page load (empty localStorage) hid button via `{avatarAvailable && ...}` gate → moved to localStorage cache approach.
+2. Component default `avatarAvailable = true` irrelevant because `ExecutiveAgent.tsx` always passes explicit prop from hook → identified the gate as wrong approach.
+3. Correct fix: removed conditional gate entirely; button always renders; `avatarAvailable` kept for future billing gate but renamed to suppress TS unused warning.
+
+### 2. Attach-document-to-email bug fix (`executive_agent.py`)
+Root cause was two-fold: (1) no document library was loaded for the exec agent at all; (2) `send_email_draft` only built `MIMEText(body)` — no attachment code path existed. Sam confirmed bug Jun 29 with a screenshot (placeholder text visible in email body).
+
+Fix (2 commits):
+- `_fetch_documents_for_location()` (new helper in `agent/supabase_helpers.py`) preloads the business's document library into `self._documents` / `self._doc_by_name` at agent startup.
+- New `list_documents` function-tool lets Remi tell the model what's available.
+- `draft_email`, `draft_reply`, and `send_email_draft` all gained an `attachment_doc_name: str = ""` param. `draft_*` just validate the name and add a "📎 Attachment: …" note to the preview body. `send_email_draft` does the real work: resolve doc (exact or fuzzy substring match) → Supabase signed URL → `httpx` download → `MIMEBase("application","pdf")` + base64 encode → attach. Switches the outer message from `MIMEMultipart("alternative")` to `MIMEMultipart("mixed")` when an attachment is present, and strips the "📎 Attachment:" preview note out of the body before it's sent.
+
+### 3. Center Start Session + Unmute Mic buttons
+Frontend layout fix: Start Session and Unmute Mic call-to-action buttons in `AgentDisplay.tsx` centered in the page rather than left-aligned.
+
+### Files touched (session 55)
+- `backend/app/routers/executive.py` — avatar_enabled/avatar_available
+- `agent/executive_agent.py` — avatar gate + metadata parse + attach-doc fix
+- `ai-employees-app/src/lib/voiceAgentApi.ts` — avatar_enabled/avatar_available API types
+- `ai-employees-app/src/hooks/useExecutiveSession.ts` — avatarEnabled/avatarAvailable/toggleAvatarEnabled
+- `ai-employees-app/src/components/executive/AgentStatusHeader.tsx` — Video/VideoOff toggle button
+- `ai-employees-app/src/pages/dashboard/ExecutiveAgent.tsx` — wire avatar props
+- `ai-employees-app/src/components/executive/AgentDisplay.tsx` — center buttons
+- `TODO.md` — marked attach-doc, center buttons, avatar toggle ✅
 
 ---
 

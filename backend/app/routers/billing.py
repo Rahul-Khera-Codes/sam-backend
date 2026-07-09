@@ -21,6 +21,7 @@ from app.schemas.billing import (
     CreateCheckoutSessionRequest,
     CreateCheckoutSessionResponse,
     CustomerPortalResponse,
+    ExecutiveAgentAddonResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,7 @@ def _get_business(business_id: str) -> dict:
     r = supabase_admin.table("businesses").select(
         "id,name,stripe_customer_id,stripe_subscription_id,stripe_price_id,"
         "stripe_subscription_status,subscription_call_limit,"
-        "subscription_period_start,subscription_period_end"
+        "subscription_period_start,subscription_period_end,stripe_exec_agent_item_id"
     ).eq("id", business_id).limit(1).execute()
     if not r.data:
         raise HTTPException(status_code=404, detail="Business not found")
@@ -108,6 +109,11 @@ async def get_subscription(
         minutes_used=minutes_used,
         period_start=biz.get("subscription_period_start"),
         period_end=biz.get("subscription_period_end"),
+        executive_agent_addon_enabled=bool(biz.get("stripe_exec_agent_item_id")),
+        # Lets the frontend gate stay in sync with the backend's actual
+        # enforcement switch instead of guessing (ADR 0001) — both driven by
+        # the same settings.exec_agent_addon_enforced flag.
+        executive_agent_addon_required=settings.exec_agent_addon_enforced,
     )
 
 
@@ -169,6 +175,65 @@ async def customer_portal(
         return_url=settings.billing_cancel_url,
     )
     return CustomerPortalResponse(portal_url=session.url)
+
+
+# ── Executive Agent add-on ───────────────────────────────────────────────────
+# Per docs/adr/0001-billing-addon-access-gating.md — a second Stripe
+# subscription item on the business's existing subscription, not a separate
+# subscription. We store the subscription ITEM id (not the price id) so it
+# can be removed individually without touching the base plan.
+
+@router.post("/addons/executive-agent", response_model=ExecutiveAgentAddonResponse)
+async def enable_executive_agent_addon(
+    business_id: str,
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    biz = _get_business(business_id)
+
+    sub_id = biz.get("stripe_subscription_id")
+    if not sub_id:
+        raise HTTPException(status_code=400, detail="Subscribe to a plan first.")
+    if biz.get("stripe_exec_agent_item_id"):
+        return ExecutiveAgentAddonResponse(executive_agent_addon_enabled=True)
+
+    price_id = settings.stripe_exec_agent_price_id
+    if not price_id:
+        raise HTTPException(status_code=503, detail="Executive Agent add-on price is not configured yet")
+
+    _init_stripe()
+    item = stripe.SubscriptionItem.create(subscription=sub_id, price=price_id)
+
+    supabase_admin.table("businesses").update({
+        "stripe_exec_agent_item_id": item.id
+    }).eq("id", business_id).execute()
+
+    return ExecutiveAgentAddonResponse(executive_agent_addon_enabled=True)
+
+
+@router.delete("/addons/executive-agent", response_model=ExecutiveAgentAddonResponse)
+async def disable_executive_agent_addon(
+    business_id: str,
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    biz = _get_business(business_id)
+
+    item_id = biz.get("stripe_exec_agent_item_id")
+    if item_id:
+        _init_stripe()
+        try:
+            stripe.SubscriptionItem.delete(item_id)
+        except stripe.InvalidRequestError:
+            # Already removed on Stripe's side (e.g. base subscription was
+            # canceled, which cancels every item on it) — clear our record anyway.
+            pass
+
+    supabase_admin.table("businesses").update({
+        "stripe_exec_agent_item_id": None
+    }).eq("id", business_id).execute()
+
+    return ExecutiveAgentAddonResponse(executive_agent_addon_enabled=False)
 
 
 # ── POST /billing/webhook ─────────────────────────────────────────────────────
@@ -296,6 +361,9 @@ def _handle_subscription_deleted(sub) -> None:
         "subscription_call_limit": None,
         "subscription_period_start": None,
         "subscription_period_end": None,
+        # Canceling the base subscription cancels every item on it, including
+        # the exec-agent add-on — clear our record so it doesn't go stale.
+        "stripe_exec_agent_item_id": None,
     }).eq("id", business_id).execute()
     logger.info("Subscription deleted for business %s", business_id)
 
