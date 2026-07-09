@@ -531,13 +531,21 @@ async def competitor_apify_webhook(
         ).eq("id", run_row["id"]).execute()
     else:
         dataset_id = payload.resource.get("defaultDatasetId")
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(
-                f"https://api.apify.com/v2/datasets/{dataset_id}/items",
-                headers={"Authorization": f"Bearer {settings.apify_api_token}"},
-            )
-            resp.raise_for_status()
-            items = resp.json()
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(
+                    f"https://api.apify.com/v2/datasets/{dataset_id}/items",
+                    headers={"Authorization": f"Bearer {settings.apify_api_token}"},
+                )
+                resp.raise_for_status()
+                items = resp.json()
+        except Exception as e:
+            logger.error("Failed to fetch Apify dataset %s for run %s: %s", dataset_id, run_row["id"], e)
+            supabase_admin.table("competitor_report_platform_runs").update(
+                {"status": "failed", "error_message": f"Failed to fetch Apify results: {e}"}
+            ).eq("id", run_row["id"]).execute()
+            await _maybe_finalize_report(run_row["report_id"])
+            return {"ok": True}
 
         if not items:
             supabase_admin.table("competitor_report_platform_runs").update(
