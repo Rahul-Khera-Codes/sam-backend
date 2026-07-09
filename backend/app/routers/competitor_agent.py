@@ -278,12 +278,25 @@ async def _fetch_youtube_channel_activity(youtube_url: str) -> dict:
     }
 
 
+PLATFORM_PAYLOAD_LIMIT = 10_000
+
+
 async def _synthesize_report(runs: list[dict]) -> CompetitorReportResult:
     usable = [r for r in runs if r["status"] == "completed" and r.get("raw_data_json")]
     if not usable:
         raise RuntimeError("No platform produced usable data.")
 
-    payload = [{"platform": r["platform"], "raw_data": r["raw_data_json"]} for r in usable]
+    # Truncate each platform's raw data individually, before combining — a single large
+    # platform (e.g. a busy Facebook page) can otherwise consume the entire truncation
+    # budget on its own, silently dropping every platform that comes after it in the
+    # array (same failure class _head_and_tail fixes for website scrapes, applied here
+    # per-platform so every completed platform is guaranteed some representation).
+    payload = []
+    for r in usable:
+        raw = json.dumps(r["raw_data_json"])
+        if len(raw) > PLATFORM_PAYLOAD_LIMIT:
+            raw = raw[:PLATFORM_PAYLOAD_LIMIT] + "...[truncated]"
+        payload.append({"platform": r["platform"], "raw_data": raw})
 
     openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
     response = await openai_client.chat.completions.create(
@@ -291,7 +304,7 @@ async def _synthesize_report(runs: list[dict]) -> CompetitorReportResult:
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": SYNTHESIS_PROMPT},
-            {"role": "user", "content": json.dumps(payload)[:40_000]},
+            {"role": "user", "content": json.dumps(payload)},
         ],
         temperature=0.3,
     )
