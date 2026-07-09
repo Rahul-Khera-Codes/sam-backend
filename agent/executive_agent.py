@@ -667,14 +667,22 @@ class ExecutiveAssistant(Agent):
         else:
             start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        end = start + timedelta(days=max(1, days_ahead))
+        span_days = max(1, days_ahead)
+        end = start + timedelta(days=span_days)
         time_min = start.isoformat()
         time_max = end.isoformat()
 
+        last_day = end - timedelta(days=1)
+        if span_days <= 1:
+            range_label = "today" if start.date() == now.date() else start.strftime("%b %-d, %Y")
+        elif start.year == last_day.year:
+            range_label = f"{start.strftime('%b %-d')} – {last_day.strftime('%b %-d, %Y')}"
+        else:
+            range_label = f"{start.strftime('%b %-d, %Y')} – {last_day.strftime('%b %-d, %Y')}"
+
         events = await _gcal_list_events(self._supabase, self._business_id, time_min, time_max)
         if not events:
-            period = f"on {date}" if date else "today"
-            return f"No calendar events found {period}."
+            return f"No calendar events found for {range_label}."
 
         events_data = []
         for ev in events:
@@ -686,8 +694,8 @@ class ExecutiveAssistant(Agent):
             })
 
         # Render the schedule as a card on screen; speak only a short summary.
-        await self._send_card("calendar_schedule", {"range": date or "today", "events": events_data})
-        return f"Showing {len(events_data)} event(s) on screen for {date or 'today'}."
+        await self._send_card("calendar_schedule", {"range": range_label, "events": events_data})
+        return f"Showing {len(events_data)} event(s) on screen for {range_label}."
 
     @function_tool()
     async def find_free_slots(
