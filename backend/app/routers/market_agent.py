@@ -138,6 +138,29 @@ def _card_row_to_response(row: dict) -> MarketAnalysisCardResponse:
     )
 
 
+def _build_industry_context(business_id: str, fallback_type: str | None) -> str:
+    """Every analyst query embeds this as "...in the {industry} industry" (both
+    the Exa query text and the system prompt), so it needs to stay a short
+    noun phrase, not a full sentence. Prefer the business's own Branding
+    "target niche" (already written as a specific market segment) over the
+    generic businesses.type field. Falls back to businesses.type for any
+    business that hasn't filled in Branding yet, so this never regresses
+    behavior for existing businesses."""
+    branding = (
+        supabase_admin.table("business_branding")
+        .select("target_niche")
+        .eq("business_id", business_id)
+        .limit(1)
+        .execute()
+        .data
+    )
+    target_niche = branding[0].get("target_niche") if branding else None
+    if target_niche and target_niche.strip():
+        return target_niche.strip()
+
+    return fallback_type or "their industry"
+
+
 async def _run_exa_analyst(business_name: str, industry: str, analyst_type: str, analyst_name: str, query: str) -> dict:
     async with httpx.AsyncClient(timeout=45) as client:
         resp = await client.post(
@@ -269,7 +292,7 @@ async def run_market_agent_refresh(business_id: str, triggered_by: str = "manual
         .data[0]
     )
     business_name = biz.get("name") or "the business"
-    industry = biz.get("type") or "their industry"
+    industry = _build_industry_context(business_id, biz.get("type"))
 
     custom_analysts = (
         supabase_admin.table("market_custom_analysts")

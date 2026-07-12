@@ -50,12 +50,19 @@ New router (or extend an existing settings router) — CRUD matching the
 - `PATCH /business/branding` — upsert
 
 **Market Agent change:** `market_agent.py` currently builds `{industry}` from
-`biz.get("type") or "their industry"` (line ~272). Change to also read
-`business_branding.mission` + `.target_niche`, and combine into a richer
-business-context string fed into the 6 analyst prompts — e.g. something like:
-`"{mission}. Target niche: {target_niche}."` falling back to the current
-`type`-based string when branding data doesn't exist yet (many businesses
-won't have filled this in immediately after launch).
+`biz.get("type") or "their industry"` (line ~272).
+
+**Implementation note (found while building, corrects the original plan
+above):** every analyst query embeds this value as "...in the `{industry}`
+industry" — both in the Exa query text and the system prompt — so it has to
+stay a short noun phrase. Concatenating `mission` (a full sentence) into that
+slot reads as broken grammar ("...in the we help local restaurants book more
+events industry"). Implemented instead: prefer `business_branding.target_niche`
+alone (already written as a short, specific market segment — a much closer
+grammatical and semantic match for "industry" than `mission`), falling back to
+the current `businesses.type`-based string when Branding data doesn't exist
+yet. `mission` isn't used in the industry-context string for now — a good
+place to revisit later if we want to enrich the prompt further.
 
 ## Frontend
 
