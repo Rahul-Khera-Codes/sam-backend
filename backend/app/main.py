@@ -28,6 +28,7 @@ from app.routers import (
     competitor_agent as competitor_agent_router,
     market_agent as market_agent_router,
     report_scheduler as report_scheduler_router,
+    business_branding as business_branding_router,
 )
 from app.services.scheduler_service import start_scheduler, stop_scheduler
 
@@ -78,6 +79,7 @@ app.include_router(sales_router.router)
 app.include_router(competitor_agent_router.router)
 app.include_router(market_agent_router.router)
 app.include_router(report_scheduler_router.router)
+app.include_router(business_branding_router.router)
 
 
 # ── Health check ──────────────────────────────
