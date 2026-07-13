@@ -10,14 +10,14 @@
 
 | Metric | Count |
 |---|---|
-| Total Tests Run | 93 |
-| Total Passed | 72 |
-| Total Failed | 9 |
+| Total Tests Run | 119 |
+| Total Passed | 97 |
+| Total Failed | 10 |
 | Total Blocked | 13 |
-| Open Failures | 3 (TC-TEAM-006, TC-ROLES-002 — real bugs, older platform sessions; app-wide Sonner toast bug — session 60, found 2026-07-13, not yet fixed) |
+| Open Failures | 4 (TC-TEAM-006, TC-ROLES-002 — real bugs, older platform sessions; app-wide Sonner toast bug — session 60, found 2026-07-13, not yet fixed; TC-RS-004-GMAIL-TOKEN — session 61, found 2026-07-13, Gmail OAuth token invalid for test business) |
 | Resolved Failures | 5 (TC-SALES-LR-003, TC-SALES-CA-004, TC-SALES-MA-001 — session 58; Remi calendar range/date bug, Report Scheduler live-preview bug — session 60, both fixed same day and re-verified live) |
 | Hard Blockers (pre-existing) | 0 (Billing — confirmed working live, session 60: real Stripe Checkout test-mode subscription completed successfully) |
-| Last Updated | 2026-07-13 (Session 60 — production E2E pass across Billing/Sales Employee/Remi/Report Scheduler, 2 more bugs found+fixed, Business Branding feature built+verified, app-wide toast bug found) |
+| Last Updated | 2026-07-13 (Session 61 — full Sales Employee + Business Branding re-test, 26 tests across 5 parallel Canary sessions: Business Branding 10/10, Lead Researcher 4/4, Competitor Agent 4/4, Market Agent 4/4 [incl. the industry-relevance integration test — see below], Report Scheduler 3/4. Headline result: direct evidence Market Agent's reports now genuinely reflect Branding's target_niche instead of generic content.) |
 
 ---
 
@@ -255,6 +255,42 @@
 **Workaround**: None currently — users must reload/re-check to confirm a save took effect
 ---
 
+---
+**ID**: TC-RS-004-GMAIL-TOKEN
+**Session**: 61
+**Date**: 2026-07-13
+**Area**: Sales Employee — Report Scheduler
+**Description**: "Send Test Email" fails — Gmail refresh token for this business now returns 401 Unauthorized from Google; regression against session 60's confirmed-working state
+
+**Preconditions**:
+- Logged in as rahul.excel2011@gmail.com, business/location "Eifel Tower 8" (Woyce Tech), business_id `f46ce260-45da-4db8-9bc1-b0af01ec3acc`
+- Navigate to Dashboard → Sales Employee → Scheduler
+- A `gmail_tokens` row already exists for this business (this is NOT the "Gmail never connected" case — see TC-SUPPORT-001 for that pattern)
+
+**Steps**:
+1. Navigate to /dashboard/sales/scheduler
+2. Click "Send Test Email"
+3. Capture the actual POST `/sales/report-scheduler/schedules/{id}/send-test` response body (not just the UI, since TC-TOAST-001 means no toast would show either way)
+
+**Expected**: `{"sent": true, "detail": "Test email sent to rahul.excel2011@gmail.com."}` — this exact flow was confirmed working live in Session 60 (2026-07-09) on this same business/account.
+**Actual**: `{"sent": false, "detail": "Gmail is not connected for this business, or the send failed."}` (HTTP 200). Backend logs confirm the real cause: `Gmail token refresh failed for business f46ce260-45da-4db8-9bc1-b0af01ec3acc: Client error '401 Unauthorized' for url 'https://oauth2.googleapis.com/token'` — the stored `gmail_tokens` row's refresh_token is no longer valid (Google rejected it), not a missing connection.
+**Status**: 🔁 REGRESSION (environment — Gmail OAuth grant now invalid, not a Report Scheduler code bug)
+
+**Cause (Claude's Analysis)**:
+> `report_scheduler.py`'s `_get_business_gmail_access_token` calls `email_service.refresh_access_token(row["refresh_token"], ...)` against Google's token endpoint. Google returned 401 Unauthorized on the refresh attempt — this means the stored refresh token has been invalidated on Google's side (common causes: token revoked by the user/Google, OAuth client secret rotated, or the token aged out). `send_digest()` then returns `False`, and the router correctly surfaces the generic `sent:false` message (by design, so as not to leak internal error detail to the frontend) — the code path itself is behaving exactly as written; the actual fix needed is reconnecting Gmail OAuth for this business in Business Settings → Integrations, not a code change.
+> Confirmed via `docker logs sam-backend-sam-backend-1`: the GET to `gmail_tokens` succeeded (row exists), the refresh call is what failed with 401.
+
+**Evidence**:
+- Screenshot: docs/qa-screenshots/TC-RS-004-send-test-response.png
+- Backend log: `ERROR:app.services.email_service:Gmail token refresh failed 401: {` / `ERROR:app.routers.report_scheduler:Gmail token refresh failed for business f46ce260-45da-4db8-9bc1-b0af01ec3acc: Client error '401 Unauthorized' for url 'https://oauth2.googleapis.com/token'`
+- Network call: `POST http://localhost:8003/sales/report-scheduler/schedules/4887220c-2d95-4b3e-b9ab-34066124a533/send-test` → 200 → `{"sent":false,"detail":"Gmail is not connected for this business, or the send failed."}`
+- Canary session: `sales-report-scheduler-qa-mriwkv4k-7180a4`, report at `~/.canary/sessions/sales-report-scheduler-qa-mriwkv4k-7180a4/report.html`
+
+**Severity**: Medium — blocks real test-email verification for this specific test account; does not indicate a Report Scheduler code defect (module toggle + live preview + save all confirmed working correctly in the same session)
+**Reproducible**: Always, for this business, until Gmail is reconnected
+**Workaround**: Reconnect Gmail OAuth for "Woyce Tech" in Business Settings → Integrations
+---
+
 ## Failure Entry Format
 > Claude uses this exact block for every new failure found.
 
@@ -489,3 +525,24 @@
 - **App-wide toast bug found while verifying Business Branding** (TC-TOAST-001, above) — confirmed real, confirmed NOT caused by this session's work (reproduced on old, untouched code), root cause not yet isolated. Logged as an open failure — needs dedicated follow-up debugging.
 - Branch: `feature/business-branding` (both repos), pushed, not yet merged — pending Sam's review of the Branding feature.
 *Maintained by Claude Code during QA sessions. Source code is never modified.*
+
+### Session 61 — 2026-07-13 — Report Scheduler focused re-test (Canary/Playwright, real browser)
+- Status: ✅ Complete — 3/4 test cases pass, 1 environment regression found
+- Tool: Canary session recording (real Playwright browser, trace/video/HAR/console) — session `sales-report-scheduler-qa-mriwkv4k-7180a4`, report at `~/.canary/sessions/sales-report-scheduler-qa-mriwkv4k-7180a4/report.html`
+- Scope: TC-RS-001 through TC-RS-004 from `docs/sales-employee-full-retest-2026-07-13.md`, against localhost (rahul.excel2011@gmail.com, "Eifel Tower 8" / Woyce Tech)
+- TC-RS-001: ✅ PASS — unchecked "Lead Researcher" module checkbox without clicking Save; Live Preview iframe reactively re-rendered within ~2s to drop the Lead Researcher section (only Competitor Agent + Market Agent sections remained), confirming TC-RS-PREVIEW-001's fix still holds.
+- TC-RS-002: ✅ PASS — re-checked the box (still no Save click); preview showed a brief loading spinner then restored the Lead Researcher section with fresh content.
+- TC-RS-003: ✅ PASS — clicked "Save Automation"; button was disabled (spinner state) for ~1.5s then returned to normal; direct API response capture confirmed the PUT succeeded (200, fresh `updated_at` timestamp, `include_lead_researcher: true` reflecting the re-checked state). No toast shown — expected, per already-logged TC-TOAST-001, not re-logged.
+- TC-RS-004: ❌ REGRESSION — clicked "Send Test Email"; captured actual API response via `page.waitForResponse`: `{"sent":false,"detail":"Gmail is not connected for this business, or the send failed."}` (HTTP 200), not the expected `{"sent":true,...}` that Session 60 confirmed working on this exact business. Backend logs traced the real cause to a 401 Unauthorized from Google's token-refresh endpoint — the business's Gmail OAuth refresh token is no longer valid. This is an environment/OAuth-grant issue, not a Report Scheduler code defect. Logged as TC-RS-004-GMAIL-TOKEN above.
+- Note: ran concurrently with 3 other Canary sessions testing other Sales Employee modules in parallel on the same daemon — a few individual script steps returned exit code 1 with empty stdout under load (likely daemon/CPU contention, not app bugs); all were retried successfully as new steps per protocol, no data lost.
+
+### Session 61 (continued) — Business Branding, Lead Researcher, Competitor Agent, Market Agent (run in parallel with the Report Scheduler pass above)
+- Full test sheet: `docs/sales-employee-full-retest-2026-07-13.md`. Combined with Report Scheduler above: **26 tests run, 25 passed, 1 failed** (the Gmail regression above).
+
+**Business Branding (new feature) — 10/10 PASS.** Session `business-branding-qa-mriwkieq-0815df`. All 10 test cases passed: page load with pre-filled data, Core Brand field edits, tag add/remove (Unique Value Claims + Competitors), color/font changes (swatch updates live, font dropdown changes), Use Emojis toggle, Target Niche edit, Save (confirmed via spinner + persisted data — no toast, expected per TC-TOAST-001), full reload-persistence check (every field survives a hard reload), and an edge case clearing Target Niche to empty (genuinely cleared, other fields unaffected). Target Niche restored to a real value at the end of the session specifically to unblock the Market Agent integration test below.
+
+**Lead Researcher — 4/4 PASS.** Session `sales-employee-lead-researcher-qa-mriwjwfb-d3b118`. Invalid URL rejected client-side with zero backend calls; valid URL completed to a full lead card; History tab's session-60 self-polling fix confirmed working (running→completed with zero manual interaction, no reload); Saved Leads correctly filtered (2 of 13+ History entries). Minor non-blocking finding: a React `validateDOMNesting` console warning in `LeadHistoryTab.tsx` (button nested inside button) — cosmetic only, not logged as a formal TC since it has no functional impact.
+
+**Competitor Agent — 4/4 PASS, 2 minor findings.** Session `competitor-agent-qa-mriwk7l3-8aac6d`. Monitored list correct; HubSpot report generation completed without the previously-fixed stuck-generating bug and showed all 4 platforms with real data (none dropped) — though a UI-timing ambiguity caused the test to accidentally trigger "Generate New Report" twice, incurring real Apify cost twice (not a reproduced double-submit bug, just a testing-cost note); adding a new real competitor (salesforce.com) completed cleanly with clean 200s from OpenAI (confirms the earlier production 401-key bug is not present in this local environment — though this was tested locally, not against production directly) but discovered zero social links for a site that definitely has them, a likely Jina AI Reader extraction gap worth a follow-up look; invalid URL failed gracefully as a "Discovery failed" row with no crash, though there's no client-side validation so junk rows persist in the list.
+
+**Market Agent — 4/4 PASS, including the key integration test.** Session `market-agent-qa-mrix5zno-e138cd`. Page load and manual refresh both correct (8 cards, no stuck/failed cards, refresh triggered exactly once). **TC-MA-INTEGRATION-001 (the actual point of the Business Branding feature) — PASS with strong evidence**: post-refresh card content explicitly referenced "home services," AI receptionist/scheduling tools, and named real competitors (ServiceTitan, Avoca, Goodcall, Rosie) with trade-press citations (ServiceMag, ACHR News, direct HVAC references) — matching the Branding `target_niche` exactly, with zero generic or restaurant-related language. Backend logs confirmed the `business_branding` fetch happened before the Exa calls, giving direct technical proof (not just a plausible coincidence) that the fix works end-to-end. Bookmark persistence also confirmed via reload.

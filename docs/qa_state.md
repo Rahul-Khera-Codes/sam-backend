@@ -1,10 +1,22 @@
 # QA State
 > Managed by Claude during QA sessions. Do not edit manually.
-> Last updated: 2026-07-13 (Session 60)
+> Last updated: 2026-07-13 (Session 61)
 
 ---
 
 ## Last Session
+| Field | Value |
+|---|---|
+| Session # | 61 |
+| Date | 2026-07-13 |
+| Tester | Claude Code (Canary/Playwright, real browser, localhost — 5 parallel sessions) |
+| Tests Run | 26 (full Sales Employee + Business Branding re-test: Business Branding 10, Lead Researcher 4, Competitor Agent 4, Market Agent 4, Report Scheduler 4) |
+| Passed | 25 |
+| Failed | 1 (TC-RS-004-GMAIL-TOKEN — send-test returns sent:false; Gmail refresh token 401 Unauthorized from Google, a regression against session 60's confirmed-working state on this same business — environment/OAuth issue, not a Report Scheduler code defect) |
+| Blocked | 0 |
+| Next Priority | Reconnect Gmail OAuth for "Woyce Tech" (Eifel Tower 8), then re-verify TC-RS-004 returns sent:true. Fix TC-TOAST-001 (still open). Merge `feature/business-branding` → main once Sam reviews (headline result: TC-MA-INTEGRATION-001 passed with strong evidence — Market Agent reports now genuinely reflect Branding's target_niche). Follow up on 2 minor findings: Competitor Agent's Jina extraction gap (0 social links for a real site), cosmetic DOM-nesting warning in LeadHistoryTab. Older platform items unchanged: TC-ROLES-002 + TC-TEAM-006 still open. |
+
+## Previous Session
 | Field | Value |
 |---|---|
 | Session # | 60 |
@@ -15,18 +27,6 @@
 | Failed | 1 (TC-TOAST-001 — Sonner toast notifications silently broken app-wide, not caused by this session's work) |
 | Blocked | 0 |
 | Next Priority | Fix TC-TOAST-001 (needs breakpoint debugging inside `node_modules`, out of scope for browser QA). Merge `feature/business-branding` → main once Sam reviews. Re-verify Competitor Agent "Discovery Failed" now that Rahul updated the production OpenAI key. Older platform items unchanged: TC-ROLES-002 + TC-TEAM-006 still open. |
-
-## Previous Session
-| Field | Value |
-|---|---|
-| Session # | 59 |
-| Date | 2026-07-09 |
-| Tester | Claude Code (Canary/Playwright, real browser, LIVE PRODUCTION deployment) |
-| Tests Run | 6 (assertion-backed, all pass) |
-| Passed | 6 |
-| Failed | 0 |
-| Blocked | 0 |
-| Next Priority | Sales Employee production QA complete for Lead Researcher, Competitor Agent, Market Agent — all 3 session-58 same-day fixes confirmed holding under real production conditions. See session 60 for what followed. |
 
 
 ---
@@ -194,8 +194,16 @@
 | Remi — inbox read, calendar read, draft reply (PRODUCTION) | Session 60 | ✅ PASS — real Gmail/Calendar data confirmed, no email sent |
 | Remi — calendar range/date labeling | Session 60 | ✅ FIXED — was ❌ FAIL (mislabeled "today", no per-event dates), now shows real range + per-event dates, re-verified live |
 | Report Scheduler — send-test (PRODUCTION) | Session 60 | ✅ PASS — real email delivery confirmed via API response |
+| Report Scheduler — send-test (localhost) | Session 61 | ❌ FAIL (regression) — TC-RS-004-GMAIL-TOKEN, `sent:false`, Gmail refresh token 401 from Google for this business; needs OAuth reconnect, not a code fix |
 | Report Scheduler — live preview on unsaved toggle | Session 60 | ✅ FIXED — was ❌ FAIL (stale until save), now updates within ~1s, re-verified via API + browser |
+| Report Scheduler — live preview reactive update (re-test) | Session 61 | ✅ PASS — re-verified: unchecking + re-checking a module both reactively updated the preview without Save, no regression |
 | Lead Researcher — History tab self-polling | Session 60 | ✅ PASS — new fix, verified live with a temporary test row (running→completed with zero manual interaction) |
+| Lead Researcher — full re-test (invalid URL, valid lookup, History, Saved Leads) | Session 61 | ✅ PASS (4/4) — minor non-blocking DOM-nesting console warning noted |
+| Competitor Agent — full re-test (list, generate report, add new, invalid URL) | Session 61 | ✅ PASS (4/4) — 2 minor findings: accidental double-generate (cost, not a bug), 0 social links found for a real test site (extraction gap) |
+| Competitor Agent — OpenAI key check (local) | Session 61 | ✅ PASS — clean 200s from OpenAI, no auth errors locally (production fix not directly re-verified) |
+| Market Agent — full re-test (page load, refresh, bookmark) | Session 61 | ✅ PASS (3/3) |
+| **Market Agent — industry-relevance integration test** | Session 61 | ✅ **PASS** — post-refresh reports directly quote home-service/HVAC-specific content + real named competitors, matching Branding's `target_niche`; backend logs confirm the fetch order proves the wiring, not coincidence |
+| Business Branding — full CRUD + UI re-test (10 cases) | Session 61 | ✅ PASS (10/10) — incl. tag add/remove, color/font changes, edge-case field clearing, and full reload-persistence check |
 | Business Branding — full CRUD + UI | Session 60 | ✅ PASS — backend verified via curl, UI verified live incl. page-reload persistence |
 | App-wide toast notifications (Sonner) | Session 60 | ❌ FAIL — TC-TOAST-001, confirmed real + app-wide, root cause not yet found |
 
@@ -237,6 +245,7 @@
 | 7 | 2026-04-29 | 3 | 1 | 1 | 1 | TC-ROLES-002 retest + TC-TEAM-006 blocked + Support email |
 | 59 | 2026-07-09 | 6 | 6 | 0 | 0 | Sales Employee PRODUCTION QA (Lead Researcher, Competitor Agent, Market Agent — live deployment, real paid API calls) |
 | 60 | 2026-07-09 to 2026-07-13 | 11 | 10 | 1 | 0 | Production pass (Billing/Remi/Report Scheduler), 2 bugs fixed, Business Branding built, app-wide toast bug found |
+| 61 | 2026-07-13 | 26 | 25 | 1 | 0 | Full Sales Employee + Business Branding re-test (5 parallel Canary sessions, localhost) — all modules pass; headline: Market Agent industry-relevance integration test confirmed with strong evidence; 1 regression (Report Scheduler send-test, Gmail token expired) |
 
 ---
 
