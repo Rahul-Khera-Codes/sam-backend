@@ -1,4 +1,4 @@
-# Session Handoff — 2026-07-08 (Session 59)
+# Session Handoff — 2026-07-13 (Session 60)
 
 Read this at the start of every session. It captures the full current state so you can pick up immediately.
 
@@ -17,7 +17,7 @@ Two repos:
 - **Backend + Agent:** `/home/lap-68/Documents/gt-rahul/sam-backend`
 - **Frontend:** `/home/lap-68/Documents/gt-rahul/ai-employees-app`
 
-Backend + agent on `feature/exec-agent-improvements` (sessions 55–56, unmerged, pending items below). **Sessions 57–59 are on a NEW branch, `feature/sales-lead-researcher`** (both repos) — the entire Sales Employee backend build (all 4 modules: Lead Researcher, Competitor Agent, Market Agent, Report Scheduler), now complete, full-E2E QA'd via real browser, and all bugs found have been fixed and re-verified. See "What Was Done This Session (Session 59)" below for full detail. **Pending before merge of the OLDER branch:** live-verify WS4/10/11/12/13 action cards, reconcile `fix/avatar-aec`, apply timezone migration, then merge to main — these are unrelated/unaffected by the new Sales Employee work.
+**`main` is fully up to date in both repos** (merged 2026-07-09 — includes all of `feature/exec-agent-improvements`, the full Sales Employee build, and the session-59 production bug fixes). Both repos are currently on a **new branch, `feature/business-branding`** (pushed, not yet merged) — the Business Branding feature (see Session 60 below). `fix/avatar-aec` remains deliberately parked (both repos) — not merged, not an active blocker.
 
 > **Restart needed:** `docker compose restart sam-executive-agent` after any backend/agent code changes.
 
@@ -147,6 +147,8 @@ Key env files:
 - `backend/app/routers/forwarding.py` — contacts + rules CRUD
 - `backend/app/routers/documents.py` — PDF document library CRUD
 - `backend/app/routers/executive.py` — `POST /executive/session` — creates LiveKit room for Executive Agent
+- `backend/app/routers/business_branding.py` — `GET`/`PATCH /business/branding` (session 60) — feeds Market Agent's `target_niche` industry context
+- `backend/app/routers/market_agent.py` — `_build_industry_context()` (session 60) reads `business_branding.target_niche`, falls back to `businesses.type`
 - `backend/app/services/email_service.py` — Gmail send functions + token refresh
 - `backend/app/services/google_calendar_service.py` — Calendar CRUD + token refresh
 - `backend/app/services/livekit_service.py` — includes `create_executive_agent_dispatch()`
@@ -165,7 +167,8 @@ Key env files:
 - `contexts/AuthContext.tsx` — session, user, roles, canAccess(), permissionsLoading
 - `components/business/IntegrationsTab.tsx` — Gmail/Calendar connect/disconnect UI
 - `pages/dashboard/TeamManagement.tsx` — invite, remove (Option B reassign), roles
-- `pages/dashboard/BusinessSettings.tsx` — all business settings tabs including Documents
+- `pages/dashboard/BusinessSettings.tsx` — all business settings tabs including Documents and Branding
+- `components/business/BrandingTab.tsx` — (session 60) Color Palette/Typography, Core Brand, Communication Strategy, Competitive Analysis, Market Insights
 - `pages/dashboard/ExecutiveAgent.tsx` — Executive Agent split-pane UI
 - `hooks/useExecutiveSession.ts` — LiveKit room, transcript, state, streaming. Exposes `activeCard`, `agentActivity`, `sendCardAction(action,payload)`, `approvePreview`/`rejectPreview`. Parses `card`/`card_dismiss`/`activity` (+ back-compat `preview`) data events. (No more `previewItem` — unified into `activeCard`.)
 - `components/executive/AgentAvatar.tsx` — **(WS4)** abstract animated orb, 3 states + disconnected; swappable for Phase-2 HeyGen `<video>` at the marked swap point
@@ -180,17 +183,14 @@ Key env files:
 
 ## Pending Manual Steps
 
-- [ ] **Apply the `updated_at`-trigger migration** (session 58) — `ai-employees-app/supabase/migrations/20260707000002_sales_employee_updated_at_triggers.sql`. Written + committed, verified via a live test that it is NOT yet firing (checked 2026-07-07). Run `supabase db push`.
-- [ ] **Set up a persistent ngrok static domain** (session 58) — reserve one at `dashboard.ngrok.com/domains` (free tier includes 1), restart the tunnel as `ngrok http --url=<reserved-domain> 8003`, then send the domain to update `APIFY_WEBHOOK_BASE_URL` in `.env` + restart backend. Root cause of a real bug Yuvraj hit: Apify's webhook got a 404 **from ngrok itself** because the tunnel wasn't running — not a code bug, but a real fragility while multiple people test against this.
+- [ ] **Fix the app-wide Sonner toast bug** (found session 60, 2026-07-13) — every `toast.success()`/`toast.error()` call via the `sonner` package is silently a no-op across the ENTIRE app (confirmed on both the new Business Branding save AND an old, untouched Report Scheduler save — not a regression from session 60's work). Ruled out: stale Docker image, stale Vite dep cache, duplicate `sonner` installs, console errors, `next-themes` provider issue. Root cause not yet found — `<Toaster>` mounts fine but its internal toast store never receives anything, needs actual breakpoint debugging inside `node_modules` to pin down. Underlying save/data operations all work correctly; only the confirmation pop-up is broken. See `docs/QA_FINDINGS.md` for full elimination log.
+- [ ] **Merge `feature/business-branding` → main** (both repos) once Sam has reviewed the new Branding tab — see session 60 detail below.
 - [ ] **Real production deploy for Sales Employee** — still running on ngrok (Apify webhook) + a personal Exa/Apify/YouTube setup in places. Needed before any real customer uses Lead Researcher/Competitor Agent/Market Agent/Report Scheduler.
 - [ ] **Sam's lawyer sign-off** on scraped-lead outreach sourcing (CASL/ToS) — doesn't block the build, blocks public launch of Sales Employee.
 - [ ] **Live-test the billing add-on** (session 56) — needs a real Stripe test-mode subscription on at least one business, since the toggle is currently disabled for all of them (none has a base plan). Confirm enable/disable creates/removes the Stripe subscription item, and confirm `/dashboard/executive` stays accessible either way (enforcement is off by default).
 - [ ] **Whole-product billing enforcement gap** (session 56, found + deliberately deferred) — no subscription status is checked anywhere outside the Billing page's display, for any feature. See `TODO.md` + `memory/project_blockers.md` for the agreed architecture. Don't rush this.
-- [ ] **Reconcile `fix/avatar-aec` with `feature/exec-agent-improvements` before merge.** `fix/avatar-aec` (both repos, session 54) fixes avatar-audio/mic echo via `AudioContext`/`webAudioMix` routing + headphone notice — NOT merged into this branch. Frontend commits `486cedd`/`6002792`/`eeca509` heavily rewrite `useExecutiveSession.ts`, the same file session 55 touched for the avatar toggle. Diff the two branches on that file and manually reconcile; do not assume a clean auto-merge.
-- [ ] **Live-verify Executive Agent UI** (after `docker compose restart sam-executive-agent` + reload `/dashboard/executive`): WS4 avatar states; WS10 activity caption (spinner→✓, no stuck spinner on error); WS11 free_slots tap→preview→approve→booked; WS12 appointment Cancel(confirm)/Reschedule; WS13 email_detail + Reply. WS3 A.2 draft/event previews still approve/send. **Session-55 additions:** avatar toggle Video/VideoOff persists across page reload; attach-doc sends PDF in email; Start Session + Unmute Mic centered.
 - [ ] **Dev OAuth client for local Gmail testing** — own Google project, Testing mode, localhost redirect URIs (`http://localhost:5173/integrations/{gmail,google}/callback`), scopes gmail.send+gmail.readonly+calendar.events+userinfo.email+openid, dev as test user; put client id/secret in local `backend/.env` AND `agent/.env.local`.
 - [ ] **Decision (Sam): Gmail CASA** — commit to restricted-scope assessment for launch, or narrow feature. Don't escalate the core product's pending verification.
-- [ ] **Merge `feature/google-calendar-timezone` → main** on both repos (deployed to VPS, NOT ready until exec-agent hardening + timezone migration done)
 - [ ] **Deploy scheduler fix to VPS** — `git pull && docker compose restart sam-backend` (fixes hourly 400 errors in logs)
 - [ ] **Sam sets business timezone** — Business Settings → Company Info → Business Timezone dropdown → Save
 - [ ] **Forgot password email spam** — improve Supabase Auth email template + Resend DKIM alignment
@@ -214,10 +214,46 @@ Key env files:
 - `20260706000002` — `competitors`/`competitor_reports`/`competitor_report_platform_runs` + RLS ✅
 - `20260707000000` — `market_custom_analysts`/`market_analysis_runs`/`market_analysis_cards` + RLS ✅
 - `20260707000001` — `report_schedules` + RLS ✅
+- `20260618000000` — `businesses.timezone` ✅ (confirmed live, real data present)
+- `20260707000002` — `handle_updated_at()` trigger on all 8 Sales Employee tables ✅ (confirmed live, firing correctly)
+- `20260712000000` — `business_branding` table + RLS ✅ (session 60, applied + confirmed live end-to-end)
 
 ## Pending Migrations (not yet applied)
-- `20260618000000_businesses_timezone.sql` — add `timezone TEXT DEFAULT 'America/Toronto'` to businesses. File exists in `ai-employees-app/supabase/migrations/`. Run `supabase db push`.
-- `20260707000002_sales_employee_updated_at_triggers.sql` — adds the `public.handle_updated_at()` trigger (already used by every other table in this schema) to all 8 new Sales Employee tables. Written session 58, verified via live test that it's NOT yet firing.
+- None currently outstanding.
+
+---
+
+## What Was Done This Session (Session 60, 2026-07-09 to 2026-07-13)
+
+**Branch `feature/business-branding` (both repos, pushed, not yet merged). Continued straight from session 59's production QA — merged everything to main, fixed 2 more bugs found on production, investigated 3 real issues Sam reported, and built a full new feature (Business Branding) end-to-end.**
+
+### 1. Merged everything to main (2026-07-09)
+`feature/sales-lead-researcher` (which already contained `feature/exec-agent-improvements`, billing, and calendar-timezone work) merged cleanly into `main` on both repos and pushed — a 129-commit (backend) / 46-commit (frontend) fast-forward-then-merge, verified with a production build before pushing. `fix/avatar-aec` deliberately left out (parked, not a blocker — confirmed with Rahul). `main` had also picked up a stray GitHub PR merge in the interim; verified its content was already fully contained in our branch before merging, so no conflicts.
+
+### 2. Two more real bugs found + fixed on production, same day
+Ran a full live E2E pass on the deployed site (`portal.aiemployeesinc.com`) covering Billing, Sales Employee, Remi, and Report Scheduler — all confirmed working, including live-verifying the two bugs fixed in session 59 actually hold in production. Found 2 new bugs during that pass:
+- **Remi's calendar card mislabeled date ranges as "today"** and showed events without dates, so a normal recurring meeting on different days looked like a triple-booking on one day. Fixed: `get_schedule()` now computes a real range label from the actual query window; the frontend card shows each event's date, not just its time. Verified live with real recurring calendar data (3 distinct dates rendered correctly).
+- **Report Scheduler's live preview didn't update on unsaved module toggles** — only reflected the last-saved state. Fixed with backend query-param overrides + a debounced frontend re-fetch. Verified both via browser and a direct API check that the digest content genuinely changes.
+Both shipped on `fix/production-qa-followups`, merged to main.
+
+### 3. Lead Researcher History tab self-polling (2026-07-10)
+Sam reported "you can't change the window because it stops the Analysis in progress." Traced it: the in-progress lookup is tracked in local component state that gets destroyed on any tab switch (the backend job itself is unaffected and keeps running). Decision (Rahul's call): don't fix the tab-switch state loss itself — instead make the History tab poll every 8s while anything is "running," so results show up without a manual reload regardless of which tab you're on. Written as a spec first, then implemented and verified live (a temporary test row flipped from running→completed with zero manual interaction, and polling correctly stopped afterward).
+
+### 4. Investigated Sam's 3 reported issues (2026-07-09/10)
+- **Competitor Agent "Discovery Failed"** — root-caused to a real `401 Incorrect API key` from OpenAI on the production server (confirmed via the actual `error_message` in the database, on Sam's real business Divinity DJs) — a deployed-server credentials issue, not a code bug. Rahul has since fixed the key on production (not yet re-verified with a fresh retry).
+- **Market Agent reports feel generic** — root-caused: `businesses.type` (the only "industry" signal Market Agent had) is a plain free-text field, but many businesses (including Sam's) just have it set to "other." Wrote a proposal (`docs/market-agent-industry-relevance-proposal.md`) and a fuller internal brief (`docs/market-agent-meeting-brief.md`). Sam's response: use the (mostly unbuilt) Branding tab mockup he'd shared before as the real source of industry context instead — see item 5.
+- Lead Researcher tab-switch — see item 3.
+
+### 5. Business Branding feature — built end-to-end (2026-07-12/13)
+Sam's ask: build out the Branding tab per his mockup, then use it to give Market Agent real industry context. Spec written first (`docs/superpowers/specs/2026-07-10-business-branding-section.md`), then implemented:
+- New `business_branding` table (1:1 with `businesses`, matches the `business_documents` convention — not more columns on the already-wide `businesses` table), applied live via `supabase db push`.
+- New backend CRUD (`GET`/`PATCH /business/branding`), backend-mediated (matches the newer convention, not the older direct-Supabase-write pattern `businesses.type` uses).
+- Market Agent now reads `business_branding.target_niche` for its `{industry}` context instead of `businesses.type`, with a safe fallback for any business that hasn't filled in Branding yet. **Corrected mid-implementation:** the original spec said to combine `mission` + `target_niche`, but the analyst prompts embed this as "...in the `{industry}` industry" — a full mission sentence there reads as broken grammar, so only `target_niche` (already a short, specific phrase) is used.
+- New `BrandingTab.tsx` component: Color Palette & Typography, Core Brand, Communication Strategy, Competitive Analysis, Market Insights — everything from the mockup except Logo (already existed). Explicit decision: the Branding "Competitors" list stays separate from Competitor Agent's tracked (URL-scraped) competitor list — different purpose, different technical requirements.
+- Verified fully end-to-end: backend CRUD tested directly, Market Agent's industry-context function tested against real data (both with and without Branding filled in), and the full UI live-tested in a browser including a page-reload persistence check.
+
+### 6. Found a real, pre-existing, app-wide bug while verifying (2026-07-13): toast notifications are silently broken everywhere
+While verifying the Branding "Save" button, found no confirmation toast ever appears. Confirmed this is NOT caused by today's work — an old, untouched Report Scheduler save button has the identical symptom. Eliminated: stale Docker image, stale Vite dep cache, duplicate `sonner` installs, console errors, `next-themes` provider issues. Root cause not yet found (Sonner's own wrapper mounts fine; its internal toast store never receives anything) — needs real breakpoint debugging inside `node_modules`, out of scope for a black-box browser test. Underlying save operations all work correctly; only the confirmation UI is silently broken. Logged as a new pending item above.
 
 ---
 

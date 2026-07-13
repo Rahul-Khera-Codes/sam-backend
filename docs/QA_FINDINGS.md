@@ -10,14 +10,14 @@
 
 | Metric | Count |
 |---|---|
-| Total Tests Run | 82 |
-| Total Passed | 62 |
-| Total Failed | 8 |
+| Total Tests Run | 93 |
+| Total Passed | 72 |
+| Total Failed | 9 |
 | Total Blocked | 13 |
-| Open Failures | 2 (TC-TEAM-006, TC-ROLES-002 — real bugs, older platform sessions) |
-| Resolved Failures | 3 (TC-SALES-LR-003, TC-SALES-CA-004, TC-SALES-MA-001 — Sales Employee session 58, fixed same session and re-verified live) |
-| Hard Blockers (pre-existing) | 1 (Billing — Stripe not integrated) |
-| Last Updated | 2026-07-09 (Session 59 — Sales Employee production QA, live deployment, real browser via Canary/Playwright) |
+| Open Failures | 3 (TC-TEAM-006, TC-ROLES-002 — real bugs, older platform sessions; app-wide Sonner toast bug — session 60, found 2026-07-13, not yet fixed) |
+| Resolved Failures | 5 (TC-SALES-LR-003, TC-SALES-CA-004, TC-SALES-MA-001 — session 58; Remi calendar range/date bug, Report Scheduler live-preview bug — session 60, both fixed same day and re-verified live) |
+| Hard Blockers (pre-existing) | 0 (Billing — confirmed working live, session 60: real Stripe Checkout test-mode subscription completed successfully) |
+| Last Updated | 2026-07-13 (Session 60 — production E2E pass across Billing/Sales Employee/Remi/Report Scheduler, 2 more bugs found+fixed, Business Branding feature built+verified, app-wide toast bug found) |
 
 ---
 
@@ -35,12 +35,11 @@
 
 ## Pre-Existing Hard Blockers (Not Claude-Found — From Checklist)
 
-### ⛔ HB-001 — Billing Section Not Implemented
+### ✅ HB-001 — Billing Section — RESOLVED (2026-07-13, Session 60)
 - **Area**: Billing
-- **Status**: ⛔ Hard Blocker (pre-launch)
-- **Detail**: Entire billing section is a static UI placeholder. Stripe is not integrated.
-- **Impact**: Platform cannot process payments before launch.
-- **Resolves When**: Stripe integration is built and wired.
+- **Status**: ✅ Resolved — no longer a blocker
+- **Detail**: Was a static UI placeholder with no Stripe integration. Now fully built and confirmed working live on production: selected the Starter plan, completed a real Stripe Checkout (test mode, "Sandbox" badge confirmed), post-checkout state correctly showed Active plan/usage/renewal, Customer Portal opened and returned correctly without cancelling.
+- **Resolved when**: Live production test completed successfully, session 60.
 
 ---
 
@@ -226,6 +225,35 @@
 **Reproducible**: Always (when Gmail not connected)
 **Workaround**: Connect Gmail OAuth in Settings → Integrations first
 ---
+**ID**: TC-TOAST-001
+**Session**: 60
+**Date**: 2026-07-13
+**Area**: App-wide (Sonner toast notifications)
+**Description**: Success/error toast confirmations never appear anywhere in the app
+
+**Preconditions**:
+- Any page with a save/submit action that calls `toast.success()` or `toast.error()` from the `sonner` package
+
+**Steps**:
+1. Navigate to Business Settings → Branding, make a change, click "Save Changes"
+2. Separately: navigate to Sales Employee → Report Scheduler, click "Save Automation" (old, untouched code, not part of this session's changes)
+
+**Expected**: A toast notification (e.g. "Branding saved" / "Schedule saved") appears on screen confirming success
+**Actual**: No toast ever appears, in either case. The underlying save operation completes correctly (confirmed via backend logs / direct DB checks / reload-persistence) — only the visual confirmation is missing.
+
+**Cause (Claude's Analysis)**:
+> Confirmed via `sonner` package source (v1.7.4): the toast container element (`<ol data-sonner-toaster>`) is conditionally rendered only while at least one toast is active in the internal store — its outer wrapper (`<section aria-label="Notifications alt+T">`) mounts correctly and consistently, but the inner toast list stays permanently empty regardless of how many `toast.success()`/`toast.error()` calls are made. Ruled out: stale Docker image (checked package versions + file contents match host exactly), stale Vite dependency pre-bundling cache (cleared `node_modules/.vite` + restarted — no change), duplicate `sonner` package installs (only one copy exists in `node_modules`), console/page errors (none observed in any test), `next-themes` provider issue (its `useTheme()` fails safe with a default value when no `ThemeProvider` exists — confirmed via source, doesn't throw). Root cause not yet isolated — would need actual breakpoint debugging inside `node_modules` to trace why `toast.success()` calls aren't reaching the rendering `<Toaster>`'s subscribed store, which is out of scope for black-box browser QA.
+> Confirmed NOT caused by session 60's Business Branding work — reproduced identically on old, previously-verified-working code (Report Scheduler's "Schedule saved" toast).
+
+**Evidence**:
+- `document.querySelectorAll('[data-sonner-toaster]').length` → 0, checked at 0ms/200ms/500ms/1s/4.5s after clicking Save, across 2 unrelated pages and after a fresh container restart + Vite cache clear
+- Screenshots: `/home/lap-68/.canary/tmp/branding_save_immediate.png`, `/home/lap-68/.canary/tmp/save_automation_toast.png` (no toast visible in either)
+- Backend logs confirm the actual save request completes (200 OK) in both cases — this is purely a frontend notification-rendering gap
+
+**Severity**: Medium — no functional/data-loss impact (saves genuinely work), but a real, app-wide UX gap: users get zero feedback on whether any save/action succeeded or failed
+**Reproducible**: Always, on every page tested
+**Workaround**: None currently — users must reload/re-check to confirm a save took effect
+---
 
 ## Failure Entry Format
 > Claude uses this exact block for every new failure found.
@@ -298,6 +326,26 @@
 **Fix**: Root-caused as a structural problem, not a phrasing edge case — pattern-matching free-form LLM prose after the fact is inherently fragile. Real fix: `SYNTHESIS_PROMPT` in `competitor_agent.py` now asks the LLM to directly judge and return `data_availability: "sparse" | "sufficient"` per platform, rather than inferring it from text afterward. Frontend now uses this field as the primary signal; the old regex is kept only as a fallback for reports generated before this field existed (and broadened slightly, though intentionally not made "perfect" — new reports use the reliable field).
 **Status**: ✅ RESOLVED — re-verified two ways: (1) re-ran synthesis against real stored HubSpot platform data (no new Apify cost) and confirmed the LLM correctly judged Instagram as "sparse" and the other 3 platforms as "sufficient"; (2) live in the browser, the existing HubSpot report (predating this field) now correctly shows "Limited data available for this platform" on Instagram via the fallback regex, with no such note on LinkedIn.
 **Commits**: `sam-backend` `43cd1b7`, `ai-employees-app` `d9aba07`
+---
+
+---
+**ID**: TC-REMI-CAL-001
+**Session found**: 60 (Production E2E pass, 2026-07-09)
+**Area**: Executive Agent (Remi) — Calendar
+**Description**: Calendar schedule card always labeled its range "today" regardless of the actual query window, and listed events with only a time, no date — so a recurring meeting appearing on several different days looked like a triple-booking on one day.
+**Fix**: `get_schedule()` in `executive_agent.py` now computes a real range label (single day / "today" / a "Mon D – Mon D, YYYY" span) from the actual `days_ahead` query window instead of hardcoding `date or "today"`. Frontend `AgentCardView.tsx`'s `calendar_schedule` card now shows each event's own date (`fmtDate(ev.start)`) alongside its time, not time alone.
+**Status**: ✅ RESOLVED — re-verified live with real populated calendar data: header correctly read "Schedule — Jul 9 – Jul 15, 2026", and a recurring "Callmax Project Review" event correctly showed 3 distinct dates (Jul 11, 14, 16) instead of looking like one duplicated entry.
+**Commits**: `sam-backend` `13f21fa`, `ai-employees-app` `c771aca`
+---
+
+---
+**ID**: TC-RS-PREVIEW-001
+**Session found**: 60 (Production E2E pass, 2026-07-09)
+**Area**: Sales Employee — Report Scheduler
+**Description**: Live preview panel didn't update when a module checkbox was toggled — only reflected the last-saved state, so users couldn't preview a change before saving/sending.
+**Fix**: Backend `GET .../preview` now accepts optional `include_*` query-param overrides that apply on top of the saved schedule for that request only (`report_scheduler.py`). Frontend `ReportScheduler.tsx` added a debounced effect that re-fetches the preview against current (possibly unsaved) module state via these overrides.
+**Status**: ✅ RESOLVED — re-verified two ways: (1) direct API check confirming the digest HTML genuinely drops/includes a section based on the override param; (2) live in the browser, toggling a checkbox now shows a spinner and re-renders within ~1s, with no Save click required.
+**Commits**: `sam-backend` `30de5b5`, `ai-employees-app` `e61c69b`
 ---
 
 ## Session Logs
@@ -425,4 +473,19 @@
   - Page already had prior data; "What's Changing" AI Generated Summary banner showed real content immediately on page load (restaurant-industry trend summary), no blank state, no manual refresh triggered (per task instruction — page was not empty/never-tested). Confirms TC-SALES-MA-001 fix holds in prod. 8 analyst cards rendered with real content (Business Intelligence, Pricing Watchdog, Innovation Strategist, Consumer Insights, Market Research, Cultural, Futurist, Trend Analyst).
 - No non-Vite-HMR console errors observed across the entire session (the app appears to be served with a Vite dev client trying to connect to `localhost:8080` from production, worth a separate look but did not block functionality — noted as observation, not a failure).
 - All 3 same-day fixes (webhook-stuck-generating, competitor sparse-data/platform-drop, market-agent-banner-blank-on-load) verified holding under real production conditions with real paid API calls.
+
+---
+
+### Session 60 — 2026-07-09 to 2026-07-13 — Production E2E pass, 2 more bugs fixed, Business Branding built, app-wide toast bug found
+- Status: ✅ Complete — 2 bugs found+fixed+re-verified, 1 new open bug found (toast), 1 feature built+verified end-to-end
+- Scope: continued the production E2E pass from session 59 — Billing, Sales Employee (re-confirm), Remi, Report Scheduler, all against `https://portal.aiemployeesinc.com/`. Then a fresh feature build (Business Branding) verified locally.
+- **Billing** — ✅ PASS: real Stripe Checkout (test mode) completed for the Starter plan; usage/renewal/Active state all correct post-checkout; Customer Portal opened and returned correctly without cancelling. See HB-001 above (moved from Hard Blocker to Resolved).
+- **Remi (Executive Agent)** — ✅ PASS overall, 1 real bug found (TC-REMI-CAL-001, now resolved): inbox read/reply-draft/calendar-read all confirmed against real Gmail/Calendar data (real subject lines, real event correlating with a real email about it); calendar range/date labeling bug found and fixed same day.
+- **Report Scheduler** — ✅ PASS overall, 1 real bug found (TC-RS-PREVIEW-001, now resolved): save/preview/send-test (real email delivery confirmed via API response) all work; live-preview-doesn't-update-on-toggle bug found and fixed same day.
+- **Lead Researcher "tab switch stops analysis"** (Sam-reported) — investigated: confirmed the backend job is unaffected, and the History tab already returns in-progress lookups — the only real gap was the History tab not auto-refreshing. Fixed: self-polls every 8s while anything is "running." Spec-first, then implemented, then verified live with a temporary test row.
+- **Competitor Agent "Discovery Failed"** (Sam-reported) — root-caused via the DB's actual `error_message` to an invalid OpenAI key on the production server, not a code bug. Fixed by Rahul on the server; not yet re-verified with a fresh retry (tracked in TODO.md).
+- **Market Agent generic reports** (Sam-reported) — root-caused to `businesses.type` defaulting to vague values. Resulted in the Business Branding feature (below) rather than a quick field-copy fix.
+- **Business Branding feature** — built end-to-end per Sam's request (spec first): new `business_branding` table (applied live), backend CRUD, Market Agent now uses `target_niche` for industry context, full `BrandingTab.tsx` UI. Verified: backend CRUD tested directly via curl, Market Agent's industry-context function tested against real data (both with and without Branding filled in), full UI live-tested in browser including add/remove tags, color/font changes, and a **page-reload persistence check** (all changes confirmed to survive a hard reload).
+- **App-wide toast bug found while verifying Business Branding** (TC-TOAST-001, above) — confirmed real, confirmed NOT caused by this session's work (reproduced on old, untouched code), root cause not yet isolated. Logged as an open failure — needs dedicated follow-up debugging.
+- Branch: `feature/business-branding` (both repos), pushed, not yet merged — pending Sam's review of the Branding feature.
 *Maintained by Claude Code during QA sessions. Source code is never modified.*

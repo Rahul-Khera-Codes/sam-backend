@@ -1,10 +1,22 @@
 # QA State
 > Managed by Claude during QA sessions. Do not edit manually.
-> Last updated: 2026-07-09 (Session 59)
+> Last updated: 2026-07-13 (Session 60)
 
 ---
 
 ## Last Session
+| Field | Value |
+|---|---|
+| Session # | 60 |
+| Date | 2026-07-09 to 2026-07-13 |
+| Tester | Claude Code (Canary/Playwright, real browser; mix of production + local) |
+| Tests Run | 11 (10 pass, 1 fail — real app-wide bug found) |
+| Passed | 10 |
+| Failed | 1 (TC-TOAST-001 — Sonner toast notifications silently broken app-wide, not caused by this session's work) |
+| Blocked | 0 |
+| Next Priority | Fix TC-TOAST-001 (needs breakpoint debugging inside `node_modules`, out of scope for browser QA). Merge `feature/business-branding` → main once Sam reviews. Re-verify Competitor Agent "Discovery Failed" now that Rahul updated the production OpenAI key. Older platform items unchanged: TC-ROLES-002 + TC-TEAM-006 still open. |
+
+## Previous Session
 | Field | Value |
 |---|---|
 | Session # | 59 |
@@ -14,19 +26,7 @@
 | Passed | 6 |
 | Failed | 0 |
 | Blocked | 0 |
-| Next Priority | Sales Employee production QA complete for Lead Researcher, Competitor Agent, Market Agent — all 3 session-58 same-day fixes (webhook-stuck-generating, competitor sparse-data/platform-drop, market-agent-banner-blank-on-load) confirmed holding under real production conditions (`https://portal.aiemployeesinc.com/`) with real paid Apify/Exa.ai calls. Report Scheduler not covered this session (deferred — already verified locally session 58). Observation (non-blocking): production app is serving a Vite dev client trying to HMR-connect to `localhost:8080` — worth checking the prod build/deploy config separately. Older platform items unchanged: TC-ROLES-002 + TC-TEAM-006 still open. |
-
-## Previous Session
-| Field | Value |
-|---|---|
-| Session # | 58 |
-| Date | 2026-07-08 |
-| Tester | Claude Code (Canary/Playwright, real browser) |
-| Tests Run | 25 (22 pass, 3 fail — all 3 fixed + re-verified same session) |
-| Passed | 25 (after fixes) |
-| Failed | 0 |
-| Blocked | 0 |
-| Next Priority | Sales Employee: all 3 same-session bugs resolved (TC-SALES-LR-003 validators, TC-SALES-CA-004 `data_availability` field, TC-SALES-MA-001 latest-run fetch on load) — see `docs/QA_FINDINGS.md` Resolved Failures. Older platform items unchanged: TC-ROLES-002 + TC-TEAM-006 still open. |
+| Next Priority | Sales Employee production QA complete for Lead Researcher, Competitor Agent, Market Agent — all 3 session-58 same-day fixes confirmed holding under real production conditions. See session 60 for what followed. |
 
 
 ---
@@ -189,6 +189,15 @@
 | Lead Researcher — valid URL → full card (PRODUCTION) | Session 59 | ✅ PASS — verified live, no stuck loading state |
 | Competitor Agent — generate report, all 4 platforms (PRODUCTION) | Session 59 | ✅ PASS — verified live, not stuck generating, 4/4 platforms incl. sparse-data indicator |
 | Market Agent — banner on page load (PRODUCTION) | Session 59 | ✅ PASS — verified live, real content on load, no manual refresh needed |
+| Billing — plan selection + Stripe Checkout (PRODUCTION) | Session 60 | ✅ PASS — real test-mode Checkout completed, Active plan/usage/renewal all correct |
+| Billing — Customer Portal (PRODUCTION) | Session 60 | ✅ PASS — opened + returned without cancelling |
+| Remi — inbox read, calendar read, draft reply (PRODUCTION) | Session 60 | ✅ PASS — real Gmail/Calendar data confirmed, no email sent |
+| Remi — calendar range/date labeling | Session 60 | ✅ FIXED — was ❌ FAIL (mislabeled "today", no per-event dates), now shows real range + per-event dates, re-verified live |
+| Report Scheduler — send-test (PRODUCTION) | Session 60 | ✅ PASS — real email delivery confirmed via API response |
+| Report Scheduler — live preview on unsaved toggle | Session 60 | ✅ FIXED — was ❌ FAIL (stale until save), now updates within ~1s, re-verified via API + browser |
+| Lead Researcher — History tab self-polling | Session 60 | ✅ PASS — new fix, verified live with a temporary test row (running→completed with zero manual interaction) |
+| Business Branding — full CRUD + UI | Session 60 | ✅ PASS — backend verified via curl, UI verified live incl. page-reload persistence |
+| App-wide toast notifications (Sonner) | Session 60 | ❌ FAIL — TC-TOAST-001, confirmed real + app-wide, root cause not yet found |
 
 ---
 
@@ -197,7 +206,7 @@
 |---|---|---|
 | Invite Team Member email (customRoleId) | Edge fn not redeployed with session 38 changes | Redeploy edge functions |
 | Support email | Resend DNS not on Hostinger | ✅ Resolved Session 1 |
-| Billing | Stripe not integrated | Stripe built |
+| Billing | Stripe not integrated | ✅ Resolved Session 60 — confirmed working live |
 | Sub window permissions | Definition unclear | Team clarifies |
 | SMS 2FA | A2P 10DLC blocked | A2P registration approved |
 
@@ -227,6 +236,7 @@
 | 6 | 2026-04-29 | 16 | 6 | 0 | 10 | CSE structural + AI behavior blocked |
 | 7 | 2026-04-29 | 3 | 1 | 1 | 1 | TC-ROLES-002 retest + TC-TEAM-006 blocked + Support email |
 | 59 | 2026-07-09 | 6 | 6 | 0 | 0 | Sales Employee PRODUCTION QA (Lead Researcher, Competitor Agent, Market Agent — live deployment, real paid API calls) |
+| 60 | 2026-07-09 to 2026-07-13 | 11 | 10 | 1 | 0 | Production pass (Billing/Remi/Report Scheduler), 2 bugs fixed, Business Branding built, app-wide toast bug found |
 
 ---
 
