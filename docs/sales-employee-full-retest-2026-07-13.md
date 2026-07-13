@@ -82,7 +82,7 @@
 | TC-RS-001 | Toggle a module checkbox without saving | Uncheck "Lead Researcher" | Live preview updates within ~1s to drop that section, WITHOUT clicking Save (session-60 fix) | ✅ PASS |
 | TC-RS-002 | Re-check the box | — | Preview restores the section | ✅ PASS |
 | TC-RS-003 | Save Automation | — | Saves correctly (no visible toast — known TC-TOAST-001, don't re-log) | ✅ PASS — confirmed via direct API capture (200, fresh updated_at) |
-| TC-RS-004 | Send Test Email | — | Real email sent, confirm via network response `{"sent":true,...}` | ❌ **FAIL (regression)** — response was `{"sent":false,"detail":"Gmail is not connected for this business, or the send failed."}`. Root cause: Gmail OAuth refresh token expired (`token_expiry: 2026-07-09`, 4 days stale) — Google rejected the refresh with 401. Environment/OAuth issue, NOT a Report Scheduler code defect (worked fine in session 60). See TC-RS-004-GMAIL-TOKEN in QA_FINDINGS.md. |
+| TC-RS-004 | Send Test Email | — | Real email sent, confirm via network response `{"sent":true,...}` | ✅ **FIXED** — initially failed with `{"sent":false,...}` (Gmail OAuth refresh token expired, 401 from Google — environment issue, not code). Reconnected Gmail, retried: `{"sent":true,"detail":"Test email sent to rahul.excel2011@gmail.com."}`. See TC-RS-004-GMAIL-TOKEN in QA_FINDINGS.md (moved to Resolved). |
 
 ## 6. Cross-cutting
 
@@ -99,9 +99,9 @@
 
 **Run date:** 2026-07-13 · **Tool:** 5 parallel Canary session recordings (real Playwright browser), one per module/area.
 
-**Result: 26 tests run, 25 passed, 1 failed.**
+**Result: 26 tests run, 26 passed (after 1 same-session fix).**
 
-The 1 failure (TC-RS-004) is a **regression caused by an expired Gmail OAuth token in this environment**, not a code defect — Report Scheduler's send-test worked correctly in session 60 on this same business. Needs a Gmail reconnect, not a code fix.
+TC-RS-004 initially failed — **an expired Gmail OAuth token in this environment**, not a code defect (Report Scheduler's send-test worked correctly in session 60 on this same business). Gmail was reconnected and the test re-run immediately: `{"sent":true,"detail":"Test email sent to rahul.excel2011@gmail.com."}` — confirmed fixed.
 
 **The headline result is TC-MA-INTEGRATION-001**: direct, quoted evidence that Market Agent's reports now genuinely reflect the business's Branding data (home-service/HVAC/plumbing context, real named competitors, trade-press citations) instead of generic or wrong-industry content — this is the actual proof that the whole Business Branding feature accomplishes what Sam asked for, not just that the UI saves data.
 

@@ -10,14 +10,14 @@
 
 | Metric | Count |
 |---|---|
-| Total Tests Run | 119 |
-| Total Passed | 97 |
-| Total Failed | 10 |
+| Total Tests Run | 120 |
+| Total Passed | 98 |
+| Total Failed | 9 |
 | Total Blocked | 13 |
-| Open Failures | 4 (TC-TEAM-006, TC-ROLES-002 — real bugs, older platform sessions; app-wide Sonner toast bug — session 60, found 2026-07-13, not yet fixed; TC-RS-004-GMAIL-TOKEN — session 61, found 2026-07-13, Gmail OAuth token invalid for test business) |
-| Resolved Failures | 5 (TC-SALES-LR-003, TC-SALES-CA-004, TC-SALES-MA-001 — session 58; Remi calendar range/date bug, Report Scheduler live-preview bug — session 60, both fixed same day and re-verified live) |
+| Open Failures | 3 (TC-TEAM-006, TC-ROLES-002 — real bugs, older platform sessions; app-wide Sonner toast bug — session 60, found 2026-07-13, not yet fixed) |
+| Resolved Failures | 6 (TC-SALES-LR-003, TC-SALES-CA-004, TC-SALES-MA-001 — session 58; Remi calendar range/date bug, Report Scheduler live-preview bug — session 60; TC-RS-004-GMAIL-TOKEN — session 61, fixed by reconnecting Gmail OAuth, re-verified) |
 | Hard Blockers (pre-existing) | 0 (Billing — confirmed working live, session 60: real Stripe Checkout test-mode subscription completed successfully) |
-| Last Updated | 2026-07-13 (Session 61 — full Sales Employee + Business Branding re-test, 26 tests across 5 parallel Canary sessions: Business Branding 10/10, Lead Researcher 4/4, Competitor Agent 4/4, Market Agent 4/4 [incl. the industry-relevance integration test — see below], Report Scheduler 3/4. Headline result: direct evidence Market Agent's reports now genuinely reflect Branding's target_niche instead of generic content.) |
+| Last Updated | 2026-07-13 (Session 61 — full Sales Employee + Business Branding re-test, 26 tests across 5 parallel Canary sessions: Business Branding 10/10, Lead Researcher 4/4, Competitor Agent 4/4, Market Agent 4/4 [incl. the industry-relevance integration test], Report Scheduler 4/4 after Gmail OAuth reconnect. Headline result: direct evidence Market Agent's reports now genuinely reflect Branding's target_niche instead of generic content.) |
 
 ---
 
@@ -256,40 +256,6 @@
 ---
 
 ---
-**ID**: TC-RS-004-GMAIL-TOKEN
-**Session**: 61
-**Date**: 2026-07-13
-**Area**: Sales Employee — Report Scheduler
-**Description**: "Send Test Email" fails — Gmail refresh token for this business now returns 401 Unauthorized from Google; regression against session 60's confirmed-working state
-
-**Preconditions**:
-- Logged in as rahul.excel2011@gmail.com, business/location "Eifel Tower 8" (Woyce Tech), business_id `f46ce260-45da-4db8-9bc1-b0af01ec3acc`
-- Navigate to Dashboard → Sales Employee → Scheduler
-- A `gmail_tokens` row already exists for this business (this is NOT the "Gmail never connected" case — see TC-SUPPORT-001 for that pattern)
-
-**Steps**:
-1. Navigate to /dashboard/sales/scheduler
-2. Click "Send Test Email"
-3. Capture the actual POST `/sales/report-scheduler/schedules/{id}/send-test` response body (not just the UI, since TC-TOAST-001 means no toast would show either way)
-
-**Expected**: `{"sent": true, "detail": "Test email sent to rahul.excel2011@gmail.com."}` — this exact flow was confirmed working live in Session 60 (2026-07-09) on this same business/account.
-**Actual**: `{"sent": false, "detail": "Gmail is not connected for this business, or the send failed."}` (HTTP 200). Backend logs confirm the real cause: `Gmail token refresh failed for business f46ce260-45da-4db8-9bc1-b0af01ec3acc: Client error '401 Unauthorized' for url 'https://oauth2.googleapis.com/token'` — the stored `gmail_tokens` row's refresh_token is no longer valid (Google rejected it), not a missing connection.
-**Status**: 🔁 REGRESSION (environment — Gmail OAuth grant now invalid, not a Report Scheduler code bug)
-
-**Cause (Claude's Analysis)**:
-> `report_scheduler.py`'s `_get_business_gmail_access_token` calls `email_service.refresh_access_token(row["refresh_token"], ...)` against Google's token endpoint. Google returned 401 Unauthorized on the refresh attempt — this means the stored refresh token has been invalidated on Google's side (common causes: token revoked by the user/Google, OAuth client secret rotated, or the token aged out). `send_digest()` then returns `False`, and the router correctly surfaces the generic `sent:false` message (by design, so as not to leak internal error detail to the frontend) — the code path itself is behaving exactly as written; the actual fix needed is reconnecting Gmail OAuth for this business in Business Settings → Integrations, not a code change.
-> Confirmed via `docker logs sam-backend-sam-backend-1`: the GET to `gmail_tokens` succeeded (row exists), the refresh call is what failed with 401.
-
-**Evidence**:
-- Screenshot: docs/qa-screenshots/TC-RS-004-send-test-response.png
-- Backend log: `ERROR:app.services.email_service:Gmail token refresh failed 401: {` / `ERROR:app.routers.report_scheduler:Gmail token refresh failed for business f46ce260-45da-4db8-9bc1-b0af01ec3acc: Client error '401 Unauthorized' for url 'https://oauth2.googleapis.com/token'`
-- Network call: `POST http://localhost:8003/sales/report-scheduler/schedules/4887220c-2d95-4b3e-b9ab-34066124a533/send-test` → 200 → `{"sent":false,"detail":"Gmail is not connected for this business, or the send failed."}`
-- Canary session: `sales-report-scheduler-qa-mriwkv4k-7180a4`, report at `~/.canary/sessions/sales-report-scheduler-qa-mriwkv4k-7180a4/report.html`
-
-**Severity**: Medium — blocks real test-email verification for this specific test account; does not indicate a Report Scheduler code defect (module toggle + live preview + save all confirmed working correctly in the same session)
-**Reproducible**: Always, for this business, until Gmail is reconnected
-**Workaround**: Reconnect Gmail OAuth for "Woyce Tech" in Business Settings → Integrations
----
 
 ## Failure Entry Format
 > Claude uses this exact block for every new failure found.
@@ -382,6 +348,16 @@
 **Fix**: Backend `GET .../preview` now accepts optional `include_*` query-param overrides that apply on top of the saved schedule for that request only (`report_scheduler.py`). Frontend `ReportScheduler.tsx` added a debounced effect that re-fetches the preview against current (possibly unsaved) module state via these overrides.
 **Status**: ✅ RESOLVED — re-verified two ways: (1) direct API check confirming the digest HTML genuinely drops/includes a section based on the override param; (2) live in the browser, toggling a checkbox now shows a spinner and re-renders within ~1s, with no Save click required.
 **Commits**: `sam-backend` `30de5b5`, `ai-employees-app` `e61c69b`
+---
+
+---
+**ID**: TC-RS-004-GMAIL-TOKEN
+**Session found**: 61 (2026-07-13)
+**Area**: Sales Employee — Report Scheduler
+**Description**: "Send Test Email" returned `sent:false` — the test business's Gmail refresh token had been invalidated by Google (401 Unauthorized on refresh), an environment/OAuth-grant issue, not a code defect.
+**Fix**: No code change — Rahul reconnected Gmail OAuth for "Woyce Tech" in Business Settings → Integrations.
+**Status**: ✅ RESOLVED — re-verified immediately after reconnect: `POST .../send-test` → 200 → `{"sent":true,"detail":"Test email sent to rahul.excel2011@gmail.com."}`. Confirms the code path was correct throughout; the token being invalid was the entire issue.
+**Commits**: none (no code changed)
 ---
 
 ## Session Logs
