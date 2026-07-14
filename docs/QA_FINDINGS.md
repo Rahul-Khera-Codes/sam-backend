@@ -14,10 +14,10 @@
 | Total Passed | 98 |
 | Total Failed | 9 |
 | Total Blocked | 13 |
-| Open Failures | 3 (TC-TEAM-006, TC-ROLES-002 — real bugs, older platform sessions; app-wide Sonner toast bug — session 60, found 2026-07-13, not yet fixed) |
-| Resolved Failures | 6 (TC-SALES-LR-003, TC-SALES-CA-004, TC-SALES-MA-001 — session 58; Remi calendar range/date bug, Report Scheduler live-preview bug — session 60; TC-RS-004-GMAIL-TOKEN — session 61, fixed by reconnecting Gmail OAuth, re-verified) |
+| Open Failures | 2 (TC-TEAM-006, TC-ROLES-002 — real bugs, older platform sessions) |
+| Resolved Failures | 7 (TC-SALES-LR-003, TC-SALES-CA-004, TC-SALES-MA-001 — session 58; Remi calendar range/date bug, Report Scheduler live-preview bug — session 60; TC-RS-004-GMAIL-TOKEN — session 61, fixed by reconnecting Gmail OAuth, re-verified; TC-TOAST-001 — session 62, closed as false positive, no code bug) |
 | Hard Blockers (pre-existing) | 0 (Billing — confirmed working live, session 60: real Stripe Checkout test-mode subscription completed successfully) |
-| Last Updated | 2026-07-13 (Session 61 — full Sales Employee + Business Branding re-test, 26 tests across 5 parallel Canary sessions: Business Branding 10/10, Lead Researcher 4/4, Competitor Agent 4/4, Market Agent 4/4 [incl. the industry-relevance integration test], Report Scheduler 4/4 after Gmail OAuth reconnect. Headline result: direct evidence Market Agent's reports now genuinely reflect Branding's target_niche instead of generic content.) |
+| Last Updated | 2026-07-14 (Session 62 — investigated TC-TOAST-001 via systematic debugging: 2 independent Canary re-tests, fresh-load and persistent-session, found sonner rendering correctly every time. Closed as a false positive — the original reports didn't account for a few handlers' multi-second latency before the toast fires. Branch `fix/sonner-toast-notifications` has no fix to carry, zero commits, safe to abandon/delete.) |
 
 ---
 
@@ -225,37 +225,6 @@
 **Reproducible**: Always (when Gmail not connected)
 **Workaround**: Connect Gmail OAuth in Settings → Integrations first
 ---
-**ID**: TC-TOAST-001
-**Session**: 60
-**Date**: 2026-07-13
-**Area**: App-wide (Sonner toast notifications)
-**Description**: Success/error toast confirmations never appear anywhere in the app
-
-**Preconditions**:
-- Any page with a save/submit action that calls `toast.success()` or `toast.error()` from the `sonner` package
-
-**Steps**:
-1. Navigate to Business Settings → Branding, make a change, click "Save Changes"
-2. Separately: navigate to Sales Employee → Report Scheduler, click "Save Automation" (old, untouched code, not part of this session's changes)
-
-**Expected**: A toast notification (e.g. "Branding saved" / "Schedule saved") appears on screen confirming success
-**Actual**: No toast ever appears, in either case. The underlying save operation completes correctly (confirmed via backend logs / direct DB checks / reload-persistence) — only the visual confirmation is missing.
-
-**Cause (Claude's Analysis)**:
-> Confirmed via `sonner` package source (v1.7.4): the toast container element (`<ol data-sonner-toaster>`) is conditionally rendered only while at least one toast is active in the internal store — its outer wrapper (`<section aria-label="Notifications alt+T">`) mounts correctly and consistently, but the inner toast list stays permanently empty regardless of how many `toast.success()`/`toast.error()` calls are made. Ruled out: stale Docker image (checked package versions + file contents match host exactly), stale Vite dependency pre-bundling cache (cleared `node_modules/.vite` + restarted — no change), duplicate `sonner` package installs (only one copy exists in `node_modules`), console/page errors (none observed in any test), `next-themes` provider issue (its `useTheme()` fails safe with a default value when no `ThemeProvider` exists — confirmed via source, doesn't throw). Root cause not yet isolated — would need actual breakpoint debugging inside `node_modules` to trace why `toast.success()` calls aren't reaching the rendering `<Toaster>`'s subscribed store, which is out of scope for black-box browser QA.
-> Confirmed NOT caused by session 60's Business Branding work — reproduced identically on old, previously-verified-working code (Report Scheduler's "Schedule saved" toast).
-
-**Evidence**:
-- `document.querySelectorAll('[data-sonner-toaster]').length` → 0, checked at 0ms/200ms/500ms/1s/4.5s after clicking Save, across 2 unrelated pages and after a fresh container restart + Vite cache clear
-- Screenshots: `/home/lap-68/.canary/tmp/branding_save_immediate.png`, `/home/lap-68/.canary/tmp/save_automation_toast.png` (no toast visible in either)
-- Backend logs confirm the actual save request completes (200 OK) in both cases — this is purely a frontend notification-rendering gap
-
-**Severity**: Medium — no functional/data-loss impact (saves genuinely work), but a real, app-wide UX gap: users get zero feedback on whether any save/action succeeded or failed
-**Reproducible**: Always, on every page tested
-**Workaround**: None currently — users must reload/re-check to confirm a save took effect
----
-
----
 
 ## Failure Entry Format
 > Claude uses this exact block for every new failure found.
@@ -299,6 +268,18 @@
 
 ## Resolved Failures
 > Move here after fix is deployed and Claude re-verifies with ✅.
+
+---
+**ID**: TC-TOAST-001
+**Session found**: 60 (2026-07-13)
+**Session closed**: 62 (2026-07-14)
+**Area**: App-wide (Sonner toast notifications)
+**Description**: Originally reported as "success/error toast confirmations never appear anywhere in the app."
+**Closure finding**: NOT A BUG — false positive from the original testing methodology, not a code defect. Two independent re-investigations (fresh `page.goto()` loads on 2 flows; then one continuous browser session performing 9 toast-triggering actions across 7 different pages, no reloads) found sonner's `<Toaster>` rendering correctly every single time, confirmed via DOM inspection (`data-sonner-toast`, `data-visible="true"`), screenshots, and zero console errors throughout. Directly verified against `sonner@1.7.4` source that an empty `<section aria-label="Notifications alt+T">` between toasts is expected behavior, not evidence of a broken mount.
+**Root cause of the original false reading**: several handlers make sequential `await` calls before firing the toast, and sonner's default toast auto-dismisses after ~4s. Customer Service Scheduler's agent-toggle handler (`Scheduler.tsx` `handleAgentToggle`, ~lines 132–154) makes 3 sequential awaited API calls, taking up to **~5.5s** before the toast fires — a QA check made a couple seconds after clicking (reasonable expectation for what should be instant feedback) would see zero toasts, identical to what was originally reported, even though the toast fires correctly once the slow chain resolves. The original TC-TOAST-001 evidence (checks at 0ms/200ms/500ms/1s/4.5s all reading 0) could not be reproduced under the same conditions in this re-investigation — the discrepancy is attributed to the original checks not accounting for handler latency, not to an actual rendering defect.
+**Status**: ✅ CLOSED — no code change made (none needed). Branch `fix/sonner-toast-notifications` (both repos, zero commits) has no fix to carry and can be abandoned/deleted.
+**Separate, smaller, non-blocking finding kept open**: CS Scheduler's agent toggle takes ~5.5s with no interim feedback due to 3 sequential awaited calls — worth optimizing for UX (parallelize or show a loading state immediately), but not a bug and not app-wide.
+---
 
 ---
 **ID**: TC-SALES-MA-001

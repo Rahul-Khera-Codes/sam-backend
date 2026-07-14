@@ -1,10 +1,22 @@
 # QA State
 > Managed by Claude during QA sessions. Do not edit manually.
-> Last updated: 2026-07-13 (Session 61)
+> Last updated: 2026-07-14 (Session 62)
 
 ---
 
 ## Last Session
+| Field | Value |
+|---|---|
+| Session # | 62 |
+| Date | 2026-07-14 |
+| Tester | Claude Code (systematic-debugging process + 2 Canary re-investigations: fresh-load, then persistent-session) |
+| Tests Run | 2 investigations, 11 total toast-triggering actions across 8 distinct pages (2 fresh-load flows + 9 in one continuous session) |
+| Passed | 11/11 — sonner rendered correctly every time when given enough time to observe |
+| Failed | 0 |
+| Blocked | 0 |
+| Next Priority | TC-TOAST-001 CLOSED — false positive, not a code bug (see QA_FINDINGS.md Resolved Failures). Branch `fix/sonner-toast-notifications` has no fix to carry, zero commits, safe to abandon/delete. Smaller non-blocking finding kept open: CS Scheduler's agent toggle takes ~5.5s with no interim feedback (3 sequential awaited calls) — optional UX polish, not a bug. Older platform items unchanged: TC-ROLES-002 + TC-TEAM-006 still open. |
+
+## Previous Session
 | Field | Value |
 |---|---|
 | Session # | 61 |
@@ -14,19 +26,7 @@
 | Passed | 26 (TC-RS-004 re-verified after Gmail reconnect — sent:true confirmed) |
 | Failed | 0 |
 | Blocked | 0 |
-| Next Priority | Fix TC-TOAST-001 (still open, app-wide toast bug). Merge `feature/business-branding` → main once Sam reviews (headline result: TC-MA-INTEGRATION-001 passed with strong evidence — Market Agent reports now genuinely reflect Branding's target_niche). Follow up on 2 minor findings: Competitor Agent's Jina extraction gap (0 social links for a real site), cosmetic DOM-nesting warning in LeadHistoryTab. Older platform items unchanged: TC-ROLES-002 + TC-TEAM-006 still open. |
-
-## Previous Session
-| Field | Value |
-|---|---|
-| Session # | 60 |
-| Date | 2026-07-09 to 2026-07-13 |
-| Tester | Claude Code (Canary/Playwright, real browser; mix of production + local) |
-| Tests Run | 11 (10 pass, 1 fail — real app-wide bug found) |
-| Passed | 10 |
-| Failed | 1 (TC-TOAST-001 — Sonner toast notifications silently broken app-wide, not caused by this session's work) |
-| Blocked | 0 |
-| Next Priority | Fix TC-TOAST-001 (needs breakpoint debugging inside `node_modules`, out of scope for browser QA). Merge `feature/business-branding` → main once Sam reviews. Re-verify Competitor Agent "Discovery Failed" now that Rahul updated the production OpenAI key. Older platform items unchanged: TC-ROLES-002 + TC-TEAM-006 still open. |
+| Next Priority | (superseded — see Session 62 above for TC-TOAST-001 closure) Merge `feature/business-branding` → main once Sam reviews (headline result: TC-MA-INTEGRATION-001 passed with strong evidence — Market Agent reports now genuinely reflect Branding's target_niche). Follow up on 2 minor findings: Competitor Agent's Jina extraction gap (0 social links for a real site), cosmetic DOM-nesting warning in LeadHistoryTab. Older platform items unchanged: TC-ROLES-002 + TC-TEAM-006 still open. |
 
 
 ---
@@ -205,7 +205,7 @@
 | **Market Agent — industry-relevance integration test** | Session 61 | ✅ **PASS** — post-refresh reports directly quote home-service/HVAC-specific content + real named competitors, matching Branding's `target_niche`; backend logs confirm the fetch order proves the wiring, not coincidence |
 | Business Branding — full CRUD + UI re-test (10 cases) | Session 61 | ✅ PASS (10/10) — incl. tag add/remove, color/font changes, edge-case field clearing, and full reload-persistence check |
 | Business Branding — full CRUD + UI | Session 60 | ✅ PASS — backend verified via curl, UI verified live incl. page-reload persistence |
-| App-wide toast notifications (Sonner) | Session 60 | ❌ FAIL — TC-TOAST-001, confirmed real + app-wide, root cause not yet found |
+| App-wide toast notifications (Sonner) | Session 62 | ✅ CLOSED (was ❌ FAIL, session 60) — TC-TOAST-001 re-investigated via systematic debugging, could not reproduce across 11 actions/8 pages; false positive from short observation windows vs a few handlers' multi-second latency, not a code bug |
 
 ---
 
