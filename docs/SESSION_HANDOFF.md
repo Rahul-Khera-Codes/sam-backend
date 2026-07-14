@@ -1,4 +1,4 @@
-# Session Handoff — 2026-07-13 (Session 60)
+# Session Handoff — 2026-07-14 (Session 61)
 
 Read this at the start of every session. It captures the full current state so you can pick up immediately.
 
@@ -17,7 +17,7 @@ Two repos:
 - **Backend + Agent:** `/home/lap-68/Documents/gt-rahul/sam-backend`
 - **Frontend:** `/home/lap-68/Documents/gt-rahul/ai-employees-app`
 
-**`main` is fully up to date in both repos** (merged 2026-07-09 — includes all of `feature/exec-agent-improvements`, the full Sales Employee build, and the session-59 production bug fixes). Both repos are currently on a **new branch, `feature/business-branding`** (pushed, not yet merged) — the Business Branding feature (see Session 60 below). `fix/avatar-aec` remains deliberately parked (both repos) — not merged, not an active blocker.
+**`main` is fully up to date in both repos** (as of 2026-07-13 — includes everything through the Business Branding feature: `feature/exec-agent-improvements`, the full Sales Employee build, all session-59/60 production fixes, and Business Branding). Both repos are currently on a **new branch, `fix/sonner-toast-notifications`** (not yet started, no commits) — for the one remaining known bug: the app-wide Sonner toast notifications issue (see Open Bugs / Session 61 below). `fix/avatar-aec` remains deliberately parked (both repos) — not merged, not an active blocker.
 
 > **Restart needed:** `docker compose restart sam-executive-agent` after any backend/agent code changes.
 
@@ -183,11 +183,11 @@ Key env files:
 
 ## Pending Manual Steps
 
-- [ ] **Fix the app-wide Sonner toast bug** (found session 60, 2026-07-13) — every `toast.success()`/`toast.error()` call via the `sonner` package is silently a no-op across the ENTIRE app (confirmed on both the new Business Branding save AND an old, untouched Report Scheduler save — not a regression from session 60's work). Ruled out: stale Docker image, stale Vite dep cache, duplicate `sonner` installs, console errors, `next-themes` provider issue. Root cause not yet found — `<Toaster>` mounts fine but its internal toast store never receives anything, needs actual breakpoint debugging inside `node_modules` to pin down. Underlying save/data operations all work correctly; only the confirmation pop-up is broken. See `docs/QA_FINDINGS.md` for full elimination log.
-- [ ] **Merge `feature/business-branding` → main** (both repos) once Sam has reviewed the new Branding tab — see session 60 detail below.
+- [ ] **Fix the app-wide Sonner toast bug** (found session 60, 2026-07-13) — every `toast.success()`/`toast.error()` call via the `sonner` package is silently a no-op across the ENTIRE app (confirmed on both the new Business Branding save AND an old, untouched Report Scheduler save — not a regression from session 60's work). Ruled out: stale Docker image, stale Vite dep cache, duplicate `sonner` installs, console errors, `next-themes` provider issue. Root cause not yet found — `<Toaster>` mounts fine but its internal toast store never receives anything, needs actual breakpoint debugging inside `node_modules` to pin down. Underlying save/data operations all work correctly; only the confirmation pop-up is broken. **Now has a dedicated branch, `fix/sonner-toast-notifications` (both repos), work not yet started.** See `docs/QA_FINDINGS.md` for full elimination log.
+- [x] **Merge `feature/business-branding` → main** — DONE 2026-07-13/14 (both repos, clean fast-forward, backend health + frontend build both verified before push).
 - [ ] **Real production deploy for Sales Employee** — still running on ngrok (Apify webhook) + a personal Exa/Apify/YouTube setup in places. Needed before any real customer uses Lead Researcher/Competitor Agent/Market Agent/Report Scheduler.
 - [ ] **Sam's lawyer sign-off** on scraped-lead outreach sourcing (CASL/ToS) — doesn't block the build, blocks public launch of Sales Employee.
-- [ ] **Live-test the billing add-on** (session 56) — needs a real Stripe test-mode subscription on at least one business, since the toggle is currently disabled for all of them (none has a base plan). Confirm enable/disable creates/removes the Stripe subscription item, and confirm `/dashboard/executive` stays accessible either way (enforcement is off by default).
+- [ ] **Live-test the billing add-on toggle specifically** (session 56) — the underlying "no base plan" blocker is now resolved (Woyce Tech has a real Starter subscription as of session 60's live Stripe test), so the Remi add-on card is now enabled/purchasable for at least one business — still need to actually toggle it on/off and confirm enable/disable creates/removes the Stripe subscription item, and confirm `/dashboard/executive` stays accessible either way (enforcement is off by default).
 - [ ] **Whole-product billing enforcement gap** (session 56, found + deliberately deferred) — no subscription status is checked anywhere outside the Billing page's display, for any feature. See `TODO.md` + `memory/project_blockers.md` for the agreed architecture. Don't rush this.
 - [ ] **Dev OAuth client for local Gmail testing** — own Google project, Testing mode, localhost redirect URIs (`http://localhost:5173/integrations/{gmail,google}/callback`), scopes gmail.send+gmail.readonly+calendar.events+userinfo.email+openid, dev as test user; put client id/secret in local `backend/.env` AND `agent/.env.local`.
 - [ ] **Decision (Sam): Gmail CASA** — commit to restricted-scope assessment for launch, or narrow feature. Don't escalate the core product's pending verification.
@@ -220,6 +220,29 @@ Key env files:
 
 ## Pending Migrations (not yet applied)
 - None currently outstanding.
+
+---
+
+## What Was Done This Session (Session 61, 2026-07-13 to 2026-07-14)
+
+**Continued straight from Session 60's Business Branding build. Full real-user re-test of all 4 Sales Employee modules + Branding, fixed the one regression found, then merged everything to main.**
+
+### 1. Full Sales Employee + Business Branding re-test — 26/26 pass
+Created `docs/sales-employee-full-retest-2026-07-13.md` and ran it as 5 parallel real-browser Canary sessions (one per module/area), against localhost. Results: Business Branding 10/10, Lead Researcher 4/4, Competitor Agent 4/4, Market Agent 4/4, Report Scheduler 3/4 (then fixed to 4/4 — see below). Full detail + evidence in `docs/QA_FINDINGS.md` Session 61.
+
+**Headline result — TC-MA-INTEGRATION-001**: direct, quoted evidence that Market Agent's reports now genuinely reflect Branding's `target_niche` instead of generic content. Post-refresh cards referenced "home services," named real competitors (ServiceTitan, Avoca, Goodcall, Rosie), and cited trade press specific to plumbers/electricians/HVAC — zero restaurant/generic language. Backend logs confirmed the `business_branding` fetch happened before the Exa searches. This is the actual proof the whole Business Branding feature accomplishes what Sam asked for.
+
+**One regression found and fixed same session**: Report Scheduler's "Send Test Email" returned `{"sent":false,...}` — traced to the test business's Gmail OAuth refresh token having expired (401 from Google), not a code defect (confirmed working in session 60 on this same business). Rahul reconnected Gmail; retried immediately and confirmed `{"sent":true,"detail":"Test email sent to rahul.excel2011@gmail.com."}`.
+
+**Also confirmed**: the Competitor Agent "Discovery Failed" OpenAI-key issue is not present locally (clean 200s from OpenAI) — though this was tested locally, not directly against production where the original bug occurred.
+
+**2 minor, non-blocking findings** (not fixed, not urgent): a cosmetic React DOM-nesting console warning in `LeadHistoryTab.tsx`; Competitor Agent discovery returned zero social links for a real, well-known site (Salesforce) — likely a Jina AI Reader extraction gap, separate from the OpenAI-key bug.
+
+### 2. Merged everything to `main`
+With the re-test clean and the regression fixed, merged `feature/business-branding` → `main` in both repos — clean fast-forward, no conflicts. Backend restart verified healthy; frontend production build verified before pushing. `main` is now fully current in both repos.
+
+### 3. Started a dedicated branch for the one remaining bug
+Created `fix/sonner-toast-notifications` (both repos) for the app-wide Sonner toast bug found in session 60 — no work started yet, kept deliberately separate from the Business Branding work per the user's request.
 
 ---
 
