@@ -32,6 +32,7 @@ from app.schemas.competitor_agent import (
     CompetitorResponse,
     PlatformActivity,
     ReportCreatedResponse,
+    UpdateCompetitorRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -419,6 +420,35 @@ async def list_competitors(
         .execute()
     )
     return CompetitorListResponse(competitors=[_competitor_row_to_response(r) for r in rows.data])
+
+
+@router.patch("/competitors/{competitor_id}", response_model=CompetitorResponse)
+async def update_competitor(
+    competitor_id: str,
+    body: UpdateCompetitorRequest,
+    user_id: str = Depends(get_user_id),
+):
+    existing = supabase_admin.table("competitors").select("*").eq("id", competitor_id).limit(1).execute()
+    if not existing.data:
+        raise HTTPException(status_code=404, detail="Competitor not found.")
+
+    competitor = existing.data[0]
+    verify_business_access(user_id, competitor["business_id"])
+
+    updates = body.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No updates were provided.")
+
+    updates["discovery_status"] = "completed"
+    updates["error_message"] = None
+
+    updated = (
+        supabase_admin.table("competitors")
+        .update(updates)
+        .eq("id", competitor_id)
+        .execute()
+    )
+    return _competitor_row_to_response(updated.data[0])
 
 
 @router.post("/competitors/{competitor_id}/report", response_model=ReportCreatedResponse)
