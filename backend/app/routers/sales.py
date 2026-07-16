@@ -4,8 +4,9 @@ Sales Employee router — Lead Researcher module.
 POST /sales/lead-researcher/lookup   — kick off an async Apify scrape for a LinkedIn URL
 POST /sales/lead-researcher/webhook  — Apify calls this when the run finishes; we enrich + save
 GET  /sales/lead-researcher/lookup/{id} — poll for status/result
-GET  /sales/lead-researcher/history  — past lookups for a business
-PATCH /sales/lead-researcher/lookup/{id}/save — toggle saved
+GET    /sales/lead-researcher/history  — past lookups for a business
+PATCH  /sales/lead-researcher/lookup/{id}/save — toggle saved
+DELETE /sales/lead-researcher/lookup/{id} — delete a finished lookup
 """
 import base64
 import json
@@ -321,6 +322,26 @@ async def get_lead_lookup_history(
 
 class SaveLeadLookupRequest(BaseModel):
     is_saved: bool
+
+
+@router.delete("/lookup/{lookup_id}", status_code=204)
+async def delete_lead_lookup(
+    lookup_id: str,
+    user_id: str = Depends(get_user_id),
+):
+    row_result = supabase_admin.table("lead_lookups").select("*").eq("id", lookup_id).limit(1).execute()
+    if not row_result.data:
+        raise HTTPException(status_code=404, detail="Lookup not found.")
+    row = _mark_stale_if_needed(row_result.data[0])
+    verify_business_access(user_id, row["business_id"])
+
+    if row["status"] in {"pending", "running"}:
+        raise HTTPException(
+            status_code=409,
+            detail="This lookup is still running and cannot be deleted yet.",
+        )
+
+    supabase_admin.table("lead_lookups").delete().eq("id", lookup_id).execute()
 
 
 @router.patch("/lookup/{lookup_id}/save", response_model=LeadLookupResponse)
