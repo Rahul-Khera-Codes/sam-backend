@@ -48,10 +48,12 @@ GET /sales/market-agent/runs/{run_id}
       "business_id": "uuid",
       "analyst_type": "trend",
       "analyst_name": "Trend Analyst",
+      "custom_analyst_id": null,
       "headline": "...",
       "insight": "...",
       "confidence": "high",
       "timeframe_or_impact": "Happening now (2026)",
+      "prompt_used": "recent, concrete growth patterns and trend shifts in the HVAC industry",
       "sources": [ { "url": "...", "title": "..." } ],
       "is_bookmarked": false,
       "status": "completed",
@@ -66,7 +68,7 @@ GET /sales/market-agent/runs/{run_id}
 }
 ```
 
-`analyst_type` is one of: `trend`, `futurist`, `cultural`, `market_research`, `consumer_insights`, `innovation_strategist`, `business_intelligence`, `custom`. The **Business Intelligence** card has an empty `sources` array — it's generated from this business's own call analytics, not external search, so there's nothing to cite.
+`analyst_type` is one of: `trend`, `futurist`, `cultural`, `market_research`, `consumer_insights`, `innovation_strategist`, `business_intelligence`, `custom`. The **Business Intelligence** card has an empty `sources` array — it's generated from this business's own call analytics, not external search, so there's nothing to cite. `prompt_used` is the exact stored prompt/query behind the card; `custom_analyst_id` is populated for custom cards so the UI can reopen the matching custom analyst definition reliably.
 
 ---
 
@@ -116,8 +118,16 @@ GET /sales/market-agent/custom-analysts?business_id=uuid
 ```
 Returns `{ "custom_analysts": [...] }`. Any custom analyst defined here automatically gets included in every future refresh (manual or scheduled) — no separate step needed to "activate" it.
 
+```
+PATCH /sales/market-agent/custom-analysts/{custom_analyst_id}
+```
+```json
+{ "name": "Pricing Watchdog", "prompt_description": "Watch for pricing changes among AI voice agent competitors" }
+```
+Updates the saved custom analyst definition. This affects future refreshes only; old cards remain historical snapshots.
+
 ---
 
 ## Not built yet
-- Deleting/editing a custom analyst.
+- Deleting a custom analyst.
 - News integration (this was the original "News aggregation" pipeline step — Exa's general web search covers a lot of the same ground for Market Agent, but nothing here is scoped as strictly "news").

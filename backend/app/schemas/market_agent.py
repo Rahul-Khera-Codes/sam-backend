@@ -10,6 +10,11 @@ class AddCustomAnalystRequest(BaseModel):
     prompt_description: str
 
 
+class UpdateCustomAnalystRequest(BaseModel):
+    name: str
+    prompt_description: str
+
+
 class CustomAnalystResponse(BaseModel):
     id: str
     business_id: str
@@ -39,10 +44,12 @@ class MarketAnalysisCardResponse(BaseModel):
     business_id: str
     analyst_type: str
     analyst_name: str
+    custom_analyst_id: Optional[str] = None
     headline: Optional[str] = None
     insight: Optional[str] = None
     confidence: Optional[str] = None
     timeframe_or_impact: Optional[str] = None
+    prompt_used: Optional[str] = None
     sources: list[SourceCitation] = []
     is_bookmarked: bool
     status: str
