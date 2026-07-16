@@ -7,6 +7,7 @@ GET  /sales/market-agent/runs/{run_id}                — poll a specific refres
 PATCH /sales/market-agent/cards/{card_id}/bookmark    — toggle bookmark on a card
 POST /sales/market-agent/custom-analysts              — add a custom analyst
 GET  /sales/market-agent/custom-analysts              — list custom analysts for a business
+PATCH /sales/market-agent/custom-analysts/{id}        — edit a custom analyst
 
 Exa's /search is synchronous (unlike Apify) — no webhook infra needed here.
 Each analyst call is awaited concurrently via asyncio.gather.
@@ -34,6 +35,7 @@ from app.schemas.market_agent import (
     MarketAnalysisRunResponse,
     RefreshCreatedResponse,
     SourceCitation,
+    UpdateCustomAnalystRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -104,6 +106,8 @@ BI_PROMPT = """You're a business analyst. Given this business's own recent call-
 - timeframe: e.g. "Last 7 days"
 If the data shows nothing notable, say so honestly rather than inventing significance."""
 
+BI_PROMPT_USED = "Analyze this business's own recent 7-day call-volume analytics and write one notable insight."
+
 
 def _sources_from_grounding(grounding: list[dict]) -> list[SourceCitation]:
     seen = set()
@@ -125,10 +129,12 @@ def _card_row_to_response(row: dict) -> MarketAnalysisCardResponse:
         business_id=row["business_id"],
         analyst_type=row["analyst_type"],
         analyst_name=row["analyst_name"],
+        custom_analyst_id=row.get("custom_analyst_id"),
         headline=row.get("headline"),
         insight=row.get("insight"),
         confidence=row.get("confidence"),
         timeframe_or_impact=row.get("timeframe_or_impact"),
+        prompt_used=row.get("prompt_used"),
         sources=sources,
         is_bookmarked=row["is_bookmarked"],
         status=row["status"],
@@ -161,6 +167,14 @@ def _build_industry_context(business_id: str, fallback_type: str | None) -> str:
     return fallback_type or "their industry"
 
 
+def _build_exa_system_prompt(business_name: str, industry: str) -> str:
+    return (
+        f"You're researching for {business_name}, a business in the {industry} industry. "
+        "Prefer official/authoritative sources and recent reporting. Keep the output grounded — "
+        "do not invent specifics not present in the sources."
+    )
+
+
 async def _run_exa_analyst(business_name: str, industry: str, analyst_type: str, analyst_name: str, query: str) -> dict:
     async with httpx.AsyncClient(timeout=45) as client:
         resp = await client.post(
@@ -170,11 +184,7 @@ async def _run_exa_analyst(business_name: str, industry: str, analyst_type: str,
                 "query": query,
                 "type": "auto",
                 "numResults": 5,
-                "systemPrompt": (
-                    f"You're researching for {business_name}, a business in the {industry} industry. "
-                    "Prefer official/authoritative sources and recent reporting. Keep the output grounded — "
-                    "do not invent specifics not present in the sources."
-                ),
+                "systemPrompt": _build_exa_system_prompt(business_name, industry),
                 "outputSchema": CARD_SYNTHESIS_SCHEMA,
                 "contents": {"highlights": True},
             },
@@ -184,7 +194,14 @@ async def _run_exa_analyst(business_name: str, industry: str, analyst_type: str,
 
 
 async def _generate_card_for_analyst(
-    run_id: str, business_id: str, business_name: str, industry: str, analyst_type: str, analyst_name: str, query: str
+    run_id: str,
+    business_id: str,
+    business_name: str,
+    industry: str,
+    analyst_type: str,
+    analyst_name: str,
+    query: str,
+    custom_analyst_id: str | None = None,
 ) -> None:
     card_row = (
         supabase_admin.table("market_analysis_cards")
@@ -194,6 +211,8 @@ async def _generate_card_for_analyst(
                 "business_id": business_id,
                 "analyst_type": analyst_type,
                 "analyst_name": analyst_name,
+                "custom_analyst_id": custom_analyst_id,
+                "prompt_used": query,
                 "status": "running",
             }
         )
@@ -230,6 +249,7 @@ async def _generate_business_intelligence_card(run_id: str, business_id: str) ->
                 "business_id": business_id,
                 "analyst_type": "business_intelligence",
                 "analyst_name": "Business Intelligence Analyst",
+                "prompt_used": BI_PROMPT_USED,
                 "status": "running",
             }
         )
@@ -318,7 +338,14 @@ async def run_market_agent_refresh(business_id: str, triggered_by: str = "manual
     ]
     tasks += [
         _generate_card_for_analyst(
-            run_id, business_id, business_name, industry, "custom", ca["name"], ca["prompt_description"]
+            run_id,
+            business_id,
+            business_name,
+            industry,
+            "custom",
+            ca["name"],
+            ca["prompt_description"],
+            custom_analyst_id=ca["id"],
         )
         for ca in custom_analysts
     ]
@@ -504,3 +531,29 @@ async def list_custom_analysts(
         .data
     )
     return CustomAnalystListResponse(custom_analysts=[CustomAnalystResponse(**r) for r in rows])
+
+
+@router.patch("/custom-analysts/{analyst_id}", response_model=CustomAnalystResponse)
+async def update_custom_analyst(
+    analyst_id: str,
+    body: UpdateCustomAnalystRequest,
+    user_id: str = Depends(get_user_id),
+):
+    row_result = supabase_admin.table("market_custom_analysts").select("*").eq("id", analyst_id).limit(1).execute()
+    if not row_result.data:
+        raise HTTPException(status_code=404, detail="Custom analyst not found.")
+    row = row_result.data[0]
+    verify_business_access(user_id, row["business_id"])
+
+    updated = (
+        supabase_admin.table("market_custom_analysts")
+        .update(
+            {
+                "name": body.name,
+                "prompt_description": body.prompt_description,
+            }
+        )
+        .eq("id", analyst_id)
+        .execute()
+    )
+    return CustomAnalystResponse(**updated.data[0])

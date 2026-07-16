@@ -1,12 +1,36 @@
 from __future__ import annotations
 from typing import Optional
 from datetime import datetime
-from pydantic import BaseModel
+from urllib.parse import urlparse
+from pydantic import BaseModel, field_validator
 
 
 class AddCompetitorRequest(BaseModel):
     business_id: str
     website_url: str
+
+
+class UpdateCompetitorRequest(BaseModel):
+    name: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    facebook_url: Optional[str] = None
+    instagram_url: Optional[str] = None
+    youtube_url: Optional[str] = None
+
+    @field_validator("linkedin_url", "facebook_url", "instagram_url", "youtube_url", mode="before")
+    @classmethod
+    def normalize_social_url(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+
+        trimmed = value.strip()
+        if not trimmed:
+            return None
+
+        parsed = urlparse(trimmed)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("Social links must be full http(s) URLs.")
+        return trimmed
 
 
 class CompetitorResponse(BaseModel):

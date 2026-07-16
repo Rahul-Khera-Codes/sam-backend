@@ -12,11 +12,10 @@ Two repos form the voice agent system:
 **How to apply:** Always consider both repos. Always check `TODO.md` and `docs/SESSION_HANDOFF.md` at session start.
 
 ## Current Branches
-- `feature/strip-integration` (sam-backend) — Stripe billing complete, not yet merged
-- `feature/custom-roles-v2` (both repos) — QA done, 2 bugs must be fixed before merge
-- `feature/location-scoped-architecture` (sam-backend) — ready to merge, not yet merged
+- `feature/sales-lead-researcher` (both repos) — current working branch; contains the shipped Sales Employee stack plus follow-up Market Agent UX work from session 63 (`View Report`, custom prompt editing, card prompt/linkage support)
+- `fix/avatar-aec` (both repos) — deliberately parked, not an active blocker
 
-## What's Working (as of session 39)
+## What's Working
 - Inbound SIP calls → agent answers → books appointments → emails + SMS → shows in UI
 - Agent fully location-scoped: services, staff, hours, settings, KB all scoped to called location
 - Outbound calls, custom schedules, Gmail OAuth, Google Calendar, Twilio SMS
@@ -31,6 +30,8 @@ Two repos form the voice agent system:
 - **Booking validation guards** — `_validate_booking_datetime` in supabase_helpers; agent tools reject past dates, closed days, out-of-hours, double-booking
 - **TC-ROLES-002 fixed** — `togglePermission` receives explicit `roleId` param; `isAdminUser && selectedRole` null guard at call site
 - **TC-TEAM-006 fixed** — AlertDialog confirmation; `isRemoving` guard; Escape-key protection on `onOpenChange`
+- **Sales Employee** — Lead Researcher, Competitor Agent, Market Agent, and Report Scheduler all built; Business Branding feeds Market Agent industry context via `target_niche`
+- **Market Agent UX** — every card now has `View Report`; custom report cards can reopen their prompt in edit mode; custom-card responses now carry stable `custom_analyst_id` plus stored `prompt_used`
 
 ## Open Bugs
 None — all pre-launch bugs fixed.
@@ -60,12 +61,10 @@ None — all pre-launch bugs fixed.
 - `custom_role_id` on `user_roles` links user to specific named role; `useRolePermissions` uses it to load that role's page permissions directly
 
 ## Pending Manual Steps
-- **Merge `feature/strip-integration` → main (both repos)** — all work ready
-- **Update `BILLING_SUCCESS_URL` + `BILLING_CANCEL_URL`** in `backend/.env` → `http://116.202.210.102:20252/...`
-- **`docker compose up --build -d`** after backend merge
-- **Fix Resend DNS on Hostinger** — re-add DKIM/SPF/DMARC records for `aiemployeesinc.com`
-- **Update Stripe webhook URL** to prod domain when HTTPS is set up
-- `POST /phone-numbers/sync-dispatch` — re-stamp existing dispatch rules with location_id
+- Apply Market Agent migration `20260716000000_market_agent_card_prompt_linkage.sql`
+- Real production deploy for Sales Employee
+- Sam's lawyer sign-off on scraped-lead outreach sourcing
+- Live-test Executive Agent billing add-on toggle
 - E2E test Option C: real SIP call → transfer → confirm forwarded status in DB
 - AI behavior tests (voice-only — must use "Test with Web Call" or real phone)
 

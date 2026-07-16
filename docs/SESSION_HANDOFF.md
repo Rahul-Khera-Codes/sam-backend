@@ -17,7 +17,7 @@ Two repos:
 - **Backend + Agent:** `/home/lap-68/Documents/gt-rahul/sam-backend`
 - **Frontend:** `/home/lap-68/Documents/gt-rahul/ai-employees-app`
 
-**`main` is fully up to date in both repos** (as of 2026-07-13 — includes everything through the Business Branding feature: `feature/exec-agent-improvements`, the full Sales Employee build, all session-59/60 production fixes, and Business Branding). Both repos are currently on a **new branch, `fix/sonner-toast-notifications`** (not yet started, no commits) — for the one remaining known bug: the app-wide Sonner toast notifications issue (see Open Bugs / Session 61 below). `fix/avatar-aec` remains deliberately parked (both repos) — not merged, not an active blocker.
+**`main` is fully up to date in both repos** (as of 2026-07-13 — includes everything through the Business Branding feature: `feature/exec-agent-improvements`, the full Sales Employee build, all session-59/60 production fixes, and Business Branding). Current working branch in both repos is **`feature/sales-lead-researcher`**. Session 63 added more Market Agent UX work on that branch: per-card `View Report`, custom-report prompt editing, and the backend/migration support for stable custom-analyst linkage + stored prompt transparency. `fix/avatar-aec` remains deliberately parked (both repos) — not merged, not an active blocker.
 
 > **Restart needed:** `docker compose restart sam-executive-agent` after any backend/agent code changes.
 
@@ -220,6 +220,43 @@ Key env files:
 
 ## Pending Migrations (not yet applied)
 - None currently outstanding.
+
+---
+
+## What Was Done This Session (Session 63, 2026-07-16)
+
+**Implemented two Market Agent UX features end-to-end: per-card report viewing, and prompt editing for custom reports.**
+
+### 1. Report viewing on every Market Agent card
+Added a new `View Report` action to every Market Agent card in the feed. Clicking it opens a dedicated report dialog that shows:
+- the full card headline + insight text,
+- the generated timestamp,
+- the stored prompt used for that report,
+- and all saved source links (not just the 1-2 truncated links shown on the card itself).
+
+This keeps the card grid compact while finally making the full report content and grounding visible without leaving the page.
+
+### 2. Custom-report prompt editing from the card/report UI
+Custom Market Agent reports can now be edited from two places:
+- directly from the custom card footer via `Edit Prompt`, and
+- from inside the new report dialog.
+
+The existing custom-analyst dialog was reused in edit mode rather than creating a second form. Editing updates the saved custom analyst definition for future refreshes; it deliberately does **not** rewrite old historical card content.
+
+### 3. Backend + schema changes to make the edit flow robust
+The original Market Agent card payload had no stable link back to the `market_custom_analysts` row that generated a custom card, which would have forced brittle matching by analyst name. Session 63 fixed that properly:
+- backend added `PATCH /sales/market-agent/custom-analysts/{id}`,
+- Market Agent card responses now expose `custom_analyst_id` and `prompt_used`,
+- new migration `20260716000000_market_agent_card_prompt_linkage.sql` adds those columns to `market_analysis_cards`,
+- and the migration backfills historical custom cards where the analyst name maps uniquely within the business.
+
+That means the UI can open the right custom analyst reliably, while also exposing prompt transparency in the report view.
+
+### 4. Verification completed
+Verified without guessing:
+- `npx tsc --noEmit` passed in `ai-employees-app`,
+- changed backend Python files parsed cleanly via Python AST,
+- `ReadLints` returned no diagnostics on any touched frontend/backend files.
 
 ---
 

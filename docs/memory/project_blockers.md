@@ -51,6 +51,11 @@ originSessionId: 29becce9-ad8f-4b26-8540-59f05b3f8002
 - Update `BILLING_SUCCESS_URL`/`BILLING_CANCEL_URL` in `backend/.env` to `http://116.202.210.102:20252/...`
 - `docker compose up --build -d` after backend merge
 
+**Market Agent migration not yet applied**
+- Session 63 added migration `20260716000000_market_agent_card_prompt_linkage.sql`
+- Adds `custom_analyst_id` + `prompt_used` to `market_analysis_cards`
+- Needed for robust custom-report editing from existing cards and prompt transparency in the report dialog
+
 **Deploy edge functions** (still pending)
 - `supabase functions deploy invite-location-admin accept-invitation`
 - Required for customRoleId to be stored in invites (session 38 changes)
