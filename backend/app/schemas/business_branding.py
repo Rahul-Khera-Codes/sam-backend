@@ -13,12 +13,11 @@ class BusinessBrandingResponse(BaseModel):
     mission: str = ""
     unique_value_claims: list[str] = []
     extra_guidelines: str = ""
-    use_emojis: bool = True
+    communication_strategy: str = ""
     competitors: list[str] = []
     competitor_strengths: str = ""
     competitor_weaknesses: str = ""
     key_differentiator: str = ""
-    emerging_trends: str = ""
     target_niche: str = ""
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -33,10 +32,9 @@ class UpdateBusinessBrandingRequest(BaseModel):
     mission: Optional[str] = None
     unique_value_claims: Optional[list[str]] = None
     extra_guidelines: Optional[str] = None
-    use_emojis: Optional[bool] = None
+    communication_strategy: Optional[str] = None
     competitors: Optional[list[str]] = None
     competitor_strengths: Optional[str] = None
     competitor_weaknesses: Optional[str] = None
     key_differentiator: Optional[str] = None
-    emerging_trends: Optional[str] = None
     target_niche: Optional[str] = None
