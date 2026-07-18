@@ -3,6 +3,7 @@ Sales Employee router — Competitor Agent module.
 
 POST /sales/competitor-agent/competitors              — add a competitor by website URL, discover their social links
 GET  /sales/competitor-agent/competitors               — list tracked competitors for a business
+DELETE /sales/competitor-agent/competitors/{id}        — delete a tracked competitor and its reports
 POST /sales/competitor-agent/competitors/{id}/report   — kick off a fan-out report (LinkedIn/Facebook/Instagram via Apify, YouTube via YouTube Data API)
 POST /sales/competitor-agent/webhook                   — Apify calls this when a platform run finishes
 GET  /sales/competitor-agent/competitors/{id}/reports/{report_id} — poll a report's status/result
@@ -16,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
@@ -449,6 +450,22 @@ async def update_competitor(
         .execute()
     )
     return _competitor_row_to_response(updated.data[0])
+
+
+@router.delete("/competitors/{competitor_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_competitor(
+    competitor_id: str,
+    user_id: str = Depends(get_user_id),
+):
+    existing = supabase_admin.table("competitors").select("id,business_id").eq("id", competitor_id).limit(1).execute()
+    if not existing.data:
+        raise HTTPException(status_code=404, detail="Competitor not found.")
+
+    competitor = existing.data[0]
+    verify_business_access(user_id, competitor["business_id"])
+
+    supabase_admin.table("competitors").delete().eq("id", competitor_id).execute()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/competitors/{competitor_id}/report", response_model=ReportCreatedResponse)
