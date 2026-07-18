@@ -12,6 +12,7 @@ from app.routers import (
     settings as settings_router,
     forwarding,
     analytics,
+    hr,
     integrations,
     gmail_integrations,
     phone_numbers,
@@ -63,6 +64,7 @@ app.include_router(calls.router)
 app.include_router(settings_router.router)
 app.include_router(forwarding.router)
 app.include_router(analytics.router)
+app.include_router(hr.router)
 app.include_router(integrations.router)
 app.include_router(gmail_integrations.router)
 app.include_router(phone_numbers.router)
