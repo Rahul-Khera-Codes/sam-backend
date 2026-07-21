@@ -5,6 +5,45 @@ Most recent entry at top.
 
 ---
 
+## 2026-07-18 — Greenhouse Integration Proposal doc + Sam's detailed reply, reviewed by Claude
+
+**Junior dev → Sam:** sent a 9-section "Greenhouse Integration Proposal / HR Employee Integration Clarification" doc, covering: jobs source-of-truth, job posting to LinkedIn/Indeed via Greenhouse, candidate application flow, candidate management (hybrid Greenhouse-record + in-app mirror), interview workflow/pipeline, AI Interviewer context, onboarding/HR policy documents, access needed to begin, and a summary of key confirmation questions. Recommended, per section: Greenhouse as source of truth for jobs (v1), Option A for LinkedIn/Indeed distribution (Greenhouse manages it), Option B for candidate applications (inside our app, submitted to Greenhouse via API).
+
+**Sam → Rahul: full point-by-point reply, confirmed as genuinely from Sam (not drafted by someone else) after Rahul checked.** Key confirmations:
+- **Tenancy model (led with this):** Greenhouse must be an optional, per-customer connector — each customer connects their own Job Board Token, platform must work fully standalone without Greenhouse. Per-tenant credential storage required from day one. No pilot customer has a live Greenhouse account yet — build/test against a sandbox/developer account for now.
+- **Jobs:** Greenhouse is source of truth per customer (v1); two-way sync (create in-app, push to Greenhouse) is a later phase, but data model should support it now.
+- **LinkedIn/Indeed:** Option A confirmed (Greenhouse manages distribution) — standard listings only, no sponsored/paid promotion in v1. UI toggles should map to Greenhouse's own distribution settings.
+- **Candidate applications:** Option B confirmed (apply inside our app, backend submits to Greenhouse via Job Board API). Resume mandatory, cover letter optional/configurable, custom questions must be supported per posting, EEOC/GDPR questions configurable per customer/region (not US-hardcoded).
+- **Candidate management:** hybrid confirmed — Greenhouse stays official ATS record, AI Employees mirrors data for AI scoring/summaries/dashboards. AI notes stay in-app for v1; syncing back to Greenhouse is a later, customer-controlled toggle.
+- **Interview pipeline:** AI-Employees-specific, with a mapping layer to each customer's own Greenhouse stages (not an exact mirror, since stage names vary by customer). Default stages proposed: Applied → AI Screened → Shortlisted → Interview Scheduled → Interview Done → Human Review → Offer → Hired/Rejected.
+- **AI recommendations are advisory only** — a human triggers every stage change, rejection, or offer. Explicitly framed as the legally safer position given automated-hiring-decision regulation in some jurisdictions.
+- **AI Interviewer:** fixed question bank with adaptive follow-up probing (per-role toggles), rubrics defined per posting in-platform (Greenhouse scorecard import via Harvest API later). Hard, non-removable blocklist required on protected-characteristic questions (age, race, religion, disability, pregnancy/family status, marital status, sexual orientation, citizenship/national origin, union membership) plus salary history — not removable at the customer level.
+- **Onboarding/HR documents:** customers upload their own (handbook, code of conduct, benefits, policies, training) into the existing Document Library; HR Agent answers only from Published-status documents. Direct upload for v1; Drive/SharePoint sync later.
+
+**Claude's review findings (2026-07-19), verified via Greenhouse's own developer docs before accepting the plan:**
+1. **Sandbox-access gap (real, unresolved at review time):** Greenhouse's own Sandbox FAQ (support.greenhouse.io/hc/en-us/articles/17057838106651-Sandbox-FAQ) states Sandbox is available to **Pro-tier paying customers via Account Manager request** — no documented self-serve trial for a third-party vendor who isn't itself a Greenhouse hiring customer. Sam's instruction to "build against a sandbox for now" didn't have a confirmed path at review time — see 2026-07-17 entry below, which resolves most of this via the Partner Program application already in flight.
+2. **Time-sensitive technical correction:** Harvest API v1/v2 (older static-API-key auth) is being deprecated **2026-08-31** — about 6 weeks out from review. Must build against **Harvest v3** (OAuth 2.0, "custom"/"unlisted vendor" client-credentials grant) from day one. The separate Job Board API (for listing jobs + submitting applications) is unaffected and confirmed genuinely self-serve with no approval gate — matches the proposal's Option B plan and supports custom per-posting questions cleanly.
+3. Unlike LinkedIn/Indeed, Greenhouse's basic integration model (Job Board API, Harvest v3 custom/unlisted-vendor path) requires **no partner approval** for per-customer connections — the proposed architecture is technically sound on that front.
+4. Flagged then resolved: whether this detailed reply was genuinely Sam's own understanding, given it's noticeably more technical than his usual communication (see project pattern of translating everything to plain English for him). Rahul confirmed the whole reply, start to finish, is Sam's own message.
+
+Full technical detail in `memory/project_feature_hr_employee.md`.
+
+---
+
+## 2026-07-17 (01:41–01:43 AM) — Sam finds Greenhouse as the LinkedIn/Indeed distribution answer, applies for Greenhouse Partner Program
+
+**Sam (01:41 AM):** shared https://developers.greenhouse.io/job-board.html#list-jobs (Greenhouse's Job Board API docs) unprompted.
+
+**Sam (01:43 AM):** "I believe greenhouse.io can provide us with the integration api we need to post to indeed and linkedin, plus 30 more job boards. I have applied to become a greenhouse partner and added Rahul as the technical contact email."
+
+This predates all HR Employee build work (first branch commits landed 2026-07-18) — Sam did this research and applied independently, before any proposal doc existed. It directly targets the same LinkedIn/Indeed blocker found in the 2026-07-17 Marketing-vs-HR research (`docs/next-employee-build-recommendation.md`): LinkedIn's Job Posting API closed to new partners, Indeed requiring ≥10 paying clients. Routing distribution through Greenhouse (an established ATS already integrated with both) sidesteps that wall entirely for the HR Employee's job-posting-sync piece.
+
+**Sam (same batch):** "moving Human resource conversation to HR Employee" — read in context as directing this Greenhouse discussion into whatever thread/channel is used for HR Employee going forward, not just a generic note.
+
+**Open as of 2026-07-19:** Rahul is the listed technical contact on the Greenhouse Partner Program application — its actual status is unknown to us. Greenhouse's own partner page states *"at least one mutual customer is required for your integration request to be submitted"* — unclear whether Sam had one to list, whether the application cleared that bar, or what Greenhouse has said back (if anything). Rahul should check his email (including spam) for correspondence from Greenhouse's partnerships team, since approval would also resolve the sandbox-access gap noted above (Partner Program membership includes sandbox environment access per Greenhouse's own docs).
+
+---
+
 ## 2026-07-06 — Sales Employee requirements doc sent to the group
 
 **Rahul → Yuvraj/Sam/Charles:** converted `docs/sales-employee-agenticbi-requirements.md` (re-verified against the PDF mockups, 2026-07-02) to docx and sent it to the group. Covers all 4 modules, the confirmed Apify pipeline, what's NOT included, and the platform-integration cost breakdown for LinkedIn/Facebook/Instagram/YouTube/news sources.
