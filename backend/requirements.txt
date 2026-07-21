@@ -26,6 +26,7 @@ google-api-python-client==2.127.0
 
 # HTTP
 httpx==0.27.0
+pypdf>=5.0.0,<6
 
 # Website scraper (knowledge base auto-populate)
 beautifulsoup4==4.12.3
