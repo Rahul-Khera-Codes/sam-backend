@@ -158,6 +158,10 @@ Verification history:
     - local frontend is confirmed to serve `VITE_VOICE_AGENT_API_URL=http://localhost:8003`
     - production `/health` and Ava preflight both time out with zero bytes
     - production is therefore not serving the updated backend and requires a VPS backend deploy/rebuild/restart
+    - reverified on July 21: production `/health` and `OPTIONS /hr/jobs/ai-assist` both return nginx `504 Gateway Time-out` after about 61 seconds; the browser's CORS message is secondary because nginx's timeout response has no CORS headers
+    - production Supabase verification passed: all vector migrations are applied, `pgvector`, `hr_document_chunks`, and `match_hr_document_chunks` exist, and the target business has one ready document with two chunks
+    - Git verification passed: vector commit `21c5050` is pushed and merged into remote `main` through PR #6
+    - remaining fault domain is the VPS runtime: stale/unrebuilt backend container, stopped/restarting container, or unhealthy upstream process
 
 Pending polish for section 1:
 - Validate against real Greenhouse credentials
