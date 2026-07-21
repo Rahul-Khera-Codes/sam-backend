@@ -146,6 +146,18 @@ Verification history:
   - root cause: Python Supabase query builder does not support `.single()`
   - fix: read first row from `.execute().data`
   - verified by replaying a real `POST /hr/jobs` request successfully
+- Ava production diagnosis captured:
+  - symptom: production `POST /hr/jobs/ai-assist` returns nginx `504 Gateway Time-out` while local succeeds
+  - likely cause: Ava request path is too slow for production timeout budget because each request fetches KB rows, signs and downloads business PDFs, parses PDF text inline, and then calls OpenAI
+  - infra amplifier: backend is currently started with plain single-process `uvicorn`, so a long Ava request can also block follow-up browser preflight traffic behind nginx
+  - likely short-term mitigation: temporarily raise upstream timeout
+  - real fix: move document extraction/caching out of the request path and keep `ai-assist` prompt assembly lightweight
+  - follow-up after vector fix:
+    - local `/health`, Ava preflight, and POST reachability pass
+    - complete local Ava generation passes with `gpt-4o-mini`, updates six draft fields, and retrieves one document source plus four knowledge-base entries
+    - local frontend is confirmed to serve `VITE_VOICE_AGENT_API_URL=http://localhost:8003`
+    - production `/health` and Ava preflight both time out with zero bytes
+    - production is therefore not serving the updated backend and requires a VPS backend deploy/rebuild/restart
 
 Pending polish for section 1:
 - Validate against real Greenhouse credentials
@@ -228,8 +240,50 @@ Current backend implementation:
 - Response format: JSON object with generated fields, updated field list, grounding counts, and a short assistant message
 - Grounding sources now used by Ava:
   - business branding metadata
-  - uploaded business document excerpts (PDF text extraction when available)
+  - tenant-scoped vector retrieval over precomputed uploaded business document chunks
   - business knowledge base entries
+
+Vector document architecture:
+- Embedding model: `text-embedding-3-small`
+- Dimensions: 1,536
+- Storage: Supabase Postgres with `pgvector`
+- Table: `hr_document_chunks`
+- Search: HNSW cosine index through `match_hr_document_chunks`
+- Tenant isolation:
+  - every chunk carries `business_id`
+  - vector RPC filters by `business_id`
+  - a composite foreign key guarantees each chunk's `business_id` matches its parent document
+  - RLS only permits members to read chunks for their businesses
+  - anonymous table access is denied
+  - vector matching RPC execution is restricted to the backend service role
+- Ingestion:
+  - PDF text is extracted and chunked once after upload
+  - embeddings run as a FastAPI background task after the upload response
+  - document status is tracked as `pending`, `processing`, `ready`, or `failed`
+  - existing documents can be queued through `POST /documents/process-embeddings`
+  - individual retries use `POST /documents/{document_id}/process-embedding`
+- Ava request path:
+  - builds a semantic search query from job context
+  - creates one query embedding
+  - retrieves at most six relevant cached chunks
+  - does not download or parse PDFs
+  - gracefully continues without vector context if retrieval is temporarily unavailable
+- Database migrations:
+  - `20260721101431_ava_document_embeddings.sql`
+  - `20260721103002_optimize_hr_document_chunks_rls.sql`
+  - `20260721103929_harden_hr_document_chunk_tenancy.sql`
+- Verification:
+  - linked Supabase migrations applied successfully
+  - migration history aligned locally/remotely
+  - anonymous vector chunk access denied
+  - Supabase security advisor reported no vector-specific warning
+  - Supabase performance advisor reported no vector-specific warning after RLS optimization
+  - existing Human resource PDF indexed into two chunks
+  - semantic retrieval returned the indexed document after threshold tuning
+  - vector-grounded Ava generation completed in 7.22 seconds and used one document source
+  - service-role-only retrieval remained functional after tenant hardening
+  - upload now rejects a `location_id` that does not belong to the selected business
+  - document/KB excerpts are treated as untrusted data and fenced against prompt instructions
 
 Current frontend implementation:
 - Ava card actions:
@@ -492,11 +546,24 @@ Backend plan:
 - All HR Employee data must stay business-scoped.
 - Greenhouse configuration is business-level, not location-level.
 - Access must continue to use `verify_business_access`.
+- Greenhouse tenant isolation is implemented and hardened:
+  - one connector row per business through `UNIQUE (business_id)`
+  - every connector/job API verifies membership and scopes reads/writes by `business_id`
+  - only business `admin` / `super_admin` roles can connect, replace, or disconnect credentials
+  - database composite foreign key prevents an HR job from referencing another business's Greenhouse connection
+  - migration `20260721130000_harden_greenhouse_multitenancy.sql` is applied remotely
+  - live database verification confirmed both tables have RLS enabled, service-role-only policies, the one-connection-per-business constraint, and the composite tenant foreign key
+  - service-role native-job updates repeat `id`, `business_id`, and `source = native` predicates on the final mutation
+  - ordinary HR job responses no longer include board-token snapshots or raw Greenhouse source payloads
+  - non-admin connector status responses omit the board token, and non-credential operations do not load the Job Board API key
+- Standalone businesses remain fully supported: without an active connector, native jobs are the source of truth.
 
 ### Security
 - Never expose Greenhouse API keys to frontend.
 - Submission must remain backend-proxied.
 - Keep ATS secrets server-side only.
+- Job Board API keys are stored only in the service-role-protected connector table; status responses expose only a boolean indicating whether a key is configured.
+- Editing a connector while leaving the API-key field blank preserves the existing secret rather than clearing it.
 
 ### Data Model Direction
 - Current foundation:
@@ -530,6 +597,8 @@ Backend plan:
 - No Greenhouse sandbox credentials yet for true live validation
 - Job Board API coverage is limited to public jobs + application-related flows; deeper ATS sync will require Harvest later
 - Existing `voiceAgentApi.ts` lint debt remains unrelated but present
+- Image-only/scanned PDFs have no extractable text with `pypdf`; they are marked `failed` and require a future OCR ingestion fallback
+- FastAPI background tasks are a retryable bridge, not a durable queue; interrupted indexing remains `pending`/`failed` and can be requeued from Documents settings
 
 ## Best Future Execution Order
 1. Finish live validation of section 1 with real/sandbox Greenhouse

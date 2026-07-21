@@ -462,7 +462,10 @@ async def get_hr_mock_workspace(
 def _get_greenhouse_connection(business_id: str) -> dict | None:
     result = (
         supabase_admin.table("greenhouse_connections")
-        .select("*")
+        .select(
+            "id,business_id,board_token,board_url,board_name,is_connected,"
+            "last_sync_at,last_sync_status,last_sync_error,last_job_count"
+        )
         .eq("business_id", business_id)
         .limit(1)
         .execute()
@@ -614,7 +617,6 @@ async def _get_hr_jobs_payload(business_id: str) -> HrJobsResponse:
         combined_jobs = greenhouse_jobs + [job for job in native_jobs if job["status"] == "Draft"]
         greenhouse_status = {
             "connected": True,
-            "board_token": connection.get("board_token"),
             "board_url": connection.get("board_url"),
             "board_name": connection.get("board_name"),
             "last_sync_at": connection.get("last_sync_at"),
@@ -626,7 +628,6 @@ async def _get_hr_jobs_payload(business_id: str) -> HrJobsResponse:
         combined_jobs = [job for job in native_jobs if job["status"] == "Draft"]
         greenhouse_status = {
             "connected": True,
-            "board_token": connection.get("board_token"),
             "board_url": connection.get("board_url"),
             "board_name": connection.get("board_name"),
             "last_sync_at": connection.get("last_sync_at"),
@@ -819,6 +820,8 @@ async def update_hr_job(
         supabase_admin.table("hr_job_postings")
         .update(updates)
         .eq("id", job_id)
+        .eq("business_id", body.business_id)
+        .eq("source", "native")
         .select("*")
         .execute()
     )
@@ -850,5 +853,12 @@ async def delete_hr_job(
     if row.get("status") != "draft":
         raise HTTPException(status_code=400, detail="Only native draft job postings can be deleted.")
 
-    supabase_admin.table("hr_job_postings").delete().eq("id", job_id).execute()
+    (
+        supabase_admin.table("hr_job_postings")
+        .delete()
+        .eq("id", job_id)
+        .eq("business_id", business_id)
+        .eq("source", "native")
+        .execute()
+    )
     return {"deleted": True, "id": job_id}

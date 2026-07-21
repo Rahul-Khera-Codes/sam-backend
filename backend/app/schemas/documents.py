@@ -12,6 +12,10 @@ class DocumentResponse(BaseModel):
     file_name: str
     file_size_bytes: int
     created_at: datetime
+    embedding_status: str = "pending"
+    embedding_error: Optional[str] = None
+    embedding_model: Optional[str] = None
+    embedded_at: Optional[datetime] = None
 
 
 class DocumentListResponse(BaseModel):
