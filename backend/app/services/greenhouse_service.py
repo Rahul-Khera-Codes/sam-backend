@@ -89,8 +89,8 @@ def normalize_greenhouse_job(
             if job.get("internal_job_id") is not None
             else None
         ),
-        "greenhouse_board_token_snapshot": board_token,
+        "greenhouse_board_token_snapshot": None,
         "offices": offices,
         "departments": departments,
-        "source_payload": job,
+        "source_payload": {},
     }

@@ -17,6 +17,7 @@ class GreenhouseConnectionStatusResponse(BaseModel):
     board_token: Optional[str] = None
     board_url: Optional[str] = None
     board_name: Optional[str] = None
+    has_job_board_api_key: bool = False
     last_sync_at: Optional[str] = None
     last_sync_status: Optional[str] = None
     last_sync_error: Optional[str] = None
