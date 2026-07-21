@@ -1,4 +1,4 @@
-# Session Handoff — 2026-07-14 (Session 61)
+# Session Handoff — 2026-07-19 (Session 65)
 
 Read this at the start of every session. It captures the full current state so you can pick up immediately.
 
@@ -17,7 +17,7 @@ Two repos:
 - **Backend + Agent:** `/home/lap-68/Documents/gt-rahul/sam-backend`
 - **Frontend:** `/home/lap-68/Documents/gt-rahul/ai-employees-app`
 
-**`main` is fully up to date in both repos** (as of 2026-07-13 — includes everything through the Business Branding feature: `feature/exec-agent-improvements`, the full Sales Employee build, all session-59/60 production fixes, and Business Branding). Current working branch in both repos is **`feature/sales-lead-researcher`**. Session 63 added more Market Agent UX work on that branch: per-card `View Report`, custom-report prompt editing, and the backend/migration support for stable custom-analyst linkage + stored prompt transparency. `fix/avatar-aec` remains deliberately parked (both repos) — not merged, not an active blocker.
+**`main` is fully up to date in both repos** (as of 2026-07-14 — includes everything through Business Branding, plus the TC-TOAST-001 investigation/closure and TODO cleanup, both merged same day). Current working branch in both repos is **`feature/sales-lead-researcher`**. Since then: Session 63 (2026-07-16) shipped 4 Sales Employee fixes from Sam's Jul 15 request batch (delete lead lookup, edit competitor social links, Market Agent custom-report view/edit, Report Scheduler removed). Session 64 (2026-07-17) reviewed that batch, researched Marketing-vs-HR build priority, and shipped 2 more Branding fixes (Communication Strategy text field, Market Insights section removed). `fix/avatar-aec` remains deliberately parked (both repos) — not merged, not an active blocker. **A second active branch, `feature/hr-agent` (both repos), was created for the new HR Employee build** — it forked before Session 64's doc commits landed, so its copies of TODO.md/CLIENT_COMMS_LOG.md/this file were stale until Session 65 manually reconciled them (docs only, no code crossed branches). Session 65 (2026-07-19) reviewed the HR Employee scaffolding on that branch (UI-mock only so far) and a Greenhouse integration proposal + Sam's reply — see below.
 
 > **Restart needed:** `docker compose restart sam-executive-agent` after any backend/agent code changes.
 
@@ -183,10 +183,10 @@ Key env files:
 
 ## Pending Manual Steps
 
-- [ ] **Fix the app-wide Sonner toast bug** (found session 60, 2026-07-13) — every `toast.success()`/`toast.error()` call via the `sonner` package is silently a no-op across the ENTIRE app (confirmed on both the new Business Branding save AND an old, untouched Report Scheduler save — not a regression from session 60's work). Ruled out: stale Docker image, stale Vite dep cache, duplicate `sonner` installs, console errors, `next-themes` provider issue. Root cause not yet found — `<Toaster>` mounts fine but its internal toast store never receives anything, needs actual breakpoint debugging inside `node_modules` to pin down. Underlying save/data operations all work correctly; only the confirmation pop-up is broken. **Now has a dedicated branch, `fix/sonner-toast-notifications` (both repos), work not yet started.** See `docs/QA_FINDINGS.md` for full elimination log.
+- [x] ~~Fix the app-wide Sonner toast bug~~ — **CLOSED session 62 (2026-07-14), false positive, not a code bug.** Two independent Canary re-investigations (fresh page loads, then a persistent session across 9 toast-triggering actions on 7 pages) found sonner rendering correctly every time. The original reports trace to a few handlers (e.g. CS Scheduler's agent toggle, ~5.5s) taking several seconds before firing the toast, combined with sonner's ~4s auto-dismiss — checking too soon after clicking looked identical to "never appears." Branch `fix/sonner-toast-notifications` had zero commits and was deleted (both repos) after confirming its one prior docs commit was already merged to main. See `docs/QA_FINDINGS.md` → TC-TOAST-001 (Resolved Failures).
 - [x] **Merge `feature/business-branding` → main** — DONE 2026-07-13/14 (both repos, clean fast-forward, backend health + frontend build both verified before push).
 - [ ] **Real production deploy for Sales Employee** — still running on ngrok (Apify webhook) + a personal Exa/Apify/YouTube setup in places. Needed before any real customer uses Lead Researcher/Competitor Agent/Market Agent/Report Scheduler.
-- [ ] **Sam's lawyer sign-off** on scraped-lead outreach sourcing (CASL/ToS) — doesn't block the build, blocks public launch of Sales Employee.
+- [ ] **Sam's lawyer sign-off** on scraped-lead outreach sourcing (CASL/ToS) — doesn't block the build, blocks public launch of Sales Employee. Same risk category flagged for HR's planned LinkedIn/Indeed sourcing (session 64 research) — see `docs/next-employee-build-recommendation.md`.
 - [ ] **Live-test the billing add-on toggle specifically** (session 56) — the underlying "no base plan" blocker is now resolved (Woyce Tech has a real Starter subscription as of session 60's live Stripe test), so the Remi add-on card is now enabled/purchasable for at least one business — still need to actually toggle it on/off and confirm enable/disable creates/removes the Stripe subscription item, and confirm `/dashboard/executive` stays accessible either way (enforcement is off by default).
 - [ ] **Whole-product billing enforcement gap** (session 56, found + deliberately deferred) — no subscription status is checked anywhere outside the Billing page's display, for any feature. See `TODO.md` + `memory/project_blockers.md` for the agreed architecture. Don't rush this.
 - [ ] **Dev OAuth client for local Gmail testing** — own Google project, Testing mode, localhost redirect URIs (`http://localhost:5173/integrations/{gmail,google}/callback`), scopes gmail.send+gmail.readonly+calendar.events+userinfo.email+openid, dev as test user; put client id/secret in local `backend/.env` AND `agent/.env.local`.
@@ -194,15 +194,22 @@ Key env files:
 - [ ] **Deploy scheduler fix to VPS** — `git pull && docker compose restart sam-backend` (fixes hourly 400 errors in logs)
 - [ ] **Sam sets business timezone** — Business Settings → Company Info → Business Timezone dropdown → Save
 - [ ] **Forgot password email spam** — improve Supabase Auth email template + Resend DKIM alignment
-- [ ] **Deploy edge functions** — `supabase functions deploy invite-location-admin accept-invitation`
+- [x] ~~Deploy edge functions~~ — verified session 62: `invite-location-admin` (v17) + `accept-invitation` (v11) both `ACTIVE` since 2026-04-29. Stale checkbox from an earlier session, was already done.
 - [ ] **Resend DNS on Hostinger** — re-add DKIM/SPF/DMARC for `aiemployeesinc.com`
-- [ ] **Create Stripe price IDs** — Growth ($149) + Pro ($299) → add to `backend/.env`
+- [x] ~~Create Stripe price IDs~~ — verified session 62: `STRIPE_GROWTH_PRICE_ID` + `STRIPE_PRO_PRICE_ID` already set in `backend/.env`. Stale checkbox, was already done.
 - [ ] **Update billing URLs on server** — `BILLING_SUCCESS_URL=http://116.202.210.102:20252/...`
 - [ ] **Update Stripe webhook URL** to prod domain when HTTPS is set up
 - [ ] **VPS deploy on Hostinger** — both repos, SSL, subdomain
-- [ ] **`POST /phone-numbers/sync-dispatch`** — re-stamp existing dispatch rules with `location_id` (one-time run)
+- [x] ~~`POST /phone-numbers/sync-dispatch`~~ — verified session 62 via direct LiveKit API check: every dispatch rule belonging to a currently-existing business already carries `location_id`. Nothing left to sync.
 - [ ] **Delete Sam's old test accounts** — waiting on Sam's email list
 - [ ] **IntegrationsTab loading state** — show spinner during initial Gmail status fetch instead of "Connect" flash
+- [ ] **Marketing vs HR build-order decision** (session 64) — `docs/next-employee-build-recommendation.md` sent to Sam via Google Doc (2026-07-15), not yet reviewed by him. Recommendation: build HR's 3 unblocked modules first (Doc Library+Onboarding, Candidates & Scoring, AI Interviewer), defer HR's LinkedIn/Indeed sourcing piece (not self-serve-available at Sam's current scale), tackle Marketing's platform integrations as a separate project after. Open question raised by Rahul (unresolved as of session 64 end): whether to instead recommend Marketing over HR — no technical justification found for that yet; would need a business reason (deadline, client priority) to override the doc's recommendation.
+- [ ] **Greenhouse Partner Program application status unknown** (session 65) — before any HR build work started, Sam independently applied to become a Greenhouse Partner (to route LinkedIn/Indeed job distribution through Greenhouse instead of AI Employees needing its own direct platform partnerships) and listed Rahul as technical contact. Greenhouse's own partner page requires "at least one mutual customer" to even submit an application — unknown whether that was satisfied or what Greenhouse has said back. Rahul should check email (incl. spam) for Greenhouse partnerships correspondence; approval would also resolve Greenhouse's sandbox-access gate (normally a paying-Pro-tier-customer-only benefit, not self-serve for a vendor).
+- [ ] **Harvest API v1/v2 deprecates 2026-08-31** (session 65) — any HR Employee Greenhouse integration work must target Harvest v3 (OAuth 2.0, "custom"/"unlisted vendor" client-credentials grant) from day one, not the older static-API-key style. The separate Job Board API (listing jobs, submitting applications) is unaffected and confirmed self-serve.
+- [ ] **Small follow-ups from session 64's code review of the 3 Cursor-built Sales Employee fixes** (all minor, non-blocking):
+  - Competitor Agent's edit-links endpoint/form has no cross-platform URL validation (e.g. a YouTube link pasted into the LinkedIn field is accepted silently on both frontend and backend) — the codebase already has the right pattern for this (`LeadLookupRequest.linkedin_url`'s regex validator), just wasn't reused here.
+  - The client update sent to Sam said competitor edit lets him update "name and social profile links" — the backend supports editing the name, but the shipped dialog only has the 4 social-link fields, no name input. Either add the field (cheap) or correct what Sam was told.
+  - `ai-employees-app`'s `supabase/.temp/` directory (CLI version files + `linked-project.json`, which has the Supabase project ref/org id/owner email) is tracked in git with no `.gitignore` rule — recurring noise on every commit that touches Supabase locally, worth a one-time cleanup.
 
 ## Applied Migrations (all done)
 - All through `20260428000003` ✅ applied
@@ -217,9 +224,76 @@ Key env files:
 - `20260618000000` — `businesses.timezone` ✅ (confirmed live, real data present)
 - `20260707000002` — `handle_updated_at()` trigger on all 8 Sales Employee tables ✅ (confirmed live, firing correctly)
 - `20260712000000` — `business_branding` table + RLS ✅ (session 60, applied + confirmed live end-to-end)
+- `20260716000000` — `market_analysis_cards.custom_analyst_id` + `prompt_used` + backfill ✅ (session 63, applied + confirmed live)
+- `20260717000000` — `business_branding.communication_strategy` field, drops `use_emojis` ✅ (session 64, applied + confirmed live)
+- `20260717000001` — drops `business_branding.emerging_trends` ✅ (session 64, applied + confirmed live; `target_niche` deliberately kept, not dropped)
 
 ## Pending Migrations (not yet applied)
 - None currently outstanding.
+
+---
+
+## What Was Done This Session (Session 65, 2026-07-19)
+
+**Reviewed the HR Employee scaffolding on `feature/hr-agent` (both repos), plus a Greenhouse integration proposal and Sam's detailed reply. Reconciled this branch's stale docs with Session 64's work (docs only, no code merged across branches).**
+
+### 1. HR Employee branch review
+- Backend (1 commit, 435 lines): a single `GET /hr/mock-workspace` endpoint returning hardcoded static JSON matching the mockup's visual data. Zero DB tables, zero real logic, zero AI calls, zero Greenhouse integration yet.
+- Frontend (1 commit, ~3000 lines): 5 real page components (Dashboard, Job Postings, Candidates, Interviews, Onboarding) faithfully reproducing the 9-screen PDF's structure using established codebase conventions (same layout pattern as `SalesEmployeeLayout`, shadcn components, correct `useAuth`/`useBusiness` usage). Every `onClick` only does local view-switching — no create/edit/delete/search actually works yet (search inputs are literally `readOnly`), and the "Ask the HR AI Agent" chat has no send handler at all.
+- **Assessment: a legitimate Phase-1 UI scaffold, not a regression or a red flag** — matches how Sales Employee was actually built (mock-first, then module-by-module real backends). No issues found with what's there.
+
+### 2. Greenhouse Integration Proposal doc + Sam's detailed reply
+Junior dev sent a 9-section proposal covering jobs source-of-truth, LinkedIn/Indeed distribution, candidate application flow, candidate management, interview workflow, AI Interviewer context, onboarding documents, and access needed to begin. Sam replied in full, point-by-point — confirmed as genuinely his own message after Rahul checked, despite being noticeably more technical than his usual communication. Full content logged in `docs/CLIENT_COMMS_LOG.md` (2026-07-18 entry). Key confirmed decisions: Greenhouse as an optional per-customer connector with per-tenant credential storage from day one; candidates apply inside AI Employees with backend submission to Greenhouse via the Job Board API; Greenhouse remains source of truth for jobs and manages LinkedIn/Indeed distribution in v1; hybrid candidate record (Greenhouse official, AI Employees mirrors for AI scoring); AI-Employees-specific interview pipeline mapped to each customer's Greenhouse stages; **AI recommendations advisory-only, human triggers every stage change/offer/rejection** (should reuse the exact preview→approve pattern already built for Executive Agent); hard non-removable blocklist on protected-characteristic + salary-history interview questions.
+
+**Verified against Greenhouse's own developer docs before accepting the plan:**
+1. Harvest API v1/v2 (static API key) deprecates **2026-08-31** (~6 weeks out) — must build against **Harvest v3** (OAuth 2.0, "custom"/"unlisted vendor" client-credentials grant). The separate Job Board API is unaffected, confirmed genuinely self-serve with no approval gate.
+2. Greenhouse's Sandbox environment is normally a paying-Pro-tier-customer benefit via Account Manager request, not self-serve for a third-party vendor — Sam's "build against a sandbox for now" instruction had no confirmed path on its own.
+3. Unlike LinkedIn/Indeed, Greenhouse's base integration model (Job Board API, Harvest v3 custom path) needs no partner approval for ordinary per-customer connections.
+
+### 3. Sam independently applied for Greenhouse Partner status — predates all HR build work
+Before any HR Employee branch commits existed, Sam read Greenhouse's own Job Board API docs and applied to become a Greenhouse Partner, listing Rahul as technical contact — specifically to solve the LinkedIn/Indeed distribution wall found in Session 64's Marketing-vs-HR research (LinkedIn Jobs API closed to new partners, Indeed requiring ≥10 paying clients). This is a materially better fix than the "distribution middleman" fallback Session 64 suggested, and directly resolves the Sandbox-access gap above if the application is approved (Partner Program membership includes sandbox access per Greenhouse's own docs). **Open: Greenhouse's partner page requires "at least one mutual customer" to even submit an application — unknown whether that bar was met or what status the application is in. Rahul should check email (incl. spam).**
+
+### 4. Doc reconciliation
+`feature/hr-agent` forked before Session 64's `TODO.md`/`docs/CLIENT_COMMS_LOG.md`/this file were updated on `feature/sales-lead-researcher`. Manually merged the two branches' documentation (content only — no code crossed branches): took `feature/sales-lead-researcher`'s versions as the base and layered `feature/hr-agent`'s Greenhouse/HR-specific additions on top, so both branches' docs now tell the same, complete story. Applied identically to both repos.
+
+---
+
+## What Was Done This Session (Session 64, 2026-07-17)
+
+**Reviewed Session 63's Cursor-built commits, researched Marketing-vs-HR build priority, shipped 2 more Branding fixes.**
+
+### 1. Code review of Session 63's 7 commits (4 Sales Employee fixes)
+Reviewed the delete-lookup, edit-competitor-links, custom-prompt, and report-scheduler-removal commits against Sam's original requests. Overall solid — the custom-prompt work in particular has good design (prompt/analyst FK with `ON DELETE SET NULL`, ambiguity-safe backfill, historical prompt snapshots). Found 3 minor, non-blocking follow-ups (logged above in Pending Manual Steps): a missing cross-platform URL validator on competitor social links, a client-message/UI mismatch (Sam was told he can edit a competitor's name, but the shipped dialog only has link fields), and untracked Supabase CLI noise (`supabase/.temp/`) with no `.gitignore` rule.
+
+### 2. Marketing vs Human Resources — which employee to build next
+Reviewed both PDFs directly (HR: 9 screens; Marketing: 4 screens) and decomposed each into modules by actual dependency, not just feature count. Researched current (2026) third-party API access requirements for LinkedIn (3 distinct products: Talent/Recruiter sourcing, Jobs posting, Marketing/company-page posting), Indeed Job Sync API, Meta Instagram/Facebook Content Publishing, TikTok Content Posting API, and X API v2 — via parallel research agents reading each platform's own developer docs.
+
+**Finding:** HR's LinkedIn/Indeed job-board integration (1 of HR's 4 modules) isn't just slow — it's currently unavailable to a company at Sam's stage: LinkedIn's Job Posting API isn't accepting new partners at all right now, Indeed requires ≥10 existing paying clients to even apply, and LinkedIn's Recruiter/candidate-sourcing API has no self-serve path (the scrape-instead workaround also carries real legal risk — LinkedIn sued and shut down Proxycurl in 2025 for exactly that). HR's other 3 modules (Document Library+Onboarding, Candidates & Scoring, AI Video Interviewer) have zero external-platform dependency and are buildable today. Marketing's integrations (Meta, X, TikTok, LinkedIn's separate company-page posting product) are all genuinely self-serve-with-review, weeks not months — but Marketing's core value needs all of them before the product does anything real.
+
+Recommendation written to `docs/next-employee-build-recommendation.md` and sent to Sam via Google Doc: build HR's 3 unblocked modules first, defer HR's LinkedIn/Indeed piece (distribution middleman or manual posting, Sam's call), tackle Marketing's platform integrations as their own project after. **Sam has not reviewed the doc yet as of session end.** Open, unresolved question from Rahul about recommending Marketing over HR instead — no technical justification found for that; would need a stated business reason to override the doc.
+
+### 3. Two more Branding fixes (Sam's requests, 2026-07-16 11:05 PM / 2026-07-17 01:43 AM)
+- **Communication Strategy** — replaced the "Use Emojis" toggle (never read anywhere in backend/agent code) with a free-text field.
+- **Market Insights section removed** — `emerging_trends` (also never read anywhere) dropped entirely. `target_niche` was deliberately **kept and relocated into Core Brand** rather than deleted, since it's the exact field `market_agent.py`'s `_build_industry_context()` reads for the "Market Agent reports are too generic" fix — deleting it would have silently regressed that. Flagged this reasoning back to Rahul before implementing.
+
+Two migrations applied (`20260717000000`, `20260717000001`). Verified live: DOM/UI checks via Canary (toggle/section/field gone, Target Niche renders in Core Brand, save+reload persistence, zero console errors), a direct DB row check confirming the new column shape, and — the one that actually mattered — a direct call to `_build_industry_context()` confirming it still resolves `target_niche` correctly end-to-end post-migration.
+
+### 4. Verification completed
+- `npx tsc --noEmit` clean, Python AST parse clean on both changed backend files.
+- Live DB query + direct function call (not just UI) for the Branding change, since that one had a real regression risk.
+- Zero remaining references anywhere in either repo to the 3 removed fields (`use_emojis`, `emerging_trends`) confirmed via full-repo grep.
+
+---
+
+## What Was Done This Session (Session 62, 2026-07-14)
+
+**Investigated the app-wide Sonner toast bug via systematic debugging instead of guess-fixing; closed it as a false positive. Corrected 4 stale TODO items found to already be done.**
+
+### 1. Toast bug investigation — closed, not a code bug
+Two independent Canary re-tests — a fresh-page-load pass on 2 flows, then a persistent single browser session across 9 toast-triggering actions on 7 different pages — found sonner rendering every toast correctly, every time, with zero console errors. Directly verified against `sonner@1.7.4`'s own source that an empty `<section aria-label="Notifications alt+T">` between toasts is expected behavior, not a broken mount. Root cause of the original reports: a few handlers (worst case, CS Scheduler's agent toggle, ~5.5s) make several sequential awaited API calls before firing the toast, and sonner's default toast auto-dismisses after ~4s — checking too soon after clicking looked identical to "never appears." No code change made since none was needed. Branch `fix/sonner-toast-notifications` (one prior docs commit, otherwise empty) merged into `main` and deleted in both repos.
+
+### 2. TODO/doc audit — 4 stale "still pending" items found to already be done
+Rather than trust the checklist, verified each against live state: Stripe Growth/Pro price IDs were already in `backend/.env`; `invite-location-admin`/`accept-invitation` edge functions were already `ACTIVE` (deployed 2026-04-29); Roles & Permissions v2 migrations were already applied on remote; `POST /phone-numbers/sync-dispatch` had nothing left to sync (confirmed via a direct LiveKit API check — every live business's dispatch rule already carries `location_id`). Fixed the stale checkboxes in `TODO.md` and memory so they stop resurfacing as open work.
 
 ---
 

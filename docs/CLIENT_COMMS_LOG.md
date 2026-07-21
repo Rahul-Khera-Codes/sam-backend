@@ -21,7 +21,7 @@ Most recent entry at top.
 - **Onboarding/HR documents:** customers upload their own (handbook, code of conduct, benefits, policies, training) into the existing Document Library; HR Agent answers only from Published-status documents. Direct upload for v1; Drive/SharePoint sync later.
 
 **Claude's review findings (2026-07-19), verified via Greenhouse's own developer docs before accepting the plan:**
-1. **Sandbox-access gap (real, unresolved at review time):** Greenhouse's own Sandbox FAQ (support.greenhouse.io/hc/en-us/articles/17057838106651-Sandbox-FAQ) states Sandbox is available to **Pro-tier paying customers via Account Manager request** — no documented self-serve trial for a third-party vendor who isn't itself a Greenhouse hiring customer. Sam's instruction to "build against a sandbox for now" didn't have a confirmed path at review time — see 2026-07-17 entry below, which resolves most of this via the Partner Program application already in flight.
+1. **Sandbox-access gap, likely resolved by Sam's Greenhouse Partner application** (see the 2026-07-17 Greenhouse note below, folded into the 2026-07-16/17 entry): Greenhouse's own Sandbox FAQ (support.greenhouse.io/hc/en-us/articles/17057838106651-Sandbox-FAQ) states Sandbox is available to **Pro-tier paying customers via Account Manager request** — no documented self-serve trial for a third-party vendor who isn't itself a Greenhouse hiring customer. Sam's instruction to "build against a sandbox for now" didn't have a confirmed path at review time on its own — but Sam had independently already applied for Greenhouse Partner status before this proposal was even written, and Partner Program membership includes sandbox access per Greenhouse's own docs.
 2. **Time-sensitive technical correction:** Harvest API v1/v2 (older static-API-key auth) is being deprecated **2026-08-31** — about 6 weeks out from review. Must build against **Harvest v3** (OAuth 2.0, "custom"/"unlisted vendor" client-credentials grant) from day one. The separate Job Board API (for listing jobs + submitting applications) is unaffected and confirmed genuinely self-serve with no approval gate — matches the proposal's Option B plan and supports custom per-posting questions cleanly.
 3. Unlike LinkedIn/Indeed, Greenhouse's basic integration model (Job Board API, Harvest v3 custom/unlisted-vendor path) requires **no partner approval** for per-customer connections — the proposed architecture is technically sound on that front.
 4. Flagged then resolved: whether this detailed reply was genuinely Sam's own understanding, given it's noticeably more technical than his usual communication (see project pattern of translating everything to plain English for him). Rahul confirmed the whole reply, start to finish, is Sam's own message.
@@ -30,17 +30,41 @@ Full technical detail in `memory/project_feature_hr_employee.md`.
 
 ---
 
-## 2026-07-17 (01:41–01:43 AM) — Sam finds Greenhouse as the LinkedIn/Indeed distribution answer, applies for Greenhouse Partner Program
+## 2026-07-16/17 — Sam's 6 Sales Employee + Branding requests, all shipped or in progress
 
-**Sam (01:41 AM):** shared https://developers.greenhouse.io/job-board.html#list-jobs (Greenhouse's Job Board API docs) unprompted.
+**Sam → Rahul (2026-07-15, 08:13 PM): 4 requests, all logged verbatim:**
+1. Lead Researcher/History — "Create a delete button"
+2. Lead Researcher/Competitor Agent — "Can you create an edit button to the social media icons. If the AI cannot detect the social media account, then we can enter it manually."
+3. Lead Researcher/Market Agent — asked how the section works (prompt per card? research-then-summarize? how is industry decided?) + "Create a view report button on each card" + "Create a edit button so that the prompt can be opened and changed on custom reports"
+4. Lead Researcher/Report Scheduler — "Remove this whole section"
 
-**Sam (01:43 AM):** "I believe greenhouse.io can provide us with the integration api we need to post to indeed and linkedin, plus 30 more job boards. I have applied to become a greenhouse partner and added Rahul as the technical contact email."
+**Sam (08:14 PM):** "Lets make these updates then move on to the Human Resources Employee"
 
-This predates all HR Employee build work (first branch commits landed 2026-07-18) — Sam did this research and applied independently, before any proposal doc existed. It directly targets the same LinkedIn/Indeed blocker found in the 2026-07-17 Marketing-vs-HR research (`docs/next-employee-build-recommendation.md`): LinkedIn's Job Posting API closed to new partners, Indeed requiring ≥10 paying clients. Routing distribution through Greenhouse (an established ATS already integrated with both) sidesteps that wall entirely for the HR Employee's job-posting-sync piece.
+**Status: all 4 shipped** — built and committed 2026-07-16 (delete button, edit competitor links, Market Agent view+edit, Report Scheduler removed entirely — route/nav/components deleted, backend intentionally left untouched). Reviewed 2026-07-17: solid overall, 3 minor non-blocking follow-ups logged internally (competitor-edit cross-platform URL validation gap; Sam was told he can edit a competitor's name but the shipped dialog only has social-link fields; untracked Supabase CLI noise in the frontend repo).
 
-**Sam (same batch):** "moving Human resource conversation to HR Employee" — read in context as directing this Greenhouse discussion into whatever thread/channel is used for HR Employee going forward, not just a generic note.
+**Rahul → Sam (2026-07-15, 10:25 PM):** sent the Marketing-vs-HR "which employee next" comparison doc via Google Doc (per Sam's "move on to HR" comment above) — `docs/next-employee-build-recommendation.md` locally. **As of 2026-07-17, Sam has not yet reviewed it.**
 
-**Open as of 2026-07-19:** Rahul is the listed technical contact on the Greenhouse Partner Program application — its actual status is unknown to us. Greenhouse's own partner page states *"at least one mutual customer is required for your integration request to be submitted"* — unclear whether Sam had one to list, whether the application cleared that bar, or what Greenhouse has said back (if anything). Rahul should check his email (including spam) for correspondence from Greenhouse's partnerships team, since approval would also resolve the sandbox-access gap noted above (Partner Program membership includes sandbox environment access per Greenhouse's own docs).
+**Rahul → Sam (2026-07-16, 12:55 PM):** sent plain-English answers to Sam's Market Agent questions — how each card's Exa query works, where the prompt per card comes from (built-in query templates vs custom `prompt_description` vs the separate Business Intelligence card prompt), and industry-decision order (`business_branding.target_niche` → `businesses.type` → fallback text).
+
+**Rahul → Sam (2026-07-16, 12:56 PM):** "Also, I've made the suggested changes, and they are live, please check and let me know if any more changes are required."
+
+**Yuvraj → Sam (2026-07-16, 06:54 PM) / Rahul → Sam (2026-07-16, 06:56 PM):** end-of-day update summaries covering the same 4 fixes, in plain English.
+
+**Sam → Rahul (2026-07-16, 11:05 PM): 2 more Branding requests:**
+- "Communication Strategy — Make it a text input field" (was just a "Use Emojis" toggle, nothing else)
+- "Market Insights — Remove this section" (had 2 fields: `emerging_trends` and `target_niche`)
+
+**Status: shipped 2026-07-17.** Communication Strategy converted to free text (dropped `use_emojis`, unused anywhere in backend/agent code). Market Insights section removed — `emerging_trends` dropped (also unused), but **`target_niche` was deliberately kept and relocated into Core Brand rather than deleted**, since it's the exact field feeding Market Agent's industry-relevance fix (`market_agent.py`'s `_build_industry_context()`) — removing it would have silently regressed that fix, and nothing in Sam's message suggested he'd connected "Market Insights" to that. Flagged this reasoning internally before implementing; **Sam has not yet been told about this specific judgment call** — worth confirming with him whether relocating (vs. fully deleting) `target_niche` is acceptable, or if he wants it gone entirely too.
+
+**Sam (2026-07-17, 01:41 AM):** shared https://developers.greenhouse.io/job-board.html#list-jobs (Greenhouse's Job Board API docs) unprompted.
+
+**Sam (2026-07-17, 01:43 AM):** "I believe greenhouse.io can provide us with the integration api we need to post to indeed and linkedin, plus 30 more job boards. I have applied to become a greenhouse partner and added Rahul as the technical contact email." This predates all HR Employee build work (first branch commits landed 2026-07-18) — Sam did this research and applied independently, before any proposal doc existed. It directly targets the LinkedIn/Indeed blocker found in the Marketing-vs-HR research below: LinkedIn's Job Posting API closed to new partners, Indeed requiring ≥10 paying clients. Routing distribution through Greenhouse (an established ATS already integrated with both) sidesteps that wall entirely for the HR Employee's job-posting-sync piece.
+
+**Sam (2026-07-17, 01:43 AM, same batch):** "moving Human resource conversation to HR Employee" — read in context as directing this Greenhouse discussion into whatever thread/channel is used for HR Employee going forward, not just a generic note.
+
+**Open as of 2026-07-19:** Rahul is the listed technical contact on the Greenhouse Partner Program application — its actual status is unknown to us. Greenhouse's own partner page states *"at least one mutual customer is required for your integration request to be submitted"* — unclear whether Sam had one to list, whether the application cleared that bar, or what Greenhouse has said back (if anything). Rahul should check his email (including spam) for correspondence from Greenhouse's partnerships team, since approval would also resolve the sandbox-access gap noted in the 2026-07-18 Greenhouse entry above (Partner Program membership includes sandbox environment access per Greenhouse's own docs).
+
+**Open as of 2026-07-17:** the Marketing-vs-HR decision is still pending Sam's review of the comparison doc. Internally, Rahul raised (then walked back pending more info) recommending Marketing over HR to Sam despite the doc's HR-first conclusion — no technical justification was found for that reversal; would need Rahul to name an actual business reason before that gets sent to Sam differently from the doc.
 
 ---
 
