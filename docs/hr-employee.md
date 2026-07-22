@@ -464,7 +464,7 @@ Constraints:
 - exact one-to-one mirroring cannot be assumed
 
 ### Section 5: AI Interviewer Context + Question Bank + Rubrics
-Status: Planned
+Status: Functional first pass implemented
 
 Goal:
 - Give the AI interviewer structured job-specific context and safe questioning rules.
@@ -490,6 +490,92 @@ Hard compliance rules:
 
 Future extension:
 - import Greenhouse scorecards via Harvest API later
+
+Section 5 implementation:
+- Source of truth:
+  - the latest published AI Employees interview-bank version is authoritative for future interviews
+  - recruiters edit a mutable draft; `Publish & Activate` creates an immutable JSON snapshot and moves `active_version_id`
+  - AI suggestions are draft inputs only and never become active without an administrator saving and publishing them
+  - job descriptions ground suggestions, but they do not replace the saved question bank or rubric
+  - future Greenhouse scorecard imports will enter as reviewable drafts rather than overwriting active content
+- Current job scope:
+  - attached only to saved native `hr_job_postings` UUIDs
+  - Greenhouse jobs remain unavailable until the later canonical job-mirroring layer persists them locally
+  - no Greenhouse token, Job Board API key, Harvest access, candidate mirror, or live interviewer runtime is required
+- Database migration:
+  - `20260722140000_hr_section5_interview_context.sql`
+  - `hr_interview_banks` stores the mutable per-job settings/messages and active version pointer
+  - `hr_interview_questions` stores ordered, enabled/required, category, competency, timing, follow-up, source, and compliance metadata
+  - `hr_interview_rubric_criteria` stores weighted criteria and score 1/3/5 evidence anchors
+  - `hr_interview_bank_versions` stores immutable published snapshots and publisher/version audit data
+  - `hr_interview_compliance_rules` contains the 10 immutable platform rules
+  - `hr_tenant_interview_restrictions` reserves additive tenant restrictions; tenants cannot remove platform rules
+  - `hr_interview_compliance_checks` stores hashed-input safety outcomes and policy versions
+  - all tenant children carry `business_id` and use composite foreign keys
+  - all exposed tables have RLS and service-role-only policies
+- Backend:
+  - router: `backend/app/routers/hr_interviews.py`
+  - schemas: `backend/app/schemas/hr_interviews.py`
+  - persistence/versioning: `backend/app/services/hr_interview_bank_service.py`
+  - generation/preview: `backend/app/services/hr_interview_generation_service.py`
+  - compliance: `backend/app/services/hr_interview_compliance_service.py`
+  - endpoints:
+    - `GET /hr/jobs/{job_id}/interview-bank`
+    - `PUT /hr/jobs/{job_id}/interview-bank`
+    - `POST /hr/jobs/{job_id}/interview-bank/ai-suggest`
+    - `POST /hr/jobs/{job_id}/interview-bank/preview`
+    - `POST /hr/jobs/{job_id}/interview-bank/publish`
+  - reads require business membership; editing/publishing require business `admin` or `super_admin`
+  - generation and semantic safety classification use `gpt-4o-mini` with structured JSON
+  - manual questions, AI suggestions, preview interviewer turns, rubric criteria, and publication all pass compliance validation
+  - deterministic protected-topic checks run first; structured semantic classification follows and fails closed if unavailable
+- Permanent prohibited categories:
+  - age
+  - race / ethnicity
+  - religion
+  - disability / medical history
+  - pregnancy, childcare, or family plans
+  - marital / relationship status
+  - sexual orientation / gender identity
+  - citizenship / national origin, while neutral legal work-authorization questions remain allowed
+  - union membership / organizing
+  - salary / compensation history
+- Frontend:
+  - dedicated deep-link route: `/dashboard/hr/job-postings/:jobId/interview-bank`
+  - page: `src/pages/dashboard/hr/HrInterviewQuestionBank.tsx`
+  - job-specific question actions now retain the native job ID
+  - responsive run-sheet layout based on the approved reference, with a sticky settings rail on desktop and stacked mobile layout
+  - the settings rail now matches the approved hierarchy: Interview Settings / AI Preview / Scoring Rubric tabs, Interview Format, AI Interviewer Persona and behavior controls, then AI Opening Message / closing script
+  - visual redesign aligned to the approved reference: soft white surfaces, `#EAEAEA` hairline borders, pastel category badges, blue primary actions, card-based question run sheet, AI Suggest banner, role pill + AI Mode Active status, and Active Qs / Est. Minutes / Follow-ups stats
+  - unsafe autosave failures open an accessible app-native `Question Not Saved` dialog that names the prohibited category, explains why the question was blocked, and tells the editor to revise or remove it
+  - a blocked draft revision is not retried automatically until the editor changes it, preventing repeated warning dialogs
+  - category/search state and Settings / AI Preview / Rubric tab state are URL-backed
+  - question add/edit/delete, enable/disable, keyboard-friendly reordering, AI suggestions, autosave/manual save, safe synthetic preview, rubric editing, and publish are functional
+  - Greenhouse scorecard import is visibly unavailable with its Harvest dependency explained
+- Draft and publication validation:
+  - minimum 3 enabled compliant questions
+  - rubric requires at least 1 criterion
+  - rubric weights must total exactly 100
+  - active published versions remain unchanged while a draft is edited or a draft question is deleted
+- Verification completed:
+  - migration applied to linked Supabase
+  - migration history aligned locally/remotely
+  - tenant composite foreign keys verified live
+  - RLS verified live on Section 5 tables
+  - 10 immutable compliance rules verified live
+  - backend modules compile successfully
+  - frontend ESLint and TypeScript checks pass
+  - the compliance service now returns category-specific human-readable reasons for deterministic blocks
+  - frontend production build passes inside the Node 20 container
+  - deterministic compliance unit coverage added under `backend/tests/test_hr_interview_compliance.py`
+  - all 5 deterministic compliance tests pass in the backend container
+  - isolated temporary-job E2E passed: draft revision 1 saved, immutable version 1 published, 2 AI questions generated, and a 6-turn synthetic preview returned by `gpt-4o-mini`
+  - unsafe age-question E2E was rejected before any interview-bank row was created
+- Deferred:
+  - live AI interviewer runtime consumption of the active version
+  - candidate-specific context from Sections 2 and 3
+  - Greenhouse scorecard import via Harvest
+  - approved/published HR document grounding after Section 7 adds editorial status
 
 ### Section 6: Candidate Review, Decision Support, and Human Approval Loop
 Status: Planned
@@ -577,7 +663,6 @@ Backend plan:
   - candidate mirror tables
   - application mirror / submission logs
   - interview stage mapping tables
-  - scoring rubric tables
   - interview session / transcript tables
   - onboarding answer/source trace tables
 
@@ -596,6 +681,7 @@ Backend plan:
 - Native draft delete added
 - Browser confirm replaced with app-native confirmation dialog
 - LinkedIn / Indeed explanation copy added to builder
+- Section 5 interview question bank, settings, AI preview, scoring rubric, compliance policy, and immutable publication implemented
 
 ## Current Risks
 - No Greenhouse sandbox credentials yet for true live validation
@@ -609,7 +695,7 @@ Backend plan:
 2. Build section 2 application submission flow
 3. Replace candidate mocks with mirrored data
 4. Build interview stage mapping
-5. Build rubric + question-bank-backed AI interview context
+5. Wire the active Section 5 version into the live interviewer after candidate/session records exist
 6. Build decision-support review layer
 7. Ground onboarding assistant on approved documents
 
