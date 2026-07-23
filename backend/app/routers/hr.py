@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from app.core.auth import get_user_id, require_business_access, verify_business_access
 from app.core.supabase import supabase_admin
+from app.schemas.documents import OnboardingChatRequest, OnboardingChatResponse
 from app.schemas.hr import (
     HrDashboardPostingResponse,
     HrDraftAssistRequest,
@@ -18,6 +19,7 @@ from app.schemas.hr import (
     HrJobPostingUpsertRequest,
 )
 from app.services.hr_drafting_service import generate_hr_draft_assistance
+from app.services.hr_onboarding_chat_service import answer_onboarding_question
 from app.services.greenhouse_service import GreenhouseError, fetch_jobs, normalize_greenhouse_job
 
 router = APIRouter(prefix="/hr", tags=["hr"])
@@ -687,6 +689,23 @@ async def assist_hr_job_draft(
         logger.error("Ava drafting failed for business %s: %s", body.business_id, exc)
         raise HTTPException(status_code=502, detail="Ava could not generate draft content right now.") from exc
     return HrDraftAssistResponse(**result)
+
+
+@router.post("/onboarding/chat", response_model=OnboardingChatResponse)
+async def chat_with_hr_onboarding_agent(
+    body: OnboardingChatRequest,
+    user_id: str = Depends(get_user_id),
+) -> OnboardingChatResponse:
+    verify_business_access(user_id, body.business_id)
+    try:
+        return await answer_onboarding_question(
+            business_id=body.business_id,
+            question=body.question.strip(),
+            document_id=body.document_id,
+        )
+    except Exception as exc:
+        logger.error("HR onboarding chat failed for business %s: %s", body.business_id, exc)
+        raise HTTPException(status_code=502, detail="The HR onboarding assistant is unavailable right now.") from exc
 
 
 @router.get("/jobs/{job_id}")
