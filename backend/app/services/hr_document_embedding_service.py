@@ -16,6 +16,7 @@ from app.core.supabase import supabase_admin
 logger = logging.getLogger(__name__)
 
 DOCUMENT_BUCKET = "business-documents"
+HR_POLICY_DOCUMENT_BUCKET = "hr-policy-docs"
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIMENSIONS = 1536
 MAX_DOCUMENT_TEXT_CHARS = 240_000
@@ -123,6 +124,7 @@ def _replace_document_chunks(
     document_name: str,
     chunks: list[str],
     embeddings: list[list[float]],
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     (
         supabase_admin.table("hr_document_chunks")
@@ -132,6 +134,7 @@ def _replace_document_chunks(
         .execute()
     )
 
+    base_metadata = metadata or {}
     rows = [
         {
             "business_id": business_id,
@@ -140,7 +143,7 @@ def _replace_document_chunks(
             "content": content,
             "embedding": embedding,
             "embedding_model": EMBEDDING_MODEL,
-            "metadata": {"document_name": document_name},
+            "metadata": {"document_name": document_name, **base_metadata},
         }
         for index, (content, embedding) in enumerate(zip(chunks, embeddings, strict=True))
     ]
@@ -157,6 +160,7 @@ async def process_document_bytes(
     business_id: str,
     document_name: str,
     file_bytes: bytes,
+    metadata: dict[str, Any] | None = None,
     raise_on_error: bool = False,
 ) -> None:
     try:
@@ -182,6 +186,7 @@ async def process_document_bytes(
             document_name=document_name,
             chunks=chunks,
             embeddings=embeddings,
+            metadata=metadata,
         )
         await asyncio.to_thread(
             _update_document_status,
@@ -216,6 +221,7 @@ async def process_stored_document(
     *,
     document_id: str,
     business_id: str,
+    storage_bucket: str | None = None,
     raise_on_error: bool = False,
 ) -> None:
     try:
@@ -228,7 +234,7 @@ async def process_stored_document(
         rows = await asyncio.to_thread(
             lambda: (
                 supabase_admin.table("business_documents")
-                .select("id,business_id,name,file_name,file_path")
+                .select("id,business_id,name,file_name,file_path,storage_bucket,document_scope,category,status")
                 .eq("id", document_id)
                 .eq("business_id", business_id)
                 .limit(1)
@@ -240,8 +246,9 @@ async def process_stored_document(
             raise ValueError("Business document was not found.")
 
         document = rows[0]
+        bucket = storage_bucket or document.get("storage_bucket") or DOCUMENT_BUCKET
         signed = await asyncio.to_thread(
-            supabase_admin.storage.from_(DOCUMENT_BUCKET).create_signed_url,
+            supabase_admin.storage.from_(bucket).create_signed_url,
             document["file_path"],
             600,
         )
@@ -258,6 +265,12 @@ async def process_stored_document(
             business_id=business_id,
             document_name=document.get("name") or document.get("file_name") or "Business document",
             file_bytes=response.content,
+            metadata={
+                "document_scope": document.get("document_scope") or "business",
+                "category": document.get("category") or "General",
+                "status": document.get("status") or "published",
+                "storage_bucket": bucket,
+            },
             raise_on_error=True,
         )
     except Exception as exc:
@@ -322,6 +335,43 @@ async def retrieve_relevant_document_chunks(
     result = await asyncio.to_thread(
         lambda: supabase_admin.rpc(
             "match_hr_document_chunks",
+            {
+                "query_embedding": query_embedding,
+                "match_business_id": business_id,
+                "match_count": match_count,
+                "match_threshold": match_threshold,
+            },
+        ).execute()
+    )
+    return result.data or []
+
+
+async def retrieve_relevant_hr_policy_chunks(
+    *,
+    business_id: str,
+    query: str,
+    match_count: int = 6,
+    match_threshold: float = 0.15,
+) -> list[dict[str, Any]]:
+    if not query.strip():
+        return []
+
+    client = AsyncOpenAI(
+        api_key=settings.openai_api_key,
+        timeout=15.0,
+        max_retries=1,
+    )
+    response = await client.embeddings.create(
+        model=EMBEDDING_MODEL,
+        input=query,
+        dimensions=EMBEDDING_DIMENSIONS,
+        encoding_format="float",
+    )
+    query_embedding = response.data[0].embedding
+
+    result = await asyncio.to_thread(
+        lambda: supabase_admin.rpc(
+            "match_hr_policy_document_chunks",
             {
                 "query_embedding": query_embedding,
                 "match_business_id": business_id,

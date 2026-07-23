@@ -604,7 +604,7 @@ Legal / product constraint:
 - recommendations are advisory only
 
 ### Section 7: Onboarding Knowledge Base + HR Agent Grounding
-Status: Planned
+Status: Functional first pass implemented
 
 Goal:
 - Use approved customer documents as the trusted source for onboarding and HR support answers.
@@ -623,12 +623,59 @@ Data expectations:
 Future extension:
 - Google Drive / SharePoint sync
 
-Frontend plan:
-- connect HR onboarding views to real document-backed state
+Implemented now:
+- Supabase:
+  - migration `20260723084216_hr_policy_docs_onboarding.sql`
+  - private storage bucket id `hr-policy-docs`
+  - `business_documents` now carries onboarding metadata:
+    - `document_scope`
+    - `category`
+    - `tags`
+    - `status`
+    - `uploaded_by`
+    - `storage_bucket`
+  - `hr_document_read_progress` stores per-user read progress
+  - `match_hr_policy_document_chunks` retrieves only tenant-scoped, published, AI-ready HR onboarding documents
+- Backend:
+  - HR policy upload/list/update/category merge/bulk delete/signed URL/progress/retry endpoints under `/documents/hr-policy`
+  - uploaded PDFs are stored in `hr-policy-docs`
+  - new uploads are queued for embedding immediately
+  - onboarding chat endpoint: `POST /hr/onboarding/chat`
+  - chat answers use only retrieved published HR policy chunks and refuse unsupported answers
+- Frontend:
+  - `HrOnboarding.tsx` no longer uses `getHrMockWorkspace`
+  - document library loads real HR policy documents
+  - upload dialog, search, category/status filters, pagination, row selection, bulk delete, category merge, signed document viewing, download/open, embedding retry, save progress, quick prompts, and chat are functional
+  - support view embeds the signed PDF and sends questions to the onboarding chat endpoint
+  - upload completion now shows an app-native success dialog confirming the document was stored in the HR policy Docs bucket and queued for vector indexing
+  - onboarding chat now searches across all uploaded published HR policy documents rather than limiting context to the currently opened document
+  - support view layout was tightened to match the approved reference more closely:
+    - app-level document controls are aligned in the document card header
+    - signed PDF preview uses an inline embedded view with browser PDF chrome suppressed where supported
+    - HR AI Agent panel spacing, prompt chips, input, and icon-only button accessibility were polished
+  - PDF controls were corrected:
+    - zoom buttons now update the embedded PDF URL zoom fragment and force the iframe to refresh
+    - the default `100%` document state now requests PDF fit-to-width mode so the page fits the viewer window instead of clipping
+    - zoom levels now scale relative to the fit-to-width baseline, so `75%` is visibly smaller than `100%`
+    - download now fetches the signed URL as a blob and triggers a real file download using the stored filename
 
-Backend plan:
-- ensure only approved docs are used for answer grounding
-- add retrieval / filtering rules for HR agent context
+Verification completed:
+- migration `20260723084216_hr_policy_docs_onboarding.sql` applied to the linked Supabase project
+- migration history confirms local and remote both have `20260723084216`
+- Backend changed modules compile successfully
+- Frontend TypeScript check passes
+- Targeted ESLint passes for `HrOnboarding.tsx`
+- Reverified TypeScript and targeted `HrOnboarding.tsx` ESLint after the upload success dialog / all-document chat update
+- Reverified TypeScript, targeted `HrOnboarding.tsx` ESLint, and editor diagnostics after the support-view UI polish
+- Reverified TypeScript, targeted `HrOnboarding.tsx` ESLint, and editor diagnostics after fixing PDF zoom/download controls
+- Reverified TypeScript, targeted `HrOnboarding.tsx` ESLint, and editor diagnostics after changing the `100%` PDF state to fit-to-width
+- Reverified TypeScript, targeted `HrOnboarding.tsx` ESLint, and editor diagnostics after normalizing PDF zoom levels relative to fit-to-width
+
+Remaining validation / limitations:
+- End-to-end upload, signed preview, embedding readiness, and chat Q&A still need live verification against Supabase/OpenAI
+- `voiceAgentApi.ts` still has unrelated pre-existing lint debt
+- Image-only/scanned PDFs still require future OCR fallback
+- FastAPI background tasks remain a retryable bridge, not a durable document-ingestion queue
 
 ## Cross-Cutting Technical Plan
 
@@ -682,6 +729,7 @@ Backend plan:
 - Browser confirm replaced with app-native confirmation dialog
 - LinkedIn / Indeed explanation copy added to builder
 - Section 5 interview question bank, settings, AI preview, scoring rubric, compliance policy, and immutable publication implemented
+- Section 7 onboarding document library, HR policy upload, embeddings, signed PDF viewing, and grounded onboarding chat implemented as a first pass
 
 ## Current Risks
 - No Greenhouse sandbox credentials yet for true live validation
@@ -697,7 +745,7 @@ Backend plan:
 4. Build interview stage mapping
 5. Wire the active Section 5 version into the live interviewer after candidate/session records exist
 6. Build decision-support review layer
-7. Ground onboarding assistant on approved documents
+7. Apply and live-verify Section 7 onboarding document upload, embedding, preview, and chat
 
 ## Session Maintenance Rules
 - Update this file whenever HR Employee work changes architecture, scope, or completion state.
