@@ -31,3 +31,14 @@ services:
       - ./agent:/app
     command: python executive_agent.py dev
     restart: unless-stopped
+
+  sam-hr-onboarding-agent:
+    build: ./agent
+    ports:
+      - "8004:8001"
+    env_file:
+      - ./agent/.env.local
+    volumes:
+      - ./agent:/app
+    command: python hr_onboarding_agent.py dev
+    restart: unless-stopped

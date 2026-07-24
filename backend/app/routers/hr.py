@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import uuid
+import os
 
 import logging
 
@@ -8,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.core.auth import get_user_id, require_business_access, verify_business_access
+from app.core.config import settings
 from app.core.supabase import supabase_admin
 from app.schemas.documents import OnboardingChatRequest, OnboardingChatResponse
 from app.schemas.hr import (
@@ -21,6 +24,7 @@ from app.schemas.hr import (
 from app.services.hr_drafting_service import generate_hr_draft_assistance
 from app.services.hr_onboarding_chat_service import answer_onboarding_question
 from app.services.greenhouse_service import GreenhouseError, fetch_jobs, normalize_greenhouse_job
+from app.services import livekit_service
 
 router = APIRouter(prefix="/hr", tags=["hr"])
 logger = logging.getLogger(__name__)
@@ -29,6 +33,18 @@ logger = logging.getLogger(__name__)
 class HrWorkspaceJobPayload(BaseModel):
     dashboard: dict
     job_postings: dict
+
+
+class HrOnboardingVoiceSessionRequest(BaseModel):
+    business_id: str
+    avatar_enabled: bool = False
+
+
+class HrOnboardingVoiceSessionResponse(BaseModel):
+    room_name: str
+    token: str
+    livekit_url: str
+    avatar_available: bool
 
 
 @router.get("/mock-workspace")
@@ -706,6 +722,63 @@ async def chat_with_hr_onboarding_agent(
     except Exception as exc:
         logger.error("HR onboarding chat failed for business %s: %s", body.business_id, exc)
         raise HTTPException(status_code=502, detail="The HR onboarding assistant is unavailable right now.") from exc
+
+
+@router.post("/onboarding/session", response_model=HrOnboardingVoiceSessionResponse)
+async def create_hr_onboarding_voice_session(
+    body: HrOnboardingVoiceSessionRequest,
+    user_id: str = Depends(get_user_id),
+) -> HrOnboardingVoiceSessionResponse:
+    verify_business_access(user_id, body.business_id)
+
+    business = (
+        supabase_admin.table("businesses")
+        .select("id")
+        .eq("id", body.business_id)
+        .limit(1)
+        .execute()
+    )
+    if not business.data:
+        raise HTTPException(status_code=404, detail="Business not found.")
+
+    room_name = f"hr-onboarding-{body.business_id[:8]}-{uuid.uuid4().hex[:8]}"
+    await livekit_service.create_room(room_name)
+
+    token = livekit_service.generate_user_token(
+        room_name,
+        f"hr-user-{user_id[:12]}",
+        metadata={
+            "session_type": "hr_onboarding",
+            "business_id": body.business_id,
+            "user_id": user_id,
+        },
+    )
+
+    await livekit_service.create_hr_onboarding_agent_dispatch(
+        room_name,
+        metadata={
+            "session_type": "hr_onboarding",
+            "business_id": body.business_id,
+            "user_id": user_id,
+            "avatar_enabled": body.avatar_enabled,
+        },
+    )
+
+    logger.info(
+        "HR onboarding voice session created: room=%s business=%s avatar_enabled=%s",
+        room_name,
+        body.business_id,
+        body.avatar_enabled,
+    )
+
+    avatar_available = bool(os.environ.get("JOHN_AVATAR_ID", "Albert_public_1"))
+
+    return HrOnboardingVoiceSessionResponse(
+        room_name=room_name,
+        token=token,
+        livekit_url=settings.livekit_url,
+        avatar_available=avatar_available,
+    )
 
 
 @router.get("/jobs/{job_id}")

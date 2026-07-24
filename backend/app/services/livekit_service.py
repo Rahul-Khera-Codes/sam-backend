@@ -10,6 +10,7 @@ from app.core.config import settings
 # Agent names — must match AGENT_NAME values in agent/.env.local
 VOICE_AGENT_NAME = settings.agent_name
 EXECUTIVE_AGENT_NAME = "executive-agent"
+HR_ONBOARDING_AGENT_NAME = "hr-onboarding-agent"
 
 
 def generate_room_id() -> str:
@@ -87,6 +88,29 @@ async def create_executive_agent_dispatch(
         )
         await api.agent_dispatch.create_dispatch(req)
         print(f"[LiveKit] executive dispatch created room={room_id}", flush=True)
+    finally:
+        await api.aclose()
+
+
+async def create_hr_onboarding_agent_dispatch(
+    room_id: str,
+    *,
+    metadata: dict | None = None,
+) -> None:
+    """Dispatch John, the HR onboarding agent, to a browser session room."""
+    api = LiveKitAPI(
+        url=settings.livekit_url,
+        api_key=settings.livekit_api_key,
+        api_secret=settings.livekit_api_secret,
+    )
+    try:
+        req = CreateAgentDispatchRequest(
+            agent_name=HR_ONBOARDING_AGENT_NAME,
+            room=room_id,
+            metadata=json.dumps(metadata) if metadata else "",
+        )
+        await api.agent_dispatch.create_dispatch(req)
+        print(f"[LiveKit] HR onboarding dispatch created room={room_id}", flush=True)
     finally:
         await api.aclose()
 
