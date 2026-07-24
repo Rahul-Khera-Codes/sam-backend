@@ -652,12 +652,55 @@ Implemented now:
   - support view layout was tightened to match the approved reference more closely:
     - app-level document controls are aligned in the document card header
     - signed PDF preview uses an inline embedded view with browser PDF chrome suppressed where supported
-    - HR AI Agent panel spacing, prompt chips, input, and icon-only button accessibility were polished
+    - John/HR AI panel spacing, prompt chips, input, and icon-only button accessibility were polished
   - PDF controls were corrected:
     - zoom buttons now update the embedded PDF URL zoom fragment and force the iframe to refresh
     - the default `100%` document state now requests PDF fit-to-width mode so the page fits the viewer window instead of clipping
     - zoom levels now scale relative to the fit-to-width baseline, so `75%` is visibly smaller than `100%`
     - download now fetches the signed URL as a blob and triggers a real file download using the stored filename
+  - John voice assistant first pass added:
+    - agent name: John
+    - realtime voice mode uses LiveKit + OpenAI Realtime with `voice="cedar"`
+    - avatar/video remains deferred
+    - typed chat remains available when voice mode is off
+    - when voice mode is connected, typed messages go through the LiveKit session so John answers in the same realtime conversation
+    - mic on/off, start/end voice session, and listening/thinking/speaking state display are wired in the onboarding panel
+    - John is restricted to published, AI-ready HR policy document chunks through `match_hr_policy_document_chunks`
+  - John panel UI was polished after the first voice pass:
+    - replaced the flat green header with a darker modern identity header and live status pill
+    - grouped voice controls into a cleaner card with clearer avatar/video copy
+    - improved chat surface, message bubbles, prompt chips, and input focus styling
+    - added better long-text handling, `aria-live` status/error regions, and cleaner ellipsis copy
+  - John HeyGen avatar support added:
+    - avatar ID is read from `JOHN_AVATAR_ID` in `agent/.env.local` with fallback `Albert_public_1`
+    - assistant name and spoken identity remain John
+    - visual direction: professional HR executive, calm and approachable
+    - backend accepts `avatar_enabled` on `/hr/onboarding/session` and dispatches that setting to `hr-onboarding-agent`
+    - John runtime starts HeyGen LiveAvatar before the LiveKit agent session when avatar mode is requested
+    - frontend has a Start Avatar / Hide Avatar control
+    - Start Avatar begins John voice with the HeyGen avatar; Start Voice remains voice-only
+    - Hide Avatar removes the visible avatar surface while keeping the voice session active
+  - John avatar window/faster intro follow-up:
+    - Start Avatar now opens a centered floating avatar window immediately instead of relying on the narrow side panel
+    - avatar window supports collapse/expand and hide controls
+    - HeyGen video track is cached and attached when the floating video element mounts, avoiding the missing-avatar race
+    - right-side John card now shows avatar status while the video lives in the floating window
+    - John intro text is published immediately to the frontend and the realtime model is instructed to speak the exact stored line
+  - John avatar window UI and stop-streaming update:
+    - floating avatar window now uses a larger centered `640px` desktop layout
+    - color treatment changed to a warmer cream surface with blue tint to match the app theme
+    - full voice conversation transcript is shown below the avatar with its own scroll area
+    - Stop Avatar now sends a `stop_avatar` data message to the backend
+    - backend calls HeyGen LiveAvatar `aclose()` so the avatar stream stops instead of only hiding the video
+    - backend emits `avatar_stopped` so the frontend clears avatar state while keeping the John voice room active where possible
+- John voice backend/frontend files:
+  - `backend/app/routers/hr.py`
+  - `backend/app/services/livekit_service.py`
+  - `agent/hr_onboarding_agent.py`
+  - `docker-compose.yml`
+  - `src/lib/voiceAgentApi.ts`
+  - `src/hooks/useHrOnboardingVoiceSession.ts`
+  - `src/pages/dashboard/hr/HrOnboarding.tsx`
 
 Verification completed:
 - migration `20260723084216_hr_policy_docs_onboarding.sql` applied to the linked Supabase project
@@ -670,9 +713,46 @@ Verification completed:
 - Reverified TypeScript, targeted `HrOnboarding.tsx` ESLint, and editor diagnostics after fixing PDF zoom/download controls
 - Reverified TypeScript, targeted `HrOnboarding.tsx` ESLint, and editor diagnostics after changing the `100%` PDF state to fit-to-width
 - Reverified TypeScript, targeted `HrOnboarding.tsx` ESLint, and editor diagnostics after normalizing PDF zoom levels relative to fit-to-width
+- John voice verification:
+  - backend Python compile passed for `hr.py`, `livekit_service.py`, and `hr_onboarding_agent.py`
+  - frontend TypeScript check passed
+  - targeted ESLint passed for `HrOnboarding.tsx` and `useHrOnboardingVoiceSession.ts`
+  - editor diagnostics reported no errors on edited John voice files
+  - `docker compose config` passes with the new `sam-hr-onboarding-agent` service
+- John UI polish verification:
+  - targeted ESLint passed for `HrOnboarding.tsx`
+  - frontend TypeScript check passed
+  - editor diagnostics reported no errors for `HrOnboarding.tsx`
+  - local frontend opened successfully, but authenticated HR page visual verification was blocked at login
+- John avatar verification:
+  - backend Python compile passed for `hr.py` and `hr_onboarding_agent.py`
+  - frontend TypeScript check passed
+  - targeted ESLint passed for `HrOnboarding.tsx` and `useHrOnboardingVoiceSession.ts`
+  - editor diagnostics reported no errors for John avatar edited files
+  - targeted ESLint including `voiceAgentApi.ts` still reports unrelated pre-existing `any` debt in that file
+- John avatar window/faster intro verification:
+  - backend Python compile passed for `hr_onboarding_agent.py`
+  - frontend TypeScript check passed
+  - targeted ESLint passed for `HrOnboarding.tsx` and `useHrOnboardingVoiceSession.ts`
+  - editor diagnostics reported no errors for the avatar window and hook changes
+- John avatar env update:
+  - runtime now reads `JOHN_AVATAR_ID`
+  - backend Python compile passed for `hr.py` and `hr_onboarding_agent.py`
+  - editor diagnostics reported no errors for the env-name update
+- John avatar UI/stop-streaming verification:
+  - inspected installed `liveavatar.AvatarSession` in the running agent container; avatar stop API is `aclose()`
+  - backend Python compile passed for `hr_onboarding_agent.py`
+  - frontend TypeScript check passed
+  - targeted ESLint passed for `HrOnboarding.tsx` and `useHrOnboardingVoiceSession.ts`
+  - editor diagnostics reported no errors for the enlarged avatar window and stop-streaming changes
 
 Remaining validation / limitations:
 - End-to-end upload, signed preview, embedding readiness, and chat Q&A still need live verification against Supabase/OpenAI
+- John voice still needs live browser/LiveKit verification after rebuilding and starting the new `sam-hr-onboarding-agent` service
+- John panel visual QA still needs an authenticated browser pass on the HR onboarding page
+- John HeyGen avatar needs live verification with `sam-hr-onboarding-agent` running and HeyGen credentials available in `agent/.env.local`
+- Confirm in browser that HeyGen publishes the configured `JOHN_AVATAR_ID` video track after the rebuilt agent starts
+- Confirm in browser that Stop Avatar closes the HeyGen stream and does not continue consuming avatar credits
 - `voiceAgentApi.ts` still has unrelated pre-existing lint debt
 - Image-only/scanned PDFs still require future OCR fallback
 - FastAPI background tasks remain a retryable bridge, not a durable document-ingestion queue
