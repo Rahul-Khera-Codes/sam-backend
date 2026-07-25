@@ -69,6 +69,8 @@
 - AI notes and scores remain in-app in v1.
 - Interview workflow is AI-Employees-specific and maps to customer Greenhouse stages later.
 - AI recommendations are advisory only.
+- Candidates tab now uses Greenhouse endpoint-backed states instead of mock candidates.
+- Candidate data requires a Greenhouse Harvest API key; Job Board API alone is not enough.
 
 ### Onboarding / Documents
 - Customers upload approved onboarding and HR documents into the platform.
@@ -165,6 +167,7 @@ Verification history:
 
 Pending polish for section 1:
 - Validate against real Greenhouse credentials
+- Validate Harvest candidate/application endpoints once the client provides a Harvest API key
 - Optionally improve native edit/delete microcopy
 - Optionally refactor `voiceAgentApi.ts` lint debt in separate cleanup
 - Evolve the Ava card from a UI persona into a real drafting workflow with prompt templates, refinement actions, and save/apply-to-fields behavior
@@ -693,6 +696,20 @@ Implemented now:
     - Stop Avatar now sends a `stop_avatar` data message to the backend
     - backend calls HeyGen LiveAvatar `aclose()` so the avatar stream stops instead of only hiding the video
     - backend emits `avatar_stopped` so the frontend clears avatar state while keeping the John voice room active where possible
+  - Document Library table layout tightened:
+    - removed the wide multi-column layout that pushed actions off-screen
+    - combined category and tags under the document name
+    - combined uploader and date into one uploaded column
+    - fixed status, uploaded, size, and actions column widths so actions stay visible
+    - added a filtered empty state row
+  - Candidates tab mock removal / Harvest-ready implementation:
+    - removed hardcoded candidate rows and AI score/resume summary UI from `HrCandidates.tsx`
+    - added nullable `greenhouse_harvest_api_key` migration on `greenhouse_connections`
+    - Greenhouse integration dialog now accepts a Harvest API key while preserving existing key if left blank
+    - `GET /hr/candidates` returns setup states when Greenhouse or Harvest is missing
+    - candidate list is ready to load applications for the selected synced Greenhouse job once Harvest is configured
+    - added Harvest-backed action endpoints for invite/advance and reject application flows
+    - Candidates UI now shows a connect/add-Harvest prompt instead of mock rows while no real data is available
 - John voice backend/frontend files:
   - `backend/app/routers/hr.py`
   - `backend/app/services/livekit_service.py`
@@ -745,6 +762,15 @@ Verification completed:
   - frontend TypeScript check passed
   - targeted ESLint passed for `HrOnboarding.tsx` and `useHrOnboardingVoiceSession.ts`
   - editor diagnostics reported no errors for the enlarged avatar window and stop-streaming changes
+- Document Library table layout verification:
+  - frontend TypeScript check passed
+  - targeted ESLint passed for `HrOnboarding.tsx`
+  - editor diagnostics reported no errors for `HrOnboarding.tsx`
+- Candidates Harvest-ready verification:
+  - backend Python compile passed for `hr.py`, `greenhouse_integrations.py`, `greenhouse_service.py`, and `schemas/hr.py`
+  - frontend TypeScript check passed
+  - targeted ESLint passed for `HrCandidates.tsx` and `IntegrationsTab.tsx`
+  - editor diagnostics reported no errors for candidates/Greenhouse edited files
 
 Remaining validation / limitations:
 - End-to-end upload, signed preview, embedding readiness, and chat Q&A still need live verification against Supabase/OpenAI
@@ -753,6 +779,8 @@ Remaining validation / limitations:
 - John HeyGen avatar needs live verification with `sam-hr-onboarding-agent` running and HeyGen credentials available in `agent/.env.local`
 - Confirm in browser that HeyGen publishes the configured `JOHN_AVATAR_ID` video track after the rebuilt agent starts
 - Confirm in browser that Stop Avatar closes the HeyGen stream and does not continue consuming avatar credits
+- Apply migration `20260725102052_greenhouse_harvest_candidates.sql` before entering a Harvest API key
+- Harvest candidate list and actions still need live validation against real Greenhouse Harvest credentials
 - `voiceAgentApi.ts` still has unrelated pre-existing lint debt
 - Image-only/scanned PDFs still require future OCR fallback
 - FastAPI background tasks remain a retryable bridge, not a durable document-ingestion queue

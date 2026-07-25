@@ -6,6 +6,7 @@ import httpx
 
 
 BASE_URL = "https://boards-api.greenhouse.io/v1"
+HARVEST_BASE_URL = "https://harvest.greenhouse.io/v1"
 
 
 class GreenhouseError(Exception):
@@ -24,6 +25,39 @@ async def _get_json(url: str) -> dict[str, Any]:
         raise GreenhouseError("Greenhouse returned invalid JSON") from exc
 
 
+async def _harvest_request(
+    harvest_api_key: str,
+    method: str,
+    path: str,
+    *,
+    params: dict[str, Any] | None = None,
+    json_body: dict[str, Any] | None = None,
+) -> Any:
+    key = (harvest_api_key or "").strip()
+    if not key:
+        raise GreenhouseError("Greenhouse Harvest API key is not configured.")
+    async with httpx.AsyncClient(
+        timeout=30.0,
+        auth=(key, ""),
+        headers={"Accept": "application/json"},
+    ) as client:
+        response = await client.request(
+            method,
+            f"{HARVEST_BASE_URL}{path}",
+            params=params,
+            json=json_body,
+        )
+    if response.status_code >= 400:
+        detail = response.text.strip() or f"Greenhouse Harvest request failed with status {response.status_code}"
+        raise GreenhouseError(detail)
+    if not response.content:
+        return {}
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise GreenhouseError("Greenhouse Harvest returned invalid JSON") from exc
+
+
 async def fetch_board(board_token: str) -> dict[str, Any]:
     return await _get_json(f"{BASE_URL}/boards/{board_token}")
 
@@ -31,6 +65,76 @@ async def fetch_board(board_token: str) -> dict[str, Any]:
 async def fetch_jobs(board_token: str, *, content: bool = True) -> dict[str, Any]:
     content_flag = "true" if content else "false"
     return await _get_json(f"{BASE_URL}/boards/{board_token}/jobs?content={content_flag}")
+
+
+async def fetch_harvest_applications_for_job(
+    harvest_api_key: str,
+    greenhouse_internal_job_id: str,
+) -> list[dict[str, Any]]:
+    data = await _harvest_request(
+        harvest_api_key,
+        "GET",
+        "/applications",
+        params={"job_id": greenhouse_internal_job_id, "per_page": 100},
+    )
+    return data if isinstance(data, list) else []
+
+
+async def fetch_harvest_candidate(
+    harvest_api_key: str,
+    candidate_id: str,
+) -> dict[str, Any]:
+    data = await _harvest_request(harvest_api_key, "GET", f"/candidates/{candidate_id}")
+    return data if isinstance(data, dict) else {}
+
+
+async def reject_harvest_application(
+    harvest_api_key: str,
+    application_id: str,
+) -> None:
+    await _harvest_request(harvest_api_key, "POST", f"/applications/{application_id}/reject")
+
+
+async def advance_harvest_application(
+    harvest_api_key: str,
+    application_id: str,
+) -> None:
+    await _harvest_request(harvest_api_key, "POST", f"/applications/{application_id}/advance")
+
+
+def normalize_greenhouse_candidate(
+    application: dict[str, Any],
+    candidate: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    candidate = candidate or application.get("candidate") or {}
+    candidate_id = str(candidate.get("id") or application.get("candidate_id") or "")
+    application_id = str(application.get("id") or "")
+    first_name = candidate.get("first_name") or ""
+    last_name = candidate.get("last_name") or ""
+    name = f"{first_name} {last_name}".strip() or candidate.get("name") or "Candidate"
+
+    email_rows = candidate.get("email_addresses") or []
+    phone_rows = candidate.get("phone_numbers") or []
+    address_rows = candidate.get("addresses") or []
+    stage = application.get("current_stage") or {}
+
+    return {
+        "id": application_id or candidate_id,
+        "application_id": application_id,
+        "candidate_id": candidate_id,
+        "name": name,
+        "title": candidate.get("title") or "",
+        "company": candidate.get("company") or "",
+        "location": (address_rows[0].get("value") if address_rows else "") or "",
+        "email": (email_rows[0].get("value") if email_rows else None),
+        "phone": (phone_rows[0].get("value") if phone_rows else None),
+        "status": application.get("status") or ("Rejected" if application.get("rejected_at") else "Active"),
+        "stage": stage.get("name") if isinstance(stage, dict) else "",
+        "applied_at": application.get("applied_at"),
+        "source": (application.get("source") or {}).get("public_name") if isinstance(application.get("source"), dict) else "",
+        "prospect": bool(application.get("prospect")),
+        "greenhouse_url": application.get("greenhouse_url") or candidate.get("greenhouse_url"),
+    }
 
 
 def normalize_greenhouse_job(

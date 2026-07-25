@@ -10,6 +10,7 @@ class GreenhouseConnectionRequest(BaseModel):
     board_token: str = Field(min_length=1)
     board_url: str = Field(min_length=1)
     job_board_api_key: Optional[str] = None
+    greenhouse_harvest_api_key: Optional[str] = None
 
 
 class GreenhouseConnectionStatusResponse(BaseModel):
@@ -18,6 +19,7 @@ class GreenhouseConnectionStatusResponse(BaseModel):
     board_url: Optional[str] = None
     board_name: Optional[str] = None
     has_job_board_api_key: bool = False
+    has_greenhouse_harvest_api_key: bool = False
     last_sync_at: Optional[str] = None
     last_sync_status: Optional[str] = None
     last_sync_error: Optional[str] = None
@@ -111,6 +113,53 @@ class HrJobsResponse(BaseModel):
     greenhouse_status: Optional[GreenhouseConnectionStatusResponse] = None
     jobs: list[HrJobPostingResponse]
     native_draft_count: int = 0
+
+
+class HrCandidateJobResponse(BaseModel):
+    id: str
+    title: str
+    greenhouse_job_id: Optional[str] = None
+    greenhouse_internal_job_id: Optional[str] = None
+    absolute_url: str = ""
+
+
+class HrCandidateResponse(BaseModel):
+    id: str
+    application_id: str
+    candidate_id: str
+    name: str
+    title: str = ""
+    company: str = ""
+    location: str = ""
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    status: str = ""
+    stage: str = ""
+    applied_at: Optional[str] = None
+    source: str = ""
+    prospect: bool = False
+    greenhouse_url: Optional[str] = None
+
+
+class HrCandidatesResponse(BaseModel):
+    greenhouse_connected: bool
+    harvest_connected: bool
+    needs_greenhouse_connection: bool = False
+    needs_harvest_api_key: bool = False
+    selected_job: Optional[HrCandidateJobResponse] = None
+    candidates: list[HrCandidateResponse] = Field(default_factory=list)
+    total: int = 0
+    message: str = ""
+
+
+class HrCandidateActionRequest(BaseModel):
+    business_id: str
+    job_posting_id: Optional[str] = None
+
+
+class HrCandidateActionResponse(BaseModel):
+    ok: bool
+    message: str
 
 
 class HrDashboardPostingResponse(BaseModel):
