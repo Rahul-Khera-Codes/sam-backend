@@ -35,7 +35,7 @@ def _get_connection_row(
         "last_sync_status,last_sync_error,last_job_count,created_at,updated_at"
     )
     if include_api_key:
-        columns += ",job_board_api_key"
+        columns += ",job_board_api_key,greenhouse_harvest_api_key"
     result = (
         supabase_admin.table("greenhouse_connections")
         .select(columns)
@@ -59,6 +59,7 @@ def _masked_status(
         board_url=row.get("board_url"),
         board_name=row.get("board_name"),
         has_job_board_api_key=bool(row.get("job_board_api_key")),
+        has_greenhouse_harvest_api_key=bool(row.get("greenhouse_harvest_api_key")),
         last_sync_at=row.get("last_sync_at"),
         last_sync_status=row.get("last_sync_status"),
         last_sync_error=row.get("last_sync_error"),
@@ -108,6 +109,9 @@ async def connect_greenhouse(
     supplied_api_key = (body.job_board_api_key or "").strip()
     if supplied_api_key:
         row["job_board_api_key"] = supplied_api_key
+    supplied_harvest_api_key = (body.greenhouse_harvest_api_key or "").strip()
+    if supplied_harvest_api_key:
+        row["greenhouse_harvest_api_key"] = supplied_harvest_api_key
 
     if existing:
         (
@@ -119,6 +123,7 @@ async def connect_greenhouse(
         )
     else:
         row["job_board_api_key"] = supplied_api_key or None
+        row["greenhouse_harvest_api_key"] = supplied_harvest_api_key or None
         supabase_admin.table("greenhouse_connections").insert(row).execute()
 
     return _masked_status(
