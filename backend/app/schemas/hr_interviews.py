@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -128,3 +128,189 @@ class HrInterviewPublishResponse(BaseModel):
     active_version_id: str
     version_number: int
     published_at: str
+
+
+InterviewSessionKind = Literal["ai_screen", "human_external"]
+InterviewSessionStatus = Literal[
+    "draft",
+    "invited",
+    "opened",
+    "in_progress",
+    "completed",
+    "reviewed",
+    "cancelled",
+    "expired",
+    "failed",
+]
+InterviewRecommendation = Literal["strong_hire", "hire", "review", "no_hire"]
+
+
+class HrInterviewInviteRequest(BaseModel):
+    business_id: str
+    job_posting_id: str
+    candidate_name: str = Field(min_length=1, max_length=200)
+    candidate_email: str = Field(min_length=3, max_length=320)
+    candidate_phone: str = Field(default="", max_length=80)
+    candidate_id: Optional[str] = None
+    application_id: Optional[str] = None
+    greenhouse_candidate_id: Optional[str] = None
+    greenhouse_application_id: Optional[str] = None
+    frontend_base_url: Optional[str] = Field(default=None, max_length=500)
+
+
+class HrHumanInterviewUpsertRequest(BaseModel):
+    business_id: str
+    job_posting_id: str
+    candidate_name: str = Field(min_length=1, max_length=200)
+    candidate_email: str = Field(default="", max_length=320)
+    candidate_phone: str = Field(default="", max_length=80)
+    provider: str = Field(default="", max_length=120)
+    reference: str = Field(default="", max_length=500)
+    scheduled_at: Optional[str] = None
+    status: InterviewSessionStatus = "invited"
+    stage: str = Field(default="human_interview", max_length=120)
+    recruiter_notes: str = Field(default="", max_length=10000)
+    recruiter_score: Optional[float] = Field(default=None, ge=0, le=100)
+
+
+class HrHumanInterviewEmailDraftRequest(BaseModel):
+    business_id: str
+    job_posting_id: str
+    candidate_name: str = Field(default="", max_length=200)
+    provider: str = Field(default="", max_length=120)
+    scheduled_at: Optional[str] = None
+    guidance: str = Field(default="", max_length=1000)
+
+
+class HrHumanInterviewEmailDraftResponse(BaseModel):
+    subject: str
+    message: str
+
+
+class HrHumanInterviewResponse(BaseModel):
+    session: "HrInterviewSessionSummary"
+    email_delivery_status: str = "not_attempted"
+    email_delivery_message: str = ""
+
+
+class HrInterviewStatusUpdateRequest(BaseModel):
+    business_id: str
+    status: InterviewSessionStatus
+    stage: Optional[str] = Field(default=None, max_length=120)
+
+
+class HrInterviewNotesUpdateRequest(BaseModel):
+    business_id: str
+    recruiter_notes: str = Field(default="", max_length=10000)
+    recruiter_score: Optional[float] = Field(default=None, ge=0, le=100)
+
+
+class HrInterviewSessionSummary(BaseModel):
+    id: str
+    business_id: str
+    job_posting_id: str
+    job_title: str = ""
+    interview_kind: InterviewSessionKind
+    status: InterviewSessionStatus
+    stage: str
+    candidate_name: str
+    candidate_email: str = ""
+    candidate_phone: str = ""
+    active_version_id: Optional[str] = None
+    active_version_number: Optional[int] = None
+    invited_at: Optional[str] = None
+    opened_at: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    reviewed_at: Optional[str] = None
+    human_interview_provider: Optional[str] = None
+    human_interview_reference: Optional[str] = None
+    human_interview_scheduled_at: Optional[str] = None
+    recruiter_notes: str = ""
+    recruiter_score: Optional[float] = None
+    greenhouse_sync_status: str = "not_applicable"
+    has_transcript: bool = False
+    has_recording: bool = False
+    outcome: Optional["HrInterviewOutcomeResponse"] = None
+
+
+class HrInterviewPipelineResponse(BaseModel):
+    ai_screens: list[HrInterviewSessionSummary] = Field(default_factory=list)
+    human_interviews: list[HrInterviewSessionSummary] = Field(default_factory=list)
+    totals: dict[str, int] = Field(default_factory=dict)
+
+
+class HrInterviewTranscriptTurnResponse(BaseModel):
+    id: str
+    speaker: Literal["interviewer", "candidate", "system"]
+    text: str
+    question_id: Optional[str] = None
+    question_order: Optional[int] = None
+    sequence_order: int
+    created_at: Optional[str] = None
+
+
+class HrInterviewRecordingResponse(BaseModel):
+    id: str
+    status: str
+    storage_bucket: str
+    storage_path: str
+    duration_seconds: int = 0
+    signed_url: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class HrInterviewOutcomeResponse(BaseModel):
+    id: str
+    model: str = ""
+    total_score: float = 0
+    recommendation: InterviewRecommendation = "review"
+    summary: str = ""
+    strengths: list[str] = Field(default_factory=list)
+    concerns: list[str] = Field(default_factory=list)
+    criterion_scores: list[dict[str, Any]] = Field(default_factory=list)
+    generated_at: Optional[str] = None
+
+
+class HrInterviewDetailResponse(BaseModel):
+    session: HrInterviewSessionSummary
+    transcript: list[HrInterviewTranscriptTurnResponse] = Field(default_factory=list)
+    recordings: list[HrInterviewRecordingResponse] = Field(default_factory=list)
+
+
+class HrInterviewInviteResponse(BaseModel):
+    session: HrInterviewSessionSummary
+    join_url: str
+    email_delivery_status: str = "not_attempted"
+    email_delivery_message: str = ""
+
+
+class HrInterviewPublicJoinResponse(BaseModel):
+    session_id: str
+    business_id: str
+    job_title: str
+    candidate_name: str
+    status: InterviewSessionStatus
+    expires_at: Optional[str] = None
+    interview_minutes: int = 45
+    avatar_available: bool = True
+
+
+class HrInterviewLiveSessionResponse(BaseModel):
+    session_id: str
+    room_name: str
+    token: str
+    livekit_url: str
+    avatar_enabled: bool = True
+
+
+class HrInterviewCandidateSessionRequest(BaseModel):
+    avatar_enabled: bool = True
+
+
+class HrInterviewRecordingDeleteResponse(BaseModel):
+    deleted: bool
+
+
+HrInterviewSessionSummary.model_rebuild()
+HrHumanInterviewResponse.model_rebuild()

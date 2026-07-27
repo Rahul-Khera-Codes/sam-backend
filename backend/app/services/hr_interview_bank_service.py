@@ -29,13 +29,12 @@ def get_native_job(*, business_id: str, job_id: str) -> dict[str, Any]:
         .select("*")
         .eq("id", job_id)
         .eq("business_id", business_id)
-        .eq("source", "native")
         .limit(1)
         .execute()
     )
     if not result.data:
         raise InterviewBankNotFound(
-            "Interview banks currently require a saved native AI Employees job."
+            "Interview banks require a saved HR job posting."
         )
     return result.data[0]
 
