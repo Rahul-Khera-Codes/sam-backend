@@ -71,6 +71,10 @@
 - AI recommendations are advisory only.
 - Candidates tab now uses Greenhouse endpoint-backed states instead of mock candidates.
 - Candidate data requires a Greenhouse Harvest API key; Job Board API alone is not enough.
+- AI Interviewer v1 is voice-first with Emily as the interviewer.
+- Emily's LiveAvatar ID is `073b60a9-89a8-45aa-8902-c358f64d2852`.
+- AI screen questions must come from the active published interview plan for the specific job posting.
+- V1 stores audio recordings, transcripts, and advisory outcome packets.
 
 ### Onboarding / Documents
 - Customers upload approved onboarding and HR documents into the platform.
@@ -771,6 +775,26 @@ Verification completed:
   - frontend TypeScript check passed
   - targeted ESLint passed for `HrCandidates.tsx` and `IntegrationsTab.tsx`
   - editor diagnostics reported no errors for candidates/Greenhouse edited files
+  - AI Interviewer v1 runtime first pass:
+    - added runtime tables for interview sessions, transcripts, audio recordings, outcomes, stage mappings, and mocked Greenhouse sync events
+    - added recruiter APIs for pipeline, AI screen invites, human interview tracking, session status, notes, and detail review
+    - added public candidate join APIs for secure token validation and LiveKit session creation
+    - AI screen invite creation now sends the secure link by connected business Gmail when available and still returns the link for copy/manual fallback
+    - added Emily LiveKit agent runtime using `hr-interviewer-agent`
+    - Emily loads the active published job-specific interview plan and is instructed to ask only those configured questions
+    - Emily uses LiveAvatar ID `073b60a9-89a8-45aa-8902-c358f64d2852`, falling back to voice-only if avatar startup fails
+    - added audio-only LiveKit egress metadata for `hr-interview-recordings`
+    - added advisory scoring/outcome packet generation against the published rubric
+    - replaced mock `HrInterviews.tsx` with endpoint-backed AI screen and human interview pipeline UI
+    - added public `/hr/interview/join/:token` candidate experience
+    - added Docker Compose service `sam-hr-interviewer-agent`
+  - AI Interviewer v1 verification:
+    - backend Python compile passed for `hr_interviews.py`, interview schemas, runtime/scoring services, bank service, and LiveKit service
+    - Emily agent Python compile passed
+    - frontend TypeScript check passed
+    - targeted ESLint passed for edited interview UI files
+    - full targeted ESLint including `voiceAgentApi.ts` still reports unrelated pre-existing `any` errors at older appointment/helper lines
+    - editor diagnostics reported no errors for edited AI interviewer files
 
 Remaining validation / limitations:
 - End-to-end upload, signed preview, embedding readiness, and chat Q&A still need live verification against Supabase/OpenAI
@@ -780,7 +804,10 @@ Remaining validation / limitations:
 - Confirm in browser that HeyGen publishes the configured `JOHN_AVATAR_ID` video track after the rebuilt agent starts
 - Confirm in browser that Stop Avatar closes the HeyGen stream and does not continue consuming avatar credits
 - Apply migration `20260725102052_greenhouse_harvest_candidates.sql` before entering a Harvest API key
+- Apply migration `20260727050820_hr_ai_interviewer_runtime.sql` before testing AI Interviewer runtime
 - Harvest candidate list and actions still need live validation against real Greenhouse Harvest credentials
+- Emily live interview still needs browser/LiveKit validation after migration and agent container startup
+- AI interview invite email delivery requires a connected business-level Gmail sender; otherwise the UI-created secure join link is available for manual send
 - `voiceAgentApi.ts` still has unrelated pre-existing lint debt
 - Image-only/scanned PDFs still require future OCR fallback
 - FastAPI background tasks remain a retryable bridge, not a durable document-ingestion queue

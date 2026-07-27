@@ -42,3 +42,14 @@ services:
       - ./agent:/app
     command: python hr_onboarding_agent.py dev
     restart: unless-stopped
+
+  sam-hr-interviewer-agent:
+    build: ./agent
+    ports:
+      - "8005:8001"
+    env_file:
+      - ./agent/.env.local
+    volumes:
+      - ./agent:/app
+    command: python hr_interviewer_agent.py dev
+    restart: unless-stopped
