@@ -17,6 +17,8 @@ class Settings(BaseSettings):
 
     # OpenAI
     openai_api_key: str
+    marketing_text_model: str = "gpt-4o-mini"
+    marketing_image_model: str = "gpt-image-1"
 
     # AWS S3 (optional)
     aws_access_key_id: str = ""

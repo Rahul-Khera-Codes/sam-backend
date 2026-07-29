@@ -11,18 +11,19 @@
 
 ## Product Direction
 - Marketing Employee is a multi-tenant marketing workspace inside AI Employees.
-- The first implementation is UI-first with mock backend data so the product flow can be reviewed before committing to external platform integrations.
+- Marketing Employee now uses real backend jobs for caption/concept and image generation.
 - Real data and publishing integrations will be added later behind backend APIs.
 - The product should support businesses that have no social platform integrations connected yet.
 
 ## Locked Decisions
 
 ### Current Build Mode
-- Start with mock backend/data wiring only.
-- Build the UI screens from the approved screenshots first.
-- Do not call Meta, TikTok, LinkedIn, X, Google, or other marketing APIs in this phase.
-- Keep the screen contracts close to the future real backend shape so mock data can be replaced without a UI rewrite.
-- Mock endpoints should exist in the backend as API-shaped placeholders while the frontend keeps a local fallback for easy preview.
+- Replace the previous mock backend with real persisted backend endpoints.
+- Use OpenAI for caption/concept generation and image generation.
+- Persist campaigns, jobs, assets, and scheduled posts in Supabase.
+- Store generated media in a private Supabase Storage bucket and return signed URLs.
+- Do not call Meta, TikTok, LinkedIn, X, Google, or other social publishing APIs in this phase.
+- HeyGen video execution is not live yet; the API returns a disabled/needs-credentials job contract until credentials and the exact HeyGen video API are confirmed.
 
 ### Tenancy
 - All future Marketing Employee data must be business-scoped.
@@ -33,7 +34,7 @@
 - The first visible screen is the Social Media Campaign Overview.
 - Users describe an idea, choose advanced settings, select an aspect ratio, and choose an image count.
 - The current screenshot shows image generation controls, not a full publishing flow.
-- Export is visible in the UI but can remain a mock/no-op until real campaign assets exist.
+- Export is not shown until a real report/export path exists.
 - Confirmed create-post flow:
   - idea setup
   - generated content gallery
@@ -42,16 +43,26 @@
 - Gallery item selection should open the selected item in the compose/publish preview.
 - Mock publish should create a scheduled post and show it on the calendar.
 - Default scheduling should use the next available mock slot in July 2026.
+- Generation flow now:
+  - setup creates a campaign row
+  - concept generation starts an OpenAI-backed job
+  - gallery polls job status and lists concept assets
+  - selected concept opens compose preview
+  - image generation requires explicit confirmation before calling OpenAI image generation
+  - generated image is uploaded to private Supabase Storage
+  - compose preview uses signed image URLs
+  - schedule creates an internal scheduled post only
 
 ### Backend Strategy
-- Mock data should be isolated behind frontend helpers or a lightweight API-shaped module.
-- Later backend implementation should expose normalized campaign endpoints rather than returning raw provider payloads.
+- Backend exposes normalized campaign/job/asset endpoints rather than returning raw provider payloads.
 - External platform secrets must never be exposed to the frontend.
+- Provider calls run server-side only.
+- Long-running generation is represented through persisted jobs and frontend polling.
 
 ## Section Roadmap
 
 ### Section 1: Social Media Campaign Overview
-Status: Mock UI first pass implemented
+Status: Real generation first pass implemented
 
 Goal:
 - Replace the generic Marketing Employee coming-soon page with the first dedicated Marketing Employee screen.
@@ -63,20 +74,28 @@ Planned frontend:
 - Keep the first screen directly inside the existing dashboard shell with no second-level Marketing sidebar, matching the provided screenshot.
 - Add the Social Media Campaign Overview page with:
   - title and helper copy
-  - last-run range and export button
+  - last-run range/status details
   - centered campaign prompt card
   - advanced settings status
   - idea textarea
   - randomize action
   - aspect-ratio options
   - image-count segmented control
-  - mock generation/export behavior
+  - generation behavior
 
-Planned backend/mock approach:
-- Use local mock data for now.
-- Preserve an API-shaped boundary for later backend replacement.
-- Real persistence, generation jobs, media storage, and platform publishing are deferred.
-- Add FastAPI mock endpoints now, backed by in-memory data only.
+Backend/data approach:
+- Supabase migration:
+  - `20260729045730_marketing_employee_generation.sql`
+- Private storage bucket:
+  - `marketing-assets`
+- Tables:
+  - `marketing_campaigns`
+  - `marketing_assets`
+  - `marketing_generation_jobs`
+  - `marketing_scheduled_posts`
+- All tables are tenant-scoped by `business_id`.
+- RLS is enabled on all new tables.
+- Storage policies follow the business-folder pattern used by HR policy docs.
 
 Delivered:
 - Frontend route `/dashboard/marketing` now opens the Marketing Employee screen instead of the generic coming-soon page.
@@ -96,19 +115,92 @@ Delivered:
 - Gallery screen groups mock content into Instagram posts, Instagram reels, LinkedIn posts, and TikTok videos.
 - Compose screen includes caption editing, media upload placeholder, link field, platform selection, platform options, and phone preview.
 - Calendar screen shows July 2026, platform legend, upcoming posts, and scheduled post placement.
-- Frontend mock helper now calls backend mock endpoints when auth/business context is available and falls back to local mock data otherwise.
-- Backend mock endpoints:
+- Frontend helper now calls real backend endpoints and no longer uses local mock generation.
+- Backend endpoints:
   - `GET /marketing/workspace`
-  - `POST /marketing/campaigns/generate`
+  - `POST /marketing/campaigns`
+  - `POST /marketing/campaigns/{campaign_id}/concepts`
+  - `GET /marketing/campaigns/{campaign_id}/assets`
   - `POST /marketing/campaigns/randomize`
-  - `POST /marketing/posts/publish`
+  - `POST /marketing/assets/{asset_id}/image`
+  - `POST /marketing/assets/{asset_id}/video`
+  - `GET /marketing/jobs/{job_id}`
+  - `GET /marketing/assets/{asset_id}/signed-url`
+  - `POST /marketing/scheduled-posts`
   - `GET /marketing/calendar`
+- Backend service:
+  - `backend/app/services/marketing_generation_service.py`
+- Backend schemas:
+  - `backend/app/schemas/marketing.py`
+- OpenAI settings:
+  - `marketing_text_model`
+  - `marketing_image_model`
 
 Verification:
 - Frontend TypeScript check passed.
 - Targeted ESLint passed for `App.tsx`, `MarketingCampaignOverview.tsx`, and `marketingEmployeeMock.ts`.
 - Cursor diagnostics reported no linter errors for edited files.
-- Backend compile / frontend lint verification for the new multi-screen flow is pending in this session.
+- Backend compile passed for marketing router/service/schema/config/main files.
+- Frontend TypeScript passed after replacing mock state with real API state.
+- Final verification for this real-generation pass:
+  - backend compile passed for marketing router/service/schema/config/main files
+  - frontend TypeScript check passed
+  - targeted ESLint passed for Marketing frontend files
+  - Cursor diagnostics reported no linter errors for edited files
+- Runtime migration fix:
+  - `POST /marketing/campaigns` initially failed because the remote Supabase project did not have `marketing_campaigns`
+  - migration `20260729045730_marketing_employee_generation.sql` was patched to add the required `(id, business_id)` uniqueness for composite tenant foreign keys
+  - migration `20260729045730` is now applied remotely
+- UI polish / scheduling update:
+  - generated concept cards now show richer visual previews before image generation
+  - top step navigation is clickable with disabled states for unavailable steps
+  - compose review now lets users choose a schedule date, time, and quick time preference before creating the scheduled post
+  - calendar displays the selected schedule time instead of relying only on the backend default slot
+  - page shell, gallery cards, empty states, and focus/aria details were polished using frontend design and web interface guidance
+- Preview/export update:
+  - removed the placeholder Export Report button because it did not perform a real report export
+  - review screen now has selectable Instagram, X, and LinkedIn preview tabs
+  - previews use the selected generated asset and caption, with platform-specific layout treatments researched from current preview/mockup references
+  - Instagram preview uses feed chrome, action row, save icon, and approximate caption fold
+  - X preview uses avatar/handle layout, post body, media card, and action metrics row
+  - LinkedIn preview uses feed card layout, headline/meta area, media card, reaction summary, and action row
+- Draft and preview adjustment update:
+  - Save Draft is available from the Marketing flow so users can preserve work before scheduling
+  - incomplete drafts are stored locally per business and listed on the first setup screen beneath the idea card
+  - continuing a draft restores prompt, generation settings, caption, selected platforms, schedule values, preview tab, and media adjustment settings when available
+  - platform previews now expose image Fit/Fill and Top/Center/Bottom controls per platform to help generated media avoid bad cropping
+  - platform preview media no longer shows the internal concept title overlay, so the visual reflects the actual post creative
+- Advanced settings / image generation update:
+  - advanced settings disabled now hides aspect-ratio and image-count controls; users only provide prompt, randomize, platforms, and generate
+  - advanced settings enabled shows aspect ratio and image amount, and those values are sent into campaign generation
+  - generated concepts do not automatically start OpenAI image jobs; users must select a concept and explicitly click Generate image
+  - image count controls how many concepts are produced when advanced settings are enabled
+  - generated image thumbnails are selectable in Review so users can preview each generated image
+  - platform previews now include zoom controls and support mouse drag crop adjustment after zooming
+  - backend uses platform-native aspect defaults when advanced settings are disabled, while preserving the selected aspect ratio when advanced settings are enabled
+- Signed zoom / aspect guidance update:
+  - preview zoom now uses a centered 0% slider with negative zoom-out and positive zoom-in values
+  - drag crop adjustment works when the zoom is moved away from 0%
+  - setup screen now shows aspect-ratio guidance so users understand which platforms fit 1:1, 9:16, 16:9, and 2:3
+  - selected aspect ratio is highlighted in the guidance block when advanced settings are enabled
+  - backend image prompts now explicitly instruct OpenAI to compose for the selected social canvas ratio in addition to using the matching image size
+- Image generation throttling correction:
+  - removed automatic image job creation after concept generation to avoid provider rate limits and duplicate/piled-up image jobs
+  - starting a new campaign clears in-flight frontend image job state
+  - Review only lists generated media for the currently selected concept
+  - Generate image now starts only the remaining number of jobs needed for the selected concept to reach the campaign image count
+  - Generate image refuses to create more jobs once the selected concept already has the requested number of pending, generating, or ready images
+- Calendar navigation/date correction:
+  - Marketing calendar now tracks a dynamic visible month instead of hardcoding July 2026
+  - mini calendar and main calendar month arrows now navigate months
+  - scheduled posts are matched by local date, fixing cases where an August 1 scheduled post appeared on July 1
+  - scheduling a post opens the calendar on the scheduled month
+  - calendar view now includes a Back to Review action when a selected concept is available
+- Scheduled post deletion update:
+  - added backend `DELETE /marketing/scheduled-posts/{scheduled_post_id}`
+  - frontend calendar API can delete scheduled posts for the current business
+  - upcoming-post cards and calendar cells now expose delete actions
+  - deleted scheduled posts are removed from local calendar state after backend confirmation
 
 Pending screenshots:
 - Additional Marketing Employee screens still need to be provided and converted into section entries.
@@ -154,13 +246,19 @@ Candidate areas:
 - Mock frontend data boundary added for later backend replacement.
 - Generated gallery, compose preview, and calendar scheduling screens added.
 - FastAPI mock Marketing Employee endpoints added and registered.
+- Mock endpoints replaced with real job-based backend endpoints.
+- OpenAI caption/concept and image generation service added.
+- Private Supabase Storage and DB persistence migration added.
+- HeyGen video endpoint returns disabled/needs-credentials state for future wiring.
 
 ## Current Risks
 - Only the first screenshot has been provided so far; the broader information architecture may change as more screens arrive.
 - Real platform API access, review requirements, publishing constraints, and costs are intentionally deferred.
 - Mock-first UI must be kept easy to replace with real API calls later.
 - Browser visual QA has not yet been completed against an authenticated local session in this work pass.
-- Backend mock data is in-memory and resets on process restart.
+- Social publishing is still deferred.
+- HeyGen video execution is still deferred pending credentials/API contract.
+- Supabase migration `20260729045730` is applied remotely.
 
 ## Best Future Execution Order
 1. Build the first Social Media Campaign Overview mock screen.
