@@ -201,6 +201,24 @@ Verification:
   - frontend calendar API can delete scheduled posts for the current business
   - upcoming-post cards and calendar cells now expose delete actions
   - deleted scheduled posts are removed from local calendar state after backend confirmation
+- Social publishing integration update:
+  - added tenant-scoped `marketing_platform_integrations` storage for Instagram and X connections, with encrypted access/refresh tokens and account metadata
+  - extended scheduled posts with `publishing`, `failed`, provider post IDs, publish errors, published timestamp, and attempt count
+  - added backend Marketing integration OAuth endpoints for Instagram and X under `/integrations/marketing/*`
+  - implemented X media upload + tweet publishing and Instagram media container + publish flow for generated image assets
+  - wired the existing backend scheduler to check due Marketing scheduled posts every minute and update publish status/results
+  - added Instagram and X cards to Business Settings integrations, including OAuth callback handling and disconnect
+  - Marketing Review now shows selected-platform publish readiness and blocks scheduling to disconnected or unsupported targets
+  - calendar and upcoming-post cards now show scheduled/publishing/published/failed status plus provider errors
+  - required env remains: `marketing_x_client_id`, `marketing_x_client_secret`, `marketing_meta_app_id`, `marketing_meta_app_secret`, `marketing_token_encryption_key`
+  - redirect env is split per environment: `marketing_x_redirect_uri_local`, `marketing_x_redirect_uri_production`, `marketing_meta_redirect_uri_local`, `marketing_meta_redirect_uri_production`
+  - old single redirect env names are still kept as fallback values, but new local/production names should be used for active setup
+  - Instagram publishing still requires generated images to be reachable by Meta over HTTPS; signed Supabase asset URLs are used for the first implementation
+- Post Now update:
+  - Review now includes a `Post Now` action next to `Schedule Post`
+  - `Post Now` requires a selected ready generated image and connected/supported publish platforms
+  - backend creates an immediate scheduled-post row, publishes it through the same Instagram/X provider services, and returns updated publish status
+  - successful provider post URLs are stored in scheduled-post metadata so the UI can prompt the user to open the published post
 
 Pending screenshots:
 - Additional Marketing Employee screens still need to be provided and converted into section entries.

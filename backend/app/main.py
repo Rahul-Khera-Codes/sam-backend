@@ -31,6 +31,7 @@ from app.routers import (
     competitor_agent as competitor_agent_router,
     market_agent as market_agent_router,
     marketing as marketing_router,
+    marketing_integrations as marketing_integrations_router,
     report_scheduler as report_scheduler_router,
     business_branding as business_branding_router,
 )
@@ -86,6 +87,7 @@ app.include_router(sales_router.router)
 app.include_router(competitor_agent_router.router)
 app.include_router(market_agent_router.router)
 app.include_router(marketing_router.router)
+app.include_router(marketing_integrations_router.router)
 app.include_router(report_scheduler_router.router)
 app.include_router(business_branding_router.router)
 

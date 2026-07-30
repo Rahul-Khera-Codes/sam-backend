@@ -22,6 +22,7 @@ from app.core.supabase import supabase_admin
 from app.services import livekit_service
 from app.routers.market_agent import run_market_agent_refresh
 from app.routers.report_scheduler import send_digest
+from app.services.marketing_social_service import publish_due_scheduled_posts
 
 logger = logging.getLogger(__name__)
 
@@ -472,6 +473,21 @@ async def run_report_scheduler_digests() -> None:
     logger.info("Scheduler: Report Scheduler digest sweep finished")
 
 
+async def run_marketing_social_publisher() -> None:
+    logger.info("Scheduler: Marketing social publisher sweep started")
+    try:
+        result = await publish_due_scheduled_posts(limit=10)
+        logger.info(
+            "Scheduler: Marketing social publisher checked=%s published=%s failed=%s",
+            result.get("checked"),
+            result.get("published"),
+            result.get("failed"),
+        )
+    except Exception as e:
+        logger.error("Scheduler: Marketing social publisher failed: %s", e)
+    logger.info("Scheduler: Marketing social publisher sweep finished")
+
+
 # ── Scheduler lifecycle ───────────────────────────────────────────────────────
 
 def start_scheduler() -> None:
@@ -515,10 +531,18 @@ def start_scheduler() -> None:
         replace_existing=True,
         misfire_grace_time=300,
     )
+    scheduler.add_job(
+        run_marketing_social_publisher,
+        trigger="interval",
+        minutes=1,
+        id="marketing_social_publisher",
+        replace_existing=True,
+        misfire_grace_time=120,
+    )
     scheduler.start()
     logger.info(
         "Scheduler started — reminder + reschedule + no-show + report-scheduler-digest calls run hourly, "
-        "Market Agent refresh runs daily"
+        "Marketing social publisher runs every minute, Market Agent refresh runs daily"
     )
 
 

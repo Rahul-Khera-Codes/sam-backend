@@ -618,6 +618,12 @@ def delete_scheduled_post(business_id: str, scheduled_post_id: str) -> Marketing
     return _scheduled_post_response(post)
 
 
+def get_scheduled_post(business_id: str, scheduled_post_id: str) -> MarketingScheduledPostResponse:
+    post = _get_single("marketing_scheduled_posts", scheduled_post_id, business_id)
+    asset = _get_single("marketing_assets", post["asset_id"], business_id)
+    return _scheduled_post_response(post, asset)
+
+
 def list_calendar_posts(business_id: str) -> list[MarketingScheduledPostResponse]:
     posts = (
         supabase_admin.table("marketing_scheduled_posts")
