@@ -19,6 +19,18 @@ class Settings(BaseSettings):
     openai_api_key: str
     marketing_text_model: str = "gpt-4o-mini"
     marketing_image_model: str = "gpt-image-1"
+    marketing_x_client_id: str = ""
+    marketing_x_client_secret: str = ""
+    marketing_x_redirect_uri: str = "http://localhost:8080/integrations/marketing/x/callback"
+    marketing_x_redirect_uri_local: str = "http://localhost:8080/integrations/marketing/x/callback"
+    marketing_x_redirect_uri_production: str = ""
+    marketing_meta_app_id: str = ""
+    marketing_meta_app_secret: str = ""
+    marketing_meta_redirect_uri: str = "http://localhost:8080/integrations/marketing/instagram/callback"
+    marketing_meta_redirect_uri_local: str = "http://localhost:8080/integrations/marketing/instagram/callback"
+    marketing_meta_redirect_uri_production: str = ""
+    marketing_public_backend_url: str = ""
+    marketing_token_encryption_key: str = ""
 
     # AWS S3 (optional)
     aws_access_key_id: str = ""

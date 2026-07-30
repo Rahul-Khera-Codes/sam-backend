@@ -10,7 +10,7 @@ AssetType = Literal["concept", "image", "video"]
 AssetStatus = Literal["pending", "generating", "ready", "failed", "disabled"]
 JobType = Literal["concepts", "image", "video"]
 JobStatus = Literal["pending", "running", "completed", "failed", "disabled"]
-ScheduledPostStatus = Literal["draft", "scheduled", "published", "cancelled"]
+ScheduledPostStatus = Literal["draft", "scheduled", "publishing", "published", "failed", "cancelled"]
 
 
 class MarketingCampaignCreateRequest(BaseModel):
@@ -121,9 +121,40 @@ class MarketingScheduledPostResponse(BaseModel):
     status: ScheduledPostStatus
     scheduled_for: str
     metadata: dict[str, Any] = Field(default_factory=dict)
+    provider_post_ids: dict[str, str] = Field(default_factory=dict)
+    publish_error: str | None = None
+    published_at: str | None = None
+    attempt_count: int = 0
     asset: MarketingAssetResponse | None = None
     created_at: str
     updated_at: str
+
+
+MarketingIntegrationProvider = Literal["instagram", "x"]
+
+
+class MarketingIntegrationStatusResponse(BaseModel):
+    provider: MarketingIntegrationProvider
+    connected: bool
+    account_id: str | None = None
+    account_name: str | None = None
+    scopes: list[str] = Field(default_factory=list)
+    last_error: str | None = None
+    token_expires_at: str | None = None
+
+
+class MarketingIntegrationsStatusResponse(BaseModel):
+    integrations: list[MarketingIntegrationStatusResponse] = Field(default_factory=list)
+
+
+class MarketingOAuthUrlResponse(BaseModel):
+    url: str
+
+
+class MarketingOAuthCallbackRequest(BaseModel):
+    code: str
+    state: str
+    business_id: str
 
 
 class RandomIdeaResponse(BaseModel):

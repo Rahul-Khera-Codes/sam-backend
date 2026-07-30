@@ -1,4 +1,6 @@
 """Marketing Employee router."""
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 
 from app.core.auth import get_user_id, verify_business_access
@@ -19,6 +21,7 @@ from app.services.marketing_generation_service import (
     create_campaign,
     create_scheduled_post,
     delete_scheduled_post,
+    get_scheduled_post,
     get_asset_signed_url,
     get_job,
     get_workspace,
@@ -31,6 +34,7 @@ from app.services.marketing_generation_service import (
     start_image_job,
     start_video_job_disabled,
 )
+from app.services.marketing_social_service import publish_scheduled_post
 
 router = APIRouter(prefix="/marketing", tags=["marketing"])
 
@@ -131,6 +135,22 @@ async def create_marketing_scheduled_post(
 ):
     verify_business_access(user_id, business_id)
     return create_scheduled_post(business_id, user_id, body)
+
+
+@router.post("/scheduled-posts/publish-now", response_model=MarketingScheduledPostResponse)
+async def publish_marketing_post_now(
+    body: MarketingScheduledPostCreateRequest,
+    business_id: str = Query(...),
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    scheduled_post = create_scheduled_post(
+        business_id,
+        user_id,
+        body.model_copy(update={"scheduled_for": datetime.now(timezone.utc).isoformat()}),
+    )
+    await publish_scheduled_post(business_id, scheduled_post.id)
+    return get_scheduled_post(business_id, scheduled_post.id)
 
 
 @router.get("/calendar", response_model=list[MarketingScheduledPostResponse])
