@@ -219,6 +219,19 @@ Verification:
   - `Post Now` requires a selected ready generated image and connected/supported publish platforms
   - backend creates an immediate scheduled-post row, publishes it through the same Instagram/X provider services, and returns updated publish status
   - successful provider post URLs are stored in scheduled-post metadata so the UI can prompt the user to open the published post
+- Instagram multi-tenant OAuth update:
+  - Instagram integration now uses Instagram API with Instagram Login / Business Login instead of Facebook Page-linked Graph login
+  - tenants authorize their own Instagram Business/Creator account directly with `instagram_business_basic` and `instagram_business_content_publish`
+  - backend exchanges the Instagram authorization code at `api.instagram.com`, upgrades to a long-lived token with `graph.instagram.com`, and stores the token per business
+  - Instagram publishing now uses `graph.instagram.com/{ig-user-id}/media` and `media_publish`
+  - linked Facebook Page lookup is no longer required for the Instagram tenant connection flow
+  - optional new env names are `marketing_instagram_app_id`, `marketing_instagram_app_secret`, `marketing_instagram_redirect_uri_local`, and `marketing_instagram_redirect_uri_production`; existing `marketing_meta_*` values remain fallbacks
+- Instagram content publishing guide alignment:
+  - generated images are converted to JPEG before publishing because Instagram image publishing supports JPEG
+  - the publisher creates a signed Supabase URL for the JPEG so Meta can fetch media from a public HTTPS URL at publish time
+  - media containers include caption, alt text, and `is_ai_generated=true`
+  - publisher checks Instagram content publishing limit before publishing and polls container status before calling `media_publish`
+  - Instagram Graph calls use `graph.instagram.com` with Instagram user access tokens from Business Login
 
 Pending screenshots:
 - Additional Marketing Employee screens still need to be provided and converted into section entries.

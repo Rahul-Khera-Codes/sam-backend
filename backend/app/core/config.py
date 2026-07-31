@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     marketing_meta_redirect_uri: str = "http://localhost:8080/integrations/marketing/instagram/callback"
     marketing_meta_redirect_uri_local: str = "http://localhost:8080/integrations/marketing/instagram/callback"
     marketing_meta_redirect_uri_production: str = ""
+    marketing_instagram_app_id: str = ""
+    marketing_instagram_app_secret: str = ""
+    marketing_instagram_redirect_uri_local: str = ""
+    marketing_instagram_redirect_uri_production: str = ""
     marketing_public_backend_url: str = ""
     marketing_token_encryption_key: str = ""
 
