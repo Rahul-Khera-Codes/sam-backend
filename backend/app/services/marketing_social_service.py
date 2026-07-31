@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import secrets
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse, urlencode
@@ -11,6 +13,7 @@ from urllib.parse import urlparse, urlencode
 import httpx
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import HTTPException
+from PIL import Image
 
 from app.core.config import settings
 from app.core.supabase import supabase_admin
@@ -20,9 +23,13 @@ from app.schemas.marketing import (
 )
 
 X_SCOPES = ["tweet.read", "tweet.write", "users.read", "offline.access", "media.write"]
-INSTAGRAM_SCOPES = ["instagram_basic", "instagram_content_publish", "pages_show_list", "pages_read_engagement"]
+INSTAGRAM_SCOPES = [
+    "instagram_business_basic",
+    "instagram_business_content_publish",
+]
 MARKETING_ASSETS_BUCKET = "marketing-assets"
 SIGNED_URL_TTL_SECONDS = 60 * 60 * 6
+INSTAGRAM_API_VERSION = "v25.0"
 
 
 def _now_iso() -> str:
@@ -59,9 +66,25 @@ def _redirect_uri_for_provider(provider: str, origin: str | None) -> str:
         local_uri = settings.marketing_x_redirect_uri_local or settings.marketing_x_redirect_uri
         production_uri = settings.marketing_x_redirect_uri_production or settings.marketing_x_redirect_uri
     else:
-        local_uri = settings.marketing_meta_redirect_uri_local or settings.marketing_meta_redirect_uri
-        production_uri = settings.marketing_meta_redirect_uri_production or settings.marketing_meta_redirect_uri
+        local_uri = (
+            settings.marketing_instagram_redirect_uri_local
+            or settings.marketing_meta_redirect_uri_local
+            or settings.marketing_meta_redirect_uri
+        )
+        production_uri = (
+            settings.marketing_instagram_redirect_uri_production
+            or settings.marketing_meta_redirect_uri_production
+            or settings.marketing_meta_redirect_uri
+        )
     return local_uri if _is_local_origin(origin) else production_uri
+
+
+def _instagram_app_id() -> str:
+    return settings.marketing_instagram_app_id or settings.marketing_meta_app_id
+
+
+def _instagram_app_secret() -> str:
+    return settings.marketing_instagram_app_secret or settings.marketing_meta_app_secret
 
 
 def _token_fernet() -> Fernet:
@@ -150,6 +173,40 @@ def _download_asset_bytes(asset: dict[str, Any]) -> bytes:
     if hasattr(data, "content"):
         return data.content
     raise HTTPException(status_code=500, detail="Failed to download generated marketing asset.")
+
+
+def _instagram_alt_text(asset: dict[str, Any]) -> str:
+    title = str(asset.get("title") or "AI generated marketing image")
+    prompt = str(asset.get("prompt") or "").strip()
+    caption = str(asset.get("caption") or "").strip()
+    details = prompt or caption
+    alt_text = f"{title}. {details}" if details else title
+    return alt_text[:1000]
+
+
+def _convert_image_to_jpeg(image_bytes: bytes) -> bytes:
+    with Image.open(io.BytesIO(image_bytes)) as image:
+        if image.mode not in {"RGB", "L"}:
+            image = image.convert("RGB")
+        output = io.BytesIO()
+        image.save(output, format="JPEG", quality=92, optimize=True)
+        return output.getvalue()
+
+
+def _instagram_jpeg_signed_url(business_id: str, asset: dict[str, Any]) -> str:
+    original_bytes = _download_asset_bytes(asset)
+    jpeg_bytes = _convert_image_to_jpeg(original_bytes)
+    storage_path = f"{business_id}/instagram-publish/{asset['id']}.jpg"
+    try:
+        supabase_admin.storage.from_(MARKETING_ASSETS_BUCKET).remove([storage_path])
+    except Exception:
+        pass
+    supabase_admin.storage.from_(MARKETING_ASSETS_BUCKET).upload(
+        storage_path,
+        jpeg_bytes,
+        {"content-type": "image/jpeg"},
+    )
+    return _signed_asset_url({"storage_bucket": MARKETING_ASSETS_BUCKET, "storage_path": storage_path}) or ""
 
 
 def _update_scheduled_post(business_id: str, post_id: str, values: dict[str, Any]) -> None:
@@ -248,7 +305,8 @@ def build_x_auth_url(business_id: str, user_id: str, return_to: str, origin: str
 
 
 def build_instagram_auth_url(business_id: str, user_id: str, return_to: str, origin: str | None = None) -> str:
-    if not settings.marketing_meta_app_id:
+    instagram_app_id = _instagram_app_id()
+    if not instagram_app_id:
         raise HTTPException(status_code=501, detail="Instagram integration is not configured.")
     redirect_uri = _redirect_uri_for_provider("instagram", origin)
     state = _encode_oauth_state(
@@ -261,13 +319,13 @@ def build_instagram_auth_url(business_id: str, user_id: str, return_to: str, ori
         }
     )
     params = {
-        "client_id": settings.marketing_meta_app_id,
+        "client_id": instagram_app_id,
         "redirect_uri": redirect_uri,
         "scope": ",".join(INSTAGRAM_SCOPES),
         "response_type": "code",
         "state": state,
     }
-    return f"https://www.facebook.com/v20.0/dialog/oauth?{urlencode(params)}"
+    return f"https://www.instagram.com/oauth/authorize?{urlencode(params)}"
 
 
 async def complete_x_oauth(code: str, state: str, business_id: str) -> MarketingIntegrationStatusResponse:
@@ -320,12 +378,17 @@ async def complete_instagram_oauth(code: str, state: str, business_id: str) -> M
     parsed = _decode_oauth_state(state)
     if parsed.get("provider") != "instagram" or parsed.get("business_id") != business_id:
         raise HTTPException(status_code=400, detail="Invalid Instagram OAuth state.")
+    instagram_app_id = _instagram_app_id()
+    instagram_app_secret = _instagram_app_secret()
+    if not instagram_app_id or not instagram_app_secret:
+        raise HTTPException(status_code=501, detail="Instagram integration is not configured.")
     async with httpx.AsyncClient(timeout=30) as client:
-        token_response = await client.get(
-            "https://graph.facebook.com/v20.0/oauth/access_token",
-            params={
-                "client_id": settings.marketing_meta_app_id,
-                "client_secret": settings.marketing_meta_app_secret,
+        token_response = await client.post(
+            "https://api.instagram.com/oauth/access_token",
+            data={
+                "client_id": instagram_app_id,
+                "client_secret": instagram_app_secret,
+                "grant_type": "authorization_code",
                 "redirect_uri": parsed.get("redirect_uri") or settings.marketing_meta_redirect_uri,
                 "code": code,
             },
@@ -335,28 +398,26 @@ async def complete_instagram_oauth(code: str, state: str, business_id: str) -> M
         token_data = token_response.json()
         access_token = token_data["access_token"]
         long_response = await client.get(
-            "https://graph.facebook.com/v20.0/oauth/access_token",
+            "https://graph.instagram.com/access_token",
             params={
-                "grant_type": "fb_exchange_token",
-                "client_id": settings.marketing_meta_app_id,
-                "client_secret": settings.marketing_meta_app_secret,
-                "fb_exchange_token": access_token,
+                "grant_type": "ig_exchange_token",
+                "client_secret": instagram_app_secret,
+                "access_token": access_token,
             },
         )
         if long_response.status_code < 400:
             token_data = long_response.json()
             access_token = token_data.get("access_token", access_token)
-        pages_response = await client.get(
-            "https://graph.facebook.com/v20.0/me/accounts",
-            params={"fields": "id,name,instagram_business_account{id,username,name}", "access_token": access_token},
+        profile_response = await client.get(
+            f"https://graph.instagram.com/{INSTAGRAM_API_VERSION}/me",
+            params={"fields": "user_id,username,account_type", "access_token": access_token},
         )
-        if pages_response.status_code >= 400:
-            raise HTTPException(status_code=400, detail=f"Instagram account lookup failed: {pages_response.text}")
-        pages = pages_response.json().get("data") or []
-    page = next((item for item in pages if item.get("instagram_business_account")), None)
-    if not page:
-        raise HTTPException(status_code=400, detail="No linked Instagram Business/Creator account found for this Meta user.")
-    ig_account = page["instagram_business_account"]
+        if profile_response.status_code >= 400:
+            raise HTTPException(status_code=400, detail=f"Instagram account lookup failed: {profile_response.text}")
+        profile = profile_response.json()
+    account_type = str(profile.get("account_type") or "").upper()
+    if account_type and account_type not in {"BUSINESS", "CREATOR"}:
+        raise HTTPException(status_code=400, detail="The selected Instagram account must be Business or Creator.")
     expires_at = None
     if token_data.get("expires_in"):
         expires_at = (datetime.now(timezone.utc) + timedelta(seconds=int(token_data["expires_in"]))).isoformat()
@@ -364,14 +425,14 @@ async def complete_instagram_oauth(code: str, state: str, business_id: str) -> M
         business_id=business_id,
         user_id=parsed["user_id"],
         provider="instagram",
-        account_id=ig_account.get("id"),
-        account_name=ig_account.get("username") or ig_account.get("name"),
-        provider_page_id=page.get("id"),
+        account_id=str(profile.get("user_id") or profile.get("id") or token_data.get("user_id") or ""),
+        account_name=profile.get("username"),
+        provider_page_id=None,
         access_token=access_token,
         refresh_token=None,
         expires_at=expires_at,
         scopes=INSTAGRAM_SCOPES,
-        metadata={"page_name": page.get("name")},
+        metadata={"account_type": profile.get("account_type")},
     )
 
 
@@ -412,6 +473,31 @@ async def _refresh_x_access_token(business_id: str, row: dict[str, Any]) -> str:
     return token_data["access_token"]
 
 
+async def _refresh_instagram_access_token(business_id: str, row: dict[str, Any]) -> str:
+    access_token = _decrypt_token(row.get("encrypted_access_token"))
+    if not access_token:
+        raise RuntimeError("Instagram access token is missing. Reconnect Instagram.")
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(
+            "https://graph.instagram.com/refresh_access_token",
+            params={"grant_type": "ig_refresh_token", "access_token": access_token},
+        )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Instagram token refresh failed: {response.text}")
+    token_data = response.json()
+    expires_at = None
+    if token_data.get("expires_in"):
+        expires_at = (datetime.now(timezone.utc) + timedelta(seconds=int(token_data["expires_in"]))).isoformat()
+    supabase_admin.table("marketing_platform_integrations").update(
+        {
+            "encrypted_access_token": _encrypt_token(token_data.get("access_token", access_token)),
+            "token_expires_at": expires_at,
+            "last_error": None,
+        }
+    ).eq("id", row["id"]).eq("business_id", business_id).execute()
+    return token_data.get("access_token", access_token)
+
+
 async def _access_token_for_provider(business_id: str, provider: str) -> tuple[dict[str, Any], str]:
     row = _get_integration_row(business_id, provider)
     if not row or not row.get("is_connected"):
@@ -423,6 +509,11 @@ async def _access_token_for_provider(business_id: str, provider: str) -> tuple[d
         expires_at = datetime.fromisoformat(str(row["token_expires_at"]).replace("Z", "+00:00"))
         if expires_at <= datetime.now(timezone.utc) + timedelta(minutes=2):
             token = await _refresh_x_access_token(business_id, row)
+            row = _get_integration_row(business_id, provider) or row
+    if provider == "instagram" and row.get("token_expires_at"):
+        expires_at = datetime.fromisoformat(str(row["token_expires_at"]).replace("Z", "+00:00"))
+        if expires_at <= datetime.now(timezone.utc) + timedelta(days=3):
+            token = await _refresh_instagram_access_token(business_id, row)
             row = _get_integration_row(business_id, provider) or row
     return row, token
 
@@ -460,21 +551,57 @@ async def _publish_to_x(business_id: str, asset: dict[str, Any], caption: str) -
     return tweet_id, f"https://x.com/i/web/status/{tweet_id}" if tweet_id else ""
 
 
+async def _assert_instagram_publish_capacity(client: httpx.AsyncClient, ig_user_id: str, access_token: str) -> None:
+    response = await client.get(
+        f"https://graph.instagram.com/{INSTAGRAM_API_VERSION}/{ig_user_id}/content_publishing_limit",
+        params={"access_token": access_token},
+    )
+    if response.status_code >= 400:
+        return
+    payload = response.json()
+    data = payload.get("data") or []
+    if not data:
+        return
+    quota_usage = int(data[0].get("quota_usage") or 0)
+    if quota_usage >= 100:
+        raise RuntimeError("Instagram content publishing limit reached for this account.")
+
+
+async def _wait_for_instagram_container_ready(client: httpx.AsyncClient, creation_id: str, access_token: str) -> None:
+    for attempt in range(3):
+        response = await client.get(
+            f"https://graph.instagram.com/{INSTAGRAM_API_VERSION}/{creation_id}",
+            params={"fields": "status_code", "access_token": access_token},
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(f"Instagram container status check failed: {response.text}")
+        status_code = response.json().get("status_code")
+        if status_code in {"FINISHED", "PUBLISHED"}:
+            return
+        if status_code in {"ERROR", "EXPIRED"}:
+            raise RuntimeError(f"Instagram media container is not publishable: {status_code}")
+        if attempt < 2:
+            await asyncio.sleep(5)
+
+
 async def _publish_to_instagram(business_id: str, asset: dict[str, Any], caption: str) -> tuple[str, str]:
     row, access_token = await _access_token_for_provider(business_id, "instagram")
     ig_user_id = row.get("provider_account_id")
     if not ig_user_id:
         raise RuntimeError("Instagram account id is missing. Reconnect Instagram.")
-    image_url = _signed_asset_url(asset)
+    image_url = _instagram_jpeg_signed_url(business_id, asset)
     if not image_url:
         raise RuntimeError("Generated image URL is unavailable for Instagram publishing.")
     async with httpx.AsyncClient(timeout=60) as client:
+        await _assert_instagram_publish_capacity(client, ig_user_id, access_token)
         create_response = await client.post(
-            f"https://graph.facebook.com/v20.0/{ig_user_id}/media",
-            params={
+            f"https://graph.instagram.com/{INSTAGRAM_API_VERSION}/{ig_user_id}/media",
+            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+            json={
                 "image_url": image_url,
                 "caption": caption[:2200],
-                "access_token": access_token,
+                "alt_text": _instagram_alt_text(asset),
+                "is_ai_generated": True,
             },
         )
         if create_response.status_code >= 400:
@@ -482,15 +609,17 @@ async def _publish_to_instagram(business_id: str, asset: dict[str, Any], caption
         creation_id = create_response.json().get("id")
         if not creation_id:
             raise RuntimeError(f"Instagram media container returned no id: {create_response.text}")
+        await _wait_for_instagram_container_ready(client, creation_id, access_token)
         publish_response = await client.post(
-            f"https://graph.facebook.com/v20.0/{ig_user_id}/media_publish",
-            params={"creation_id": creation_id, "access_token": access_token},
+            f"https://graph.instagram.com/{INSTAGRAM_API_VERSION}/{ig_user_id}/media_publish",
+            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+            json={"creation_id": creation_id},
         )
         if publish_response.status_code >= 400:
             raise RuntimeError(f"Instagram publish failed: {publish_response.text}")
         published_id = publish_response.json().get("id") or creation_id
         permalink_response = await client.get(
-            f"https://graph.facebook.com/v20.0/{published_id}",
+            f"https://graph.instagram.com/{INSTAGRAM_API_VERSION}/{published_id}",
             params={"fields": "permalink", "access_token": access_token},
         )
         permalink = ""
