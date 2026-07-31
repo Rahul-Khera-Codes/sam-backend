@@ -235,6 +235,26 @@ Verification:
   - Instagram OAuth now requires explicit `marketing_instagram_app_id` and `marketing_instagram_app_secret` so the Facebook/Meta app id cannot accidentally be sent to Instagram Login as an invalid platform app
   - provider service supports Instagram image posts, videos, reels, stories, and carousel containers; current UI still primarily sends selected generated image assets
   - scheduled-post create payload accepts optional `asset_ids`, which are stored in metadata for carousel publishing
+- Prompt library entry update:
+  - setup screen entry card now stretches horizontally across the available workspace instead of stacking controls in a narrow vertical card
+  - prompt editor is paired with a prompt-library picker using existing shadcn `Popover` and `Command` primitives
+  - default prompt templates are grouped by category and can be inserted into the campaign prompt
+  - custom prompt templates can be saved, inserted, removed, and are persisted per business in local storage
+  - generation controls remain visible on the right side, with advanced options still progressively disclosed behind the advanced toggle
+- Entry CTA polish update:
+  - added a local `CosmicButton` UI primitive with animated conic-gradient border utilities and reduced-motion support
+  - applied the cosmic button treatment to Marketing setup CTAs including Prompt Library, Generate, and Save Prompt
+  - reduced setup-card top padding, grid gaps, and prompt editor height to remove wasted white space while keeping the horizontal layout
+- Generate/Randomize button update:
+  - replaced the setup Generate CTA with a scoped Uiverse-inspired glossy button using animated letters, hover/focus/active glow states, and reduced-motion handling
+  - added a local Kokonut-style `ParticleButton` for the Randomize action instead of overwriting the app's existing shadcn `Button`
+  - added the `motion` dependency required for the particle burst animation
+  - rebuilt the frontend Docker container so the running Vite server includes the new dependency
+- AI loading state update:
+  - applied the same glossy animated Generate CTA treatment to the Review `Generate image` action and its confirmation action
+  - added small decorative sparkle accents inside the Generate button to reinforce the AI action affordance
+  - added a Marketing-specific AI loading panel for prompt randomization, campaign concept generation, image generation, and video setup
+  - loading copy now reflects real workflow states such as calling the Marketing AI Employee, reading the prompt, understanding platform context, generating assets, and saving private media
 
 Pending screenshots:
 - Additional Marketing Employee screens still need to be provided and converted into section entries.
