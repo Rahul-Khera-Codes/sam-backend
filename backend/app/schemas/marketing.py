@@ -105,6 +105,7 @@ class MarketingVideoGenerationRequest(BaseModel):
 class MarketingScheduledPostCreateRequest(BaseModel):
     campaign_id: str
     asset_id: str
+    asset_ids: list[str] = Field(default_factory=list)
     caption: str = Field(min_length=1)
     platforms: list[MarketingPlatform] = Field(default_factory=lambda: ["instagram"])
     scheduled_for: str | None = None

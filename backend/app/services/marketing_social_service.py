@@ -80,11 +80,11 @@ def _redirect_uri_for_provider(provider: str, origin: str | None) -> str:
 
 
 def _instagram_app_id() -> str:
-    return settings.marketing_instagram_app_id or settings.marketing_meta_app_id
+    return settings.marketing_instagram_app_id
 
 
 def _instagram_app_secret() -> str:
-    return settings.marketing_instagram_app_secret or settings.marketing_meta_app_secret
+    return settings.marketing_instagram_app_secret
 
 
 def _token_fernet() -> Fernet:
@@ -568,6 +568,7 @@ async def _assert_instagram_publish_capacity(client: httpx.AsyncClient, ig_user_
 
 
 async def _wait_for_instagram_container_ready(client: httpx.AsyncClient, creation_id: str, access_token: str) -> None:
+    last_status = "UNKNOWN"
     for attempt in range(3):
         response = await client.get(
             f"https://graph.instagram.com/{INSTAGRAM_API_VERSION}/{creation_id}",
@@ -576,56 +577,194 @@ async def _wait_for_instagram_container_ready(client: httpx.AsyncClient, creatio
         if response.status_code >= 400:
             raise RuntimeError(f"Instagram container status check failed: {response.text}")
         status_code = response.json().get("status_code")
+        last_status = str(status_code or "UNKNOWN")
         if status_code in {"FINISHED", "PUBLISHED"}:
             return
         if status_code in {"ERROR", "EXPIRED"}:
             raise RuntimeError(f"Instagram media container is not publishable: {status_code}")
         if attempt < 2:
             await asyncio.sleep(5)
+    raise RuntimeError(f"Instagram media container was not ready to publish: {last_status}")
 
 
-async def _publish_to_instagram(business_id: str, asset: dict[str, Any], caption: str) -> tuple[str, str]:
+def _instagram_asset_mode(asset: dict[str, Any], override: str | None = None) -> str:
+    if override:
+        return override.upper()
+    content_type = str(asset.get("content_type") or "")
+    format_ = str(asset.get("format") or "").lower()
+    if format_ == "reel":
+        return "REELS"
+    if format_ == "story":
+        return "STORIES"
+    if format_ == "video" or content_type.startswith("video/"):
+        return "VIDEO"
+    return "IMAGE"
+
+
+def _instagram_public_media_url(business_id: str, asset: dict[str, Any], mode: str) -> str:
+    if mode in {"VIDEO", "REELS"}:
+        return _signed_asset_url(asset) or ""
+    if mode == "STORIES" and str(asset.get("content_type") or "").startswith("video/"):
+        return _signed_asset_url(asset) or ""
+    return _instagram_jpeg_signed_url(business_id, asset)
+
+
+async def _create_instagram_media_container(
+    client: httpx.AsyncClient,
+    *,
+    ig_user_id: str,
+    access_token: str,
+    asset: dict[str, Any],
+    media_url: str,
+    mode: str,
+    caption: str | None,
+    is_carousel_item: bool = False,
+) -> str:
+    payload: dict[str, Any] = {"is_ai_generated": True}
+    if is_carousel_item:
+        payload["is_carousel_item"] = True
+    if mode in {"VIDEO", "REELS"}:
+        payload["video_url"] = media_url
+        payload["media_type"] = mode
+    elif mode == "STORIES":
+        if str(asset.get("content_type") or "").startswith("video/"):
+            payload["video_url"] = media_url
+        else:
+            payload["image_url"] = media_url
+            payload["alt_text"] = _instagram_alt_text(asset)
+        payload["media_type"] = "STORIES"
+    else:
+        payload["image_url"] = media_url
+        payload["alt_text"] = _instagram_alt_text(asset)
+    if caption and mode != "STORIES" and not is_carousel_item:
+        payload["caption"] = caption[:2200]
+    response = await client.post(
+        f"https://graph.instagram.com/{INSTAGRAM_API_VERSION}/{ig_user_id}/media",
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+        json=payload,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Instagram media container failed: {response.text}")
+    creation_id = response.json().get("id")
+    if not creation_id:
+        raise RuntimeError(f"Instagram media container returned no id: {response.text}")
+    await _wait_for_instagram_container_ready(client, creation_id, access_token)
+    return creation_id
+
+
+async def _create_instagram_carousel_container(
+    client: httpx.AsyncClient,
+    *,
+    ig_user_id: str,
+    access_token: str,
+    child_container_ids: list[str],
+    caption: str,
+) -> str:
+    response = await client.post(
+        f"https://graph.instagram.com/{INSTAGRAM_API_VERSION}/{ig_user_id}/media",
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+        json={
+            "media_type": "CAROUSEL",
+            "children": ",".join(child_container_ids),
+            "caption": caption[:2200],
+            "is_ai_generated": True,
+        },
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Instagram carousel container failed: {response.text}")
+    creation_id = response.json().get("id")
+    if not creation_id:
+        raise RuntimeError(f"Instagram carousel container returned no id: {response.text}")
+    await _wait_for_instagram_container_ready(client, creation_id, access_token)
+    return creation_id
+
+
+async def _publish_instagram_container(
+    client: httpx.AsyncClient,
+    *,
+    ig_user_id: str,
+    access_token: str,
+    creation_id: str,
+) -> tuple[str, str]:
+    publish_response = await client.post(
+        f"https://graph.instagram.com/{INSTAGRAM_API_VERSION}/{ig_user_id}/media_publish",
+        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+        json={"creation_id": creation_id},
+    )
+    if publish_response.status_code >= 400:
+        raise RuntimeError(f"Instagram publish failed: {publish_response.text}")
+    published_id = publish_response.json().get("id") or creation_id
+    permalink_response = await client.get(
+        f"https://graph.instagram.com/{INSTAGRAM_API_VERSION}/{published_id}",
+        params={"fields": "permalink", "access_token": access_token},
+    )
+    permalink = ""
+    if permalink_response.status_code < 400:
+        permalink = permalink_response.json().get("permalink") or ""
+    return published_id, permalink
+
+
+async def _publish_to_instagram(
+    business_id: str,
+    assets: list[dict[str, Any]],
+    caption: str,
+    media_type_override: str | None = None,
+) -> tuple[str, str]:
     row, access_token = await _access_token_for_provider(business_id, "instagram")
     ig_user_id = row.get("provider_account_id")
     if not ig_user_id:
         raise RuntimeError("Instagram account id is missing. Reconnect Instagram.")
-    image_url = _instagram_jpeg_signed_url(business_id, asset)
-    if not image_url:
-        raise RuntimeError("Generated image URL is unavailable for Instagram publishing.")
+    if not assets:
+        raise RuntimeError("No generated media asset selected for Instagram publishing.")
     async with httpx.AsyncClient(timeout=60) as client:
         await _assert_instagram_publish_capacity(client, ig_user_id, access_token)
-        create_response = await client.post(
-            f"https://graph.instagram.com/{INSTAGRAM_API_VERSION}/{ig_user_id}/media",
-            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
-            json={
-                "image_url": image_url,
-                "caption": caption[:2200],
-                "alt_text": _instagram_alt_text(asset),
-                "is_ai_generated": True,
-            },
+        if len(assets) > 1:
+            if len(assets) > 10:
+                raise RuntimeError("Instagram carousel posts are limited to 10 media assets.")
+            child_ids: list[str] = []
+            for asset in assets:
+                mode = _instagram_asset_mode(asset)
+                if mode in {"REELS", "STORIES"}:
+                    raise RuntimeError("Instagram carousel children can only be image or video assets.")
+                media_url = _instagram_public_media_url(business_id, asset, mode)
+                if not media_url:
+                    raise RuntimeError("Generated media URL is unavailable for Instagram carousel publishing.")
+                child_ids.append(
+                    await _create_instagram_media_container(
+                        client,
+                        ig_user_id=ig_user_id,
+                        access_token=access_token,
+                        asset=asset,
+                        media_url=media_url,
+                        mode=mode,
+                        caption=None,
+                        is_carousel_item=True,
+                    )
+                )
+            creation_id = await _create_instagram_carousel_container(
+                client,
+                ig_user_id=ig_user_id,
+                access_token=access_token,
+                child_container_ids=child_ids,
+                caption=caption,
+            )
+            return await _publish_instagram_container(client, ig_user_id=ig_user_id, access_token=access_token, creation_id=creation_id)
+
+        asset = assets[0]
+        mode = _instagram_asset_mode(asset, media_type_override)
+        media_url = _instagram_public_media_url(business_id, asset, mode)
+        if not media_url:
+            raise RuntimeError("Generated media URL is unavailable for Instagram publishing.")
+        creation_id = await _create_instagram_media_container(
+            client,
+            ig_user_id=ig_user_id,
+            access_token=access_token,
+            asset=asset,
+            media_url=media_url,
+            mode=mode,
+            caption=caption,
         )
-        if create_response.status_code >= 400:
-            raise RuntimeError(f"Instagram media container failed: {create_response.text}")
-        creation_id = create_response.json().get("id")
-        if not creation_id:
-            raise RuntimeError(f"Instagram media container returned no id: {create_response.text}")
-        await _wait_for_instagram_container_ready(client, creation_id, access_token)
-        publish_response = await client.post(
-            f"https://graph.instagram.com/{INSTAGRAM_API_VERSION}/{ig_user_id}/media_publish",
-            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
-            json={"creation_id": creation_id},
-        )
-        if publish_response.status_code >= 400:
-            raise RuntimeError(f"Instagram publish failed: {publish_response.text}")
-        published_id = publish_response.json().get("id") or creation_id
-        permalink_response = await client.get(
-            f"https://graph.instagram.com/{INSTAGRAM_API_VERSION}/{published_id}",
-            params={"fields": "permalink", "access_token": access_token},
-        )
-        permalink = ""
-        if permalink_response.status_code < 400:
-            permalink = permalink_response.json().get("permalink") or ""
-    return published_id, permalink
+        return await _publish_instagram_container(client, ig_user_id=ig_user_id, access_token=access_token, creation_id=creation_id)
 
 
 async def publish_scheduled_post(business_id: str, scheduled_post_id: str) -> dict[str, Any]:
@@ -634,6 +773,22 @@ async def publish_scheduled_post(business_id: str, scheduled_post_id: str) -> di
     provider_post_ids = dict(post.get("provider_post_ids") or {})
     metadata = dict(post.get("metadata") or {})
     provider_post_urls = dict(metadata.get("provider_post_urls") or {})
+    instagram_asset_ids = metadata.get("asset_ids") or [post["asset_id"]]
+    instagram_assets = [asset]
+    if isinstance(instagram_asset_ids, list) and len(instagram_asset_ids) > 1:
+        rows = (
+            supabase_admin.table("marketing_assets")
+            .select("*")
+            .eq("business_id", business_id)
+            .in_("id", instagram_asset_ids[:10])
+            .execute()
+            .data
+            or []
+        )
+        by_id = {row["id"]: row for row in rows}
+        instagram_assets = [by_id[asset_id] for asset_id in instagram_asset_ids[:10] if asset_id in by_id]
+    instagram_media_type = metadata.get("instagram_media_type")
+    instagram_media_type = str(instagram_media_type).upper() if instagram_media_type else None
     errors: list[str] = []
     _update_scheduled_post(
         business_id,
@@ -651,7 +806,12 @@ async def publish_scheduled_post(business_id: str, scheduled_post_id: str) -> di
                 errors.append(f"X: {exc}")
         elif provider == "instagram":
             try:
-                post_id, post_url = await _publish_to_instagram(business_id, asset, post["caption"])
+                post_id, post_url = await _publish_to_instagram(
+                    business_id,
+                    instagram_assets,
+                    post["caption"],
+                    instagram_media_type,
+                )
                 provider_post_ids["instagram"] = post_id
                 if post_url:
                     provider_post_urls["instagram"] = post_url
