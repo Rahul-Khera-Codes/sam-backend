@@ -232,6 +232,9 @@ Verification:
   - media containers include caption, alt text, and `is_ai_generated=true`
   - publisher checks Instagram content publishing limit before publishing and polls container status before calling `media_publish`
   - Instagram Graph calls use `graph.instagram.com` with Instagram user access tokens from Business Login
+  - Instagram OAuth now requires explicit `marketing_instagram_app_id` and `marketing_instagram_app_secret` so the Facebook/Meta app id cannot accidentally be sent to Instagram Login as an invalid platform app
+  - provider service supports Instagram image posts, videos, reels, stories, and carousel containers; current UI still primarily sends selected generated image assets
+  - scheduled-post create payload accepts optional `asset_ids`, which are stored in metadata for carousel publishing
 
 Pending screenshots:
 - Additional Marketing Employee screens still need to be provided and converted into section entries.
