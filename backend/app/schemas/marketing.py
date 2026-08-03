@@ -88,6 +88,43 @@ class MarketingWorkspaceResponse(BaseModel):
     scheduled_posts: list["MarketingScheduledPostResponse"] = Field(default_factory=list)
 
 
+class MarketingDraftUpsertRequest(BaseModel):
+    id: str | None = None
+    title: str = Field(min_length=1, max_length=160)
+    draft_data: dict[str, Any] = Field(default_factory=dict)
+    asset_ids: list[str] = Field(default_factory=list)
+
+
+class MarketingDraftResponse(BaseModel):
+    id: str
+    business_id: str
+    created_by: str | None = None
+    title: str
+    draft_data: dict[str, Any] = Field(default_factory=dict)
+    assets: list[MarketingAssetResponse] = Field(default_factory=list)
+    created_at: str
+    updated_at: str
+
+
+class MarketingPromptTemplateCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="Custom prompt saved for this business", max_length=240)
+    prompt: str = Field(min_length=1, max_length=4000)
+    category: str = Field(default="Custom", max_length=80)
+
+
+class MarketingPromptTemplateResponse(BaseModel):
+    id: str
+    business_id: str
+    created_by: str | None = None
+    title: str
+    description: str
+    prompt: str
+    category: str
+    created_at: str
+    updated_at: str
+
+
 class MarketingSignedUrlResponse(BaseModel):
     asset_id: str
     signed_url: str
