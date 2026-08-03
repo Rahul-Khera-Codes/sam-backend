@@ -15,7 +15,11 @@ from app.schemas.marketing import (
     MarketingAssetResponse,
     MarketingCampaignCreateRequest,
     MarketingCampaignResponse,
+    MarketingDraftResponse,
+    MarketingDraftUpsertRequest,
     MarketingGenerationJobResponse,
+    MarketingPromptTemplateCreateRequest,
+    MarketingPromptTemplateResponse,
     MarketingScheduledPostCreateRequest,
     MarketingScheduledPostResponse,
 )
@@ -24,12 +28,6 @@ logger = logging.getLogger(__name__)
 
 MARKETING_ASSETS_BUCKET = "marketing-assets"
 SIGNED_URL_TTL_SECONDS = 60 * 60
-
-_RANDOM_IDEAS = [
-    "A premium carousel post for a winter launch of my smart desk lamp, using soft blue lighting and crisp product closeups.",
-    "A bold Instagram story for a weekend flash sale on handmade candles, with warm shadows and minimal copy.",
-    "A product poster for a new organic skincare bundle, using clean white space, botanical accents, and a calm luxury feel.",
-]
 
 _CALENDAR_SLOTS = [
     "2026-07-08T09:00:00Z",
@@ -60,10 +58,20 @@ def _campaign_response(row: dict[str, Any]) -> MarketingCampaignResponse:
     return MarketingCampaignResponse(**_normalize_row(row))
 
 
+def _prompt_template_response(row: dict[str, Any]) -> MarketingPromptTemplateResponse:
+    return MarketingPromptTemplateResponse(**_normalize_row(row))
+
+
 def _asset_response(row: dict[str, Any], signed_url: str | None = None) -> MarketingAssetResponse:
     payload = _normalize_row(row)
     payload["signed_url"] = signed_url
     return MarketingAssetResponse(**payload)
+
+
+def _draft_response(row: dict[str, Any], assets: list[dict[str, Any]] | None = None) -> MarketingDraftResponse:
+    payload = _normalize_row(row)
+    payload["assets"] = [_asset_response(asset, _signed_asset_url(asset)) for asset in (assets or [])]
+    return MarketingDraftResponse(**payload)
 
 
 def _scheduled_post_response(row: dict[str, Any], asset: dict[str, Any] | None = None) -> MarketingScheduledPostResponse:
@@ -104,6 +112,96 @@ def _update_row(table: str, row_id: str, business_id: str, values: dict[str, Any
     if not result.data:
         raise HTTPException(status_code=404, detail=f"{table} row not found")
     return result.data[0]
+
+
+def _delete_extra_rows(table: str, business_id: str, keep: int) -> None:
+    rows = (
+        supabase_admin.table(table)
+        .select("id")
+        .eq("business_id", business_id)
+        .order("updated_at", desc=True)
+        .execute()
+        .data
+        or []
+    )
+    extra_ids = [row["id"] for row in rows[keep:]]
+    if extra_ids:
+        supabase_admin.table(table).delete().eq("business_id", business_id).in_("id", extra_ids).execute()
+
+
+def _is_missing_draft_contents_table_error(exc: Exception) -> bool:
+    message = str(exc)
+    return "marketing_draft_contents" in message and ("PGRST205" in message or "Could not find" in message)
+
+
+def _draft_assets(draft_id: str, business_id: str) -> list[dict[str, Any]]:
+    try:
+        links = (
+            supabase_admin.table("marketing_draft_contents")
+            .select("asset_id, sort_order")
+            .eq("draft_id", draft_id)
+            .eq("business_id", business_id)
+            .order("sort_order", desc=False)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        if _is_missing_draft_contents_table_error(exc):
+            logger.warning("marketing_draft_contents is missing; draft assets will be unavailable until migrations run")
+            return []
+        raise
+    asset_ids = [link["asset_id"] for link in links]
+    if not asset_ids:
+        return []
+
+    assets = (
+        supabase_admin.table("marketing_assets")
+        .select("*")
+        .eq("business_id", business_id)
+        .in_("id", asset_ids)
+        .execute()
+        .data
+        or []
+    )
+    assets_by_id = {asset["id"]: asset for asset in assets}
+    return [assets_by_id[asset_id] for asset_id in asset_ids if asset_id in assets_by_id]
+
+
+def _replace_draft_asset_links(draft_id: str, business_id: str, asset_ids: list[str]) -> None:
+    unique_asset_ids = list(dict.fromkeys(asset_ids))
+    try:
+        supabase_admin.table("marketing_draft_contents").delete().eq("draft_id", draft_id).eq("business_id", business_id).execute()
+    except Exception as exc:
+        if _is_missing_draft_contents_table_error(exc):
+            logger.warning("marketing_draft_contents is missing; saved draft asset links were skipped")
+            return
+        raise
+    if not unique_asset_ids:
+        return
+
+    existing_assets = (
+        supabase_admin.table("marketing_assets")
+        .select("id")
+        .eq("business_id", business_id)
+        .in_("id", unique_asset_ids)
+        .execute()
+        .data
+        or []
+    )
+    existing_ids = {asset["id"] for asset in existing_assets}
+    rows = [
+        {
+            "business_id": business_id,
+            "draft_id": draft_id,
+            "asset_id": asset_id,
+            "sort_order": index,
+        }
+        for index, asset_id in enumerate(unique_asset_ids)
+        if asset_id in existing_ids
+    ]
+    if rows:
+        supabase_admin.table("marketing_draft_contents").insert(rows).execute()
 
 
 def _next_calendar_slot(business_id: str) -> str:
@@ -181,6 +279,106 @@ def get_workspace(business_id: str) -> dict[str, list[Any]]:
         "assets": [_asset_response(row, _signed_asset_url(row)) for row in assets],
         "scheduled_posts": scheduled,
     }
+
+
+def list_drafts(business_id: str) -> list[MarketingDraftResponse]:
+    rows = (
+        supabase_admin.table("marketing_drafts")
+        .select("*")
+        .eq("business_id", business_id)
+        .order("updated_at", desc=True)
+        .limit(8)
+        .execute()
+        .data
+        or []
+    )
+    return [_draft_response(row, _draft_assets(row["id"], business_id)) for row in rows]
+
+
+def upsert_draft(business_id: str, user_id: str, body: MarketingDraftUpsertRequest) -> MarketingDraftResponse:
+    row: dict[str, Any] = {
+        "business_id": business_id,
+        "created_by": user_id,
+        "title": body.title.strip(),
+        "draft_data": body.draft_data,
+    }
+    if body.id:
+        row["id"] = body.id
+        existing = supabase_admin.table("marketing_drafts").select("business_id").eq("id", body.id).limit(1).execute().data or []
+        if existing and existing[0]["business_id"] != business_id:
+            raise HTTPException(status_code=404, detail="marketing_drafts row not found")
+
+    result = supabase_admin.table("marketing_drafts").upsert(row, on_conflict="id").execute()
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to save marketing draft")
+    saved_draft = result.data[0]
+    _replace_draft_asset_links(saved_draft["id"], business_id, body.asset_ids)
+    _delete_extra_rows("marketing_drafts", business_id, keep=8)
+    return _draft_response(saved_draft, _draft_assets(saved_draft["id"], business_id))
+
+
+def delete_draft(business_id: str, draft_id: str) -> MarketingDraftResponse:
+    draft = _get_single("marketing_drafts", draft_id, business_id)
+    assets = _draft_assets(draft_id, business_id)
+    result = (
+        supabase_admin.table("marketing_drafts")
+        .delete()
+        .eq("id", draft_id)
+        .eq("business_id", business_id)
+        .execute()
+    )
+    if result.data is None:
+        raise HTTPException(status_code=500, detail="Failed to delete marketing draft")
+    return _draft_response(draft, assets)
+
+
+def list_prompt_templates(business_id: str) -> list[MarketingPromptTemplateResponse]:
+    rows = (
+        supabase_admin.table("marketing_prompt_templates")
+        .select("*")
+        .eq("business_id", business_id)
+        .order("updated_at", desc=True)
+        .limit(12)
+        .execute()
+        .data
+        or []
+    )
+    return [_prompt_template_response(row) for row in rows]
+
+
+def create_prompt_template(
+    business_id: str,
+    user_id: str,
+    body: MarketingPromptTemplateCreateRequest,
+) -> MarketingPromptTemplateResponse:
+    result = supabase_admin.table("marketing_prompt_templates").insert(
+        {
+            "business_id": business_id,
+            "created_by": user_id,
+            "title": body.title.strip(),
+            "description": body.description.strip() or "Custom prompt saved for this business",
+            "prompt": body.prompt.strip(),
+            "category": body.category.strip() or "Custom",
+        }
+    ).execute()
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to save marketing prompt")
+    _delete_extra_rows("marketing_prompt_templates", business_id, keep=12)
+    return _prompt_template_response(result.data[0])
+
+
+def delete_prompt_template(business_id: str, prompt_template_id: str) -> MarketingPromptTemplateResponse:
+    template = _get_single("marketing_prompt_templates", prompt_template_id, business_id)
+    result = (
+        supabase_admin.table("marketing_prompt_templates")
+        .delete()
+        .eq("id", prompt_template_id)
+        .eq("business_id", business_id)
+        .execute()
+    )
+    if result.data is None:
+        raise HTTPException(status_code=500, detail="Failed to delete marketing prompt")
+    return _prompt_template_response(template)
 
 
 def start_concepts_job(business_id: str, campaign_id: str) -> MarketingGenerationJobResponse:
@@ -652,6 +850,39 @@ def list_calendar_posts(business_id: str) -> list[MarketingScheduledPostResponse
     return [_scheduled_post_response(post, assets_by_id.get(post["asset_id"])) for post in posts]
 
 
-def randomize_idea() -> str:
-    index = datetime.now(timezone.utc).second % len(_RANDOM_IDEAS)
-    return _RANDOM_IDEAS[index]
+async def randomize_idea() -> str:
+    client = _openai_client(timeout=30.0)
+    variation_key = f"{datetime.now(timezone.utc).isoformat()}-{uuid4()}"
+    response = await client.chat.completions.create(
+        model=settings.marketing_text_model,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You create clear, easy-to-edit marketing campaign prompts for a social media AI employee. "
+                    "Return only one prompt. Do not include markdown, numbering, quotation marks, or explanations. "
+                    "Avoid repetitive ecommerce examples. Vary the business category, product or service, audience, "
+                    "visual style, seasonality, offer type, and call to action on every request."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "Write one fresh product or service marketing prompt for generating a social media post. "
+                    "Make it specific enough to be useful, but generic enough that a business owner can edit it quickly. "
+                    "Include the offer/product, audience, visual style, and desired call to action in 1-2 sentences.\n"
+                    "Use a varied topic such as local services, wellness, restaurants, events, education, B2B, retail, "
+                    "beauty, fitness, home services, hospitality, professional services, or creator-led launches.\n"
+                    f"Variation key: {variation_key}"
+                ),
+            },
+        ],
+        temperature=1.35,
+        top_p=0.95,
+        presence_penalty=0.7,
+        frequency_penalty=0.4,
+    )
+    idea = (response.choices[0].message.content or "").strip().strip('"')
+    if not idea:
+        raise RuntimeError("OpenAI returned an empty marketing prompt")
+    return idea[:700]

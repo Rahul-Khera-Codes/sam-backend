@@ -8,8 +8,12 @@ from app.schemas.marketing import (
     MarketingAssetResponse,
     MarketingCampaignCreateRequest,
     MarketingCampaignResponse,
+    MarketingDraftResponse,
+    MarketingDraftUpsertRequest,
     MarketingGenerationJobResponse,
     MarketingImageGenerationRequest,
+    MarketingPromptTemplateCreateRequest,
+    MarketingPromptTemplateResponse,
     MarketingScheduledPostCreateRequest,
     MarketingScheduledPostResponse,
     MarketingSignedUrlResponse,
@@ -19,7 +23,10 @@ from app.schemas.marketing import (
 )
 from app.services.marketing_generation_service import (
     create_campaign,
+    create_prompt_template,
     create_scheduled_post,
+    delete_draft,
+    delete_prompt_template,
     delete_scheduled_post,
     get_scheduled_post,
     get_asset_signed_url,
@@ -27,11 +34,14 @@ from app.services.marketing_generation_service import (
     get_workspace,
     list_calendar_posts,
     list_campaign_assets,
+    list_drafts,
+    list_prompt_templates,
     randomize_idea,
     run_concepts_job,
     run_image_job,
     start_concepts_job,
     start_image_job,
+    upsert_draft,
     start_video_job_disabled,
 )
 from app.services.marketing_social_service import publish_scheduled_post
@@ -46,6 +56,64 @@ async def get_marketing_workspace(
 ):
     verify_business_access(user_id, business_id)
     return MarketingWorkspaceResponse(**get_workspace(business_id))
+
+
+@router.get("/drafts", response_model=list[MarketingDraftResponse])
+async def list_marketing_drafts(
+    business_id: str = Query(...),
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    return list_drafts(business_id)
+
+
+@router.post("/drafts", response_model=MarketingDraftResponse)
+async def save_marketing_draft(
+    body: MarketingDraftUpsertRequest,
+    business_id: str = Query(...),
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    return upsert_draft(business_id, user_id, body)
+
+
+@router.delete("/drafts/{draft_id}", response_model=MarketingDraftResponse)
+async def delete_marketing_draft(
+    draft_id: str,
+    business_id: str = Query(...),
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    return delete_draft(business_id, draft_id)
+
+
+@router.get("/prompt-templates", response_model=list[MarketingPromptTemplateResponse])
+async def list_marketing_prompt_templates(
+    business_id: str = Query(...),
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    return list_prompt_templates(business_id)
+
+
+@router.post("/prompt-templates", response_model=MarketingPromptTemplateResponse)
+async def create_marketing_prompt_template(
+    body: MarketingPromptTemplateCreateRequest,
+    business_id: str = Query(...),
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    return create_prompt_template(business_id, user_id, body)
+
+
+@router.delete("/prompt-templates/{prompt_template_id}", response_model=MarketingPromptTemplateResponse)
+async def delete_marketing_prompt_template(
+    prompt_template_id: str,
+    business_id: str = Query(...),
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    return delete_prompt_template(business_id, prompt_template_id)
 
 
 @router.post("/campaigns", response_model=MarketingCampaignResponse)
@@ -178,4 +246,4 @@ async def randomize_marketing_campaign_idea(
     user_id: str = Depends(get_user_id),
 ):
     verify_business_access(user_id, business_id)
-    return RandomIdeaResponse(idea=randomize_idea())
+    return RandomIdeaResponse(idea=await randomize_idea())

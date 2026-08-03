@@ -239,7 +239,7 @@ Verification:
   - setup screen entry card now stretches horizontally across the available workspace instead of stacking controls in a narrow vertical card
   - prompt editor is paired with a prompt-library picker using existing shadcn `Popover` and `Command` primitives
   - default prompt templates are grouped by category and can be inserted into the campaign prompt
-  - custom prompt templates can be saved, inserted, removed, and are persisted per business in local storage
+  - custom prompt templates can be saved, inserted, removed, and are persisted per business
   - generation controls remain visible on the right side, with advanced options still progressively disclosed behind the advanced toggle
 - Entry CTA polish update:
   - added a local `CosmicButton` UI primitive with animated conic-gradient border utilities and reduced-motion support
@@ -255,6 +255,20 @@ Verification:
   - added small decorative sparkle accents inside the Generate button to reinforce the AI action affordance
   - added a Marketing-specific AI loading panel for prompt randomization, campaign concept generation, image generation, and video setup
   - loading copy now reflects real workflow states such as calling the Marketing AI Employee, reading the prompt, understanding platform context, generating assets, and saving private media
+- Draft/prompt persistence update:
+  - added business-scoped Supabase tables for saved Marketing drafts and custom prompt library entries
+  - added authenticated backend endpoints to list/save/delete drafts and list/create/delete prompt templates
+  - frontend Save Draft and Prompt Library custom save/delete actions now persist through the backend instead of browser-only local storage
+  - Randomize now asks the OpenAI text model for a fresh, clear, editable campaign prompt on each click instead of selecting from fixed hardcoded examples
+- Draft generated-content restore update:
+  - added `marketing_draft_contents` to store business-scoped links from saved drafts to generated Marketing assets
+  - draft responses now include the saved concept/image/video assets with fresh signed URLs from private Supabase Storage
+  - frontend draft restore merges saved draft assets into local state before reopening Review, so saved generated media and captions can be resumed without regenerating
+  - runtime fix: Supabase had already marked migration `20260803131500` as applied before `marketing_draft_contents` was added locally, so `supabase db push` reported "up to date" and the table was missing remotely
+  - added and applied follow-up migration `20260803160000_marketing_draft_contents.sql`; backend now also skips draft-asset links gracefully if an environment is temporarily missing that table
+- Randomize diversity update:
+  - increased OpenAI sampling settings for random prompt generation and added a per-request variation key
+  - random prompt instructions now explicitly rotate across business categories, audiences, visual styles, seasons, offers, and calls to action to avoid repetitive product examples
 
 Pending screenshots:
 - Additional Marketing Employee screens still need to be provided and converted into section entries.
@@ -302,6 +316,9 @@ Candidate areas:
 - FastAPI mock Marketing Employee endpoints added and registered.
 - Mock endpoints replaced with real job-based backend endpoints.
 - OpenAI caption/concept and image generation service added.
+- Saved drafts and custom prompt library entries are persisted in business-scoped Supabase tables through backend APIs.
+- Saved drafts keep explicit links to generated Marketing assets so Review can restore selected concepts/images/videos later.
+- Randomize prompt generation now uses the OpenAI text model for fresh campaign prompts.
 - Private Supabase Storage and DB persistence migration added.
 - HeyGen video endpoint returns disabled/needs-credentials state for future wiring.
 
