@@ -1,10 +1,17 @@
 services:
   sam-backend:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        GUARDRAILS_TOKEN: ${GUARDRAILS_TOKEN:-}
+      secrets:
+        - backend_env
     ports:
       - "8003:8000"
     env_file:
       - ./backend/.env
+    environment:
+      GUARDRAILS_TOKEN: ""
     volumes:
       - ./backend:/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
@@ -33,7 +40,12 @@ services:
     restart: unless-stopped
 
   sam-hr-onboarding-agent:
-    build: ./agent
+    build:
+      context: ./agent
+      args:
+        GUARDRAILS_TOKEN: ${GUARDRAILS_TOKEN:-}
+      secrets:
+        - backend_env
     ports:
       - "8004:8001"
     env_file:
@@ -53,3 +65,7 @@ services:
       - ./agent:/app
     command: python hr_interviewer_agent.py dev
     restart: unless-stopped
+
+secrets:
+  backend_env:
+    file: ./backend/.env
