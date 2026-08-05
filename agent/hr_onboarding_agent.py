@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from datetime import datetime
 from typing import Any
 
@@ -21,6 +22,11 @@ from livekit.agents import AgentServer, AgentSession, Agent, function_tool, RunC
 from livekit.plugins import openai, liveavatar
 from openai import AsyncOpenAI
 
+from hr_onboarding_guardrails import (
+    HrOnboardingGuardrailsBlocked,
+    validate_onboarding_assistant_output,
+    validate_onboarding_user_input,
+)
 from supabase_helpers import _fetch_business, _get_supabase
 
 load_dotenv(".env.local")
@@ -31,11 +37,23 @@ for _noisy in ("hpack", "hpack.hpack", "hpack.table", "httpx", "httpcore"):
 
 HR_ONBOARDING_AGENT_NAME = "hr-onboarding-agent"
 JOHN_AVATAR_ID = os.environ.get("JOHN_AVATAR_ID", "Albert_public_1")
+JOHN_AVATAR_START_TIMEOUT_SECONDS = int(os.environ.get("JOHN_AVATAR_START_TIMEOUT_SECONDS", "25"))
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIMENSIONS = 1536
 MAX_DOCUMENT_MATCHES = 6
 MAX_EXCERPT_CHARS = 1_400
 JOHN_INTRO_TEXT = "Hi, I'm John. I can help answer questions from your uploaded HR policy documents."
+
+_GREETING_PATTERN = re.compile(
+    r"^(hi|hello|hey|hello there|hi there|hey there|good morning|good afternoon|good evening|greetings)[.!?\s]*$",
+    re.I,
+)
+_THANKS_PATTERN = re.compile(r"^(thanks|thank you|thx|appreciate it|thanks john)[.!?\s]*$", re.I)
+_GOODBYE_PATTERN = re.compile(r"^(bye|goodbye|see you|see ya|talk to you later)[.!?\s]*$", re.I)
+_CAPABILITY_PATTERN = re.compile(
+    r"\b(what can you do|how can you help|help me|who are you|what do you help with|what are you able to do)\b",
+    re.I,
+)
 
 
 async def _publish(room, payload: dict) -> None:
@@ -57,6 +75,25 @@ def _truncate(value: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3].rstrip() + "..."
+
+
+def _answer_casual_message(question: str) -> str | None:
+    text = " ".join(question.split()).strip()
+    if not text:
+        return "Hi, I'm John. Ask me a question about your HR policies, benefits, onboarding steps, or workplace documents."
+    if _GREETING_PATTERN.match(text):
+        return "Hi, I'm John. I'm here to help with HR policy, benefits, onboarding, and workplace questions."
+    if _THANKS_PATTERN.match(text):
+        return "You're welcome. I'm here if you have another HR or onboarding question."
+    if _GOODBYE_PATTERN.match(text):
+        return "Goodbye. Feel free to come back whenever you need help with HR or onboarding questions."
+    if _CAPABILITY_PATTERN.search(text) and len(text) <= 140:
+        return (
+            "I can help you understand your company's uploaded HR policy documents, including onboarding steps, "
+            "benefits, workplace policies, handbook details, and compliance guidance. If a policy answer is not in "
+            "the published documents, I'll let you know instead of guessing."
+        )
+    return None
 
 
 class HrOnboardingAssistant(Agent):
@@ -119,7 +156,23 @@ class HrOnboardingAssistant(Agent):
         workplace, or employee-handbook questions.
         """
         await _set_state(self._room, "thinking")
-        matches = await self._retrieve_policy_chunks(question)
+        casual_answer = _answer_casual_message(question)
+        if casual_answer:
+            return casual_answer
+
+        input_validation_task = asyncio.create_task(
+            asyncio.to_thread(validate_onboarding_user_input, question, source="voice_tool")
+        )
+        try:
+            matches = await self._retrieve_policy_chunks(question)
+        except Exception:
+            input_validation_task.cancel()
+            raise
+        try:
+            await input_validation_task
+        except HrOnboardingGuardrailsBlocked as exc:
+            return exc.user_message
+
         if not matches:
             return (
                 "No relevant published HR policy document excerpts were found. "
@@ -159,6 +212,11 @@ You are John, the HR onboarding assistant for {business_name}.
 - Answer employee onboarding and HR policy questions from uploaded published HR policy documents.
 - Explain benefits, workplace policies, onboarding steps, compliance requirements, and handbook details when documents support the answer.
 - Help the employee understand the document library shown in the app.
+
+## Casual conversation
+- For simple greetings like "hi", "hello", or "good morning", answer warmly in one sentence. Do not call `answer_policy_question`.
+- For basic capability questions like "How can you help me?" or "What can you do?", briefly explain that you help with HR policy, benefits, onboarding, workplace, handbook, and compliance questions based on published documents. Do not call `answer_policy_question`.
+- For thanks or goodbyes, respond naturally and briefly. Do not call `answer_policy_question`.
 
 ## Grounding rules
 - For any policy, benefits, compliance, onboarding, employee-handbook, or workplace question, call `answer_policy_question` before answering.
@@ -235,16 +293,29 @@ async def hr_onboarding_agent(ctx: agents.JobContext):
     )
 
     avatar: liveavatar.AvatarSession | None = None
+    avatar_start_failure_reason: str | None = None
 
     # HeyGen LiveAvatar must start before session.start(). The avatar ID may be
     # named Albert in HeyGen, but John remains the assistant persona and voice.
     if JOHN_AVATAR_ID and avatar_enabled:
         try:
             avatar = liveavatar.AvatarSession(avatar_id=JOHN_AVATAR_ID)
-            await avatar.start(session, room=ctx.room)
+            await asyncio.wait_for(
+                avatar.start(session, room=ctx.room),
+                timeout=JOHN_AVATAR_START_TIMEOUT_SECONDS,
+            )
             logger.info("John HeyGen LiveAvatar started — avatar_id=%s", JOHN_AVATAR_ID)
+        except asyncio.TimeoutError:
+            avatar = None
+            logger.warning(
+                "John HeyGen LiveAvatar start timed out after %ss — continuing with voice only",
+                JOHN_AVATAR_START_TIMEOUT_SECONDS,
+            )
+            avatar_start_failure_reason = "avatar_start_timeout"
         except Exception as avatar_err:
+            avatar = None
             logger.warning("John HeyGen LiveAvatar failed — continuing with voice only: %s", avatar_err)
+            avatar_start_failure_reason = "avatar_start_failed"
     else:
         reason = "avatar disabled by user" if JOHN_AVATAR_ID else "JOHN_AVATAR_ID not set"
         logger.info("John running without avatar — %s", reason)
@@ -281,6 +352,36 @@ async def hr_onboarding_agent(ctx: agents.JobContext):
             _idle_disconnect_task.cancel()
             _idle_disconnect_task = None
 
+    async def _observe_assistant_output(text: str) -> None:
+        try:
+            await asyncio.to_thread(
+                validate_onboarding_assistant_output,
+                text,
+                source="voice_assistant",
+            )
+        except HrOnboardingGuardrailsBlocked as exc:
+            logger.warning("John Guardrails observed unsafe voice output: %s", exc)
+
+    @session.on("conversation_item_added")
+    def _on_conversation_item_added(ev) -> None:
+        try:
+            item = getattr(ev, "item", ev)
+            if getattr(item, "role", None) != "assistant":
+                return
+            text = getattr(item, "text_content", "") or ""
+            if text.strip():
+                asyncio.ensure_future(_observe_assistant_output(text.strip()))
+        except Exception as exc:
+            logger.warning("John Guardrails voice output observer failed: %s", exc)
+
+    async def _handle_user_text(text: str) -> None:
+        try:
+            await asyncio.to_thread(validate_onboarding_user_input, text, source="voice_text")
+        except HrOnboardingGuardrailsBlocked as exc:
+            await session.generate_reply(instructions=f"Say exactly this and nothing else: {exc.user_message}")
+            return
+        await session.generate_reply(user_input=text)
+
     @ctx.room.on("data_received")
     def _on_data(data_packet) -> None:
         try:
@@ -288,7 +389,7 @@ async def hr_onboarding_agent(ctx: agents.JobContext):
             if payload.get("type") == "user_text":
                 text = (payload.get("text") or "").strip()
                 if text:
-                    asyncio.ensure_future(session.generate_reply(user_input=text))
+                    asyncio.ensure_future(_handle_user_text(text))
             elif payload.get("type") == "stop_avatar":
                 async def _stop_avatar() -> None:
                     nonlocal avatar
@@ -313,6 +414,9 @@ async def hr_onboarding_agent(ctx: agents.JobContext):
         agent=assistant,
         room_options=room_io.RoomOptions(),
     )
+
+    if avatar_start_failure_reason:
+        await _publish(ctx.room, {"type": "avatar_stopped", "reason": avatar_start_failure_reason})
 
     await _publish(ctx.room, {"type": "agent_intro", "text": JOHN_INTRO_TEXT})
     await session.generate_reply(

@@ -649,6 +649,38 @@ Implemented now:
   - new uploads are queued for embedding immediately
   - onboarding chat endpoint: `POST /hr/onboarding/chat`
   - chat answers use only retrieved published HR policy chunks and refuse unsupported answers
+  - John Guardrails AI layer added for onboarding chat:
+    - dependencies:
+      - `guardrails-ai==0.10.2`
+      - selected validators are installed from Guardrails Hub during Docker build when `GUARDRAILS_TOKEN` is provided
+    - Docker build secrets:
+      - `sam-backend` and `sam-hr-onboarding-agent` read `GUARDRAILS_TOKEN` from `backend/.env` through the Compose `backend_env` BuildKit secret
+      - the backend runtime overrides `GUARDRAILS_TOKEN` to an empty value so the token is not required as a runtime container environment variable
+      - Hub installs use `--no-install-local-models` plus `--enable-remote-inferencing` to avoid downloading multi-GB local model/CUDA dependencies into app images
+      - each Hub validator install is bounded by `GUARDRAILS_HUB_INSTALL_TIMEOUT_SECONDS` so model-heavy or stalled validators are skipped instead of blocking image builds
+      - dependency install and Guardrails Hub install use BuildKit pip cache mounts
+      - Docker preinstalls the reliable core Hub validators in a dedicated cacheable layer before `COPY . .`, so app-code changes do not force validator reinstall
+    - Core Hub validators installed during Docker build:
+      - `hub://guardrails/llamaguard_7b`
+      - `hub://guardrails/detect_pii`
+      - `hub://guardrails/profanity_free`
+      - `hub://guardrails/unusual_prompt`
+    - builds without a readable `GUARDRAILS_TOKEN` skip Hub validator installation
+    - active input validators run cheap-first: `ProfanityFree`, `DetectPII`, `UnusualPrompt`
+    - active output validators run cheap-first: `ProfanityFree`, `DetectPII`, `LlamaGuard7B`
+    - obvious input PII/profanity/abusive-language requests are blocked by local regex prechecks before Guardrails AI runtime initialization or remote inference
+    - typed chat starts input validation and HR policy retrieval concurrently; retrieved work is discarded if input validation fails
+    - typed chat validates generated answers before returning them through `validate_onboarding_assistant_output`
+    - typed chat remains a non-streaming JSON endpoint, so streaming/chunk output validation is intentionally not enabled there to avoid changing the API contract
+    - blocked input/output responses are customized per validator instead of sharing one generic message, and use a professional, humble tone that explains how the user can rephrase
+    - guardrail logs include phase, source, validator name, and SHA-256 text hash; raw user/assistant text is not logged
+    - realtime John validates typed LiveKit messages before `session.generate_reply`
+    - realtime John starts `answer_policy_question` tool input validation and policy chunk retrieval concurrently; retrieved work is discarded if input validation fails
+    - realtime voice assistant output is observed and logged after generation; spoken audio cannot be stopped post-generation in the current LiveKit flow
+    - John LiveAvatar startup has a `JOHN_AVATAR_START_TIMEOUT_SECONDS` fallback; timeout or startup failure publishes `avatar_stopped` after `session.start()` so the UI does not stay stuck on avatar loading
+    - environment knobs:
+      - `HR_ONBOARDING_GUARDRAILS_ENABLED=false` disables the layer
+      - `JOHN_AVATAR_START_TIMEOUT_SECONDS` defaults to `25`
 - Frontend:
   - `HrOnboarding.tsx` no longer uses `getHrMockWorkspace`
   - document library loads real HR policy documents
@@ -770,6 +802,21 @@ Verification completed:
   - frontend TypeScript check passed
   - targeted ESLint passed for `HrOnboarding.tsx`
   - editor diagnostics reported no errors for `HrOnboarding.tsx`
+- John Guardrails AI verification:
+  - Python syntax compilation passed for `hr_onboarding_chat_service.py`, `hr_onboarding_guardrails_service.py`, `hr_onboarding_agent.py`, and `hr_onboarding_guardrails.py`
+  - editor diagnostics reported no errors for edited John guardrails files
+  - no-token Docker build passed for `sam-backend` and `sam-hr-onboarding-agent`; `guardrails-ai==0.10.2` installs and the Hub validator layer is skipped cleanly
+  - `backend/.env` token Docker build passed for `sam-backend` and `sam-hr-onboarding-agent`
+  - backend runtime verification passed with `GUARDRAILS_TOKEN` blank as a container environment variable
+  - optimized Docker build passed with Guardrails Hub validators baked into a pre-`COPY . .` cacheable layer
+  - repeat build showed backend validator layer cache reuse; agent dependency downloads reused the pip cache while the install layer still executed
+  - backend and John agent runtime initialized cheap-first input validators `ProfanityFree`, `DetectPII`, `UnusualPrompt`
+  - backend and John agent runtime initialized cheap-first output validators `ProfanityFree`, `DetectPII`, `LlamaGuard7B`
+  - PII custom response verification passed for email/phone input
+  - fast local PII precheck verified at about `0.1ms` in-container for email/phone input
+  - professional guardrail response verification passed for abusive language, profanity, and PII examples; legitimate HR policy wording such as `workplace policy for abusive conduct` remains allowed
+  - John agent service restarted after LiveAvatar timeout fallback change
+  - LiveAvatar failure root cause observed in Docker logs: LiveAvatar API returned `403` / `Insufficient credits for session`; fallback notification moved after `session.start()` so the frontend receives it reliably
 - Candidates Harvest-ready verification:
   - backend Python compile passed for `hr.py`, `greenhouse_integrations.py`, `greenhouse_service.py`, and `schemas/hr.py`
   - frontend TypeScript check passed
