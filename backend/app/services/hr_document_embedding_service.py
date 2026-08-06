@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from openai import AsyncOpenAI
 from pypdf import PdfReader
 
@@ -24,6 +25,7 @@ CHUNK_SIZE_CHARS = 2_400
 CHUNK_OVERLAP_CHARS = 300
 EMBEDDING_BATCH_SIZE = 32
 INSERT_BATCH_SIZE = 20
+HR_POLICY_CHUNK_SEPARATORS = ["\n\n", "\n", ". ", "; ", " ", ""]
 
 
 def _update_document_status(
@@ -68,8 +70,12 @@ def extract_pdf_text(file_bytes: bytes) -> str:
     return "\n\n".join(pages).strip()
 
 
+def _normalize_document_text(text: str) -> str:
+    return "\n".join(line.rstrip() for line in text.splitlines()).strip()
+
+
 def chunk_document_text(text: str) -> list[str]:
-    normalized = "\n".join(line.rstrip() for line in text.splitlines()).strip()
+    normalized = _normalize_document_text(text)
     if not normalized:
         return []
 
@@ -94,6 +100,22 @@ def chunk_document_text(text: str) -> list[str]:
         start = max(end - CHUNK_OVERLAP_CHARS, start + 1)
 
     return chunks
+
+
+def chunk_hr_policy_document_text(text: str) -> list[str]:
+    normalized = "\n".join(line.rstrip() for line in text.splitlines()).strip()
+    if not normalized:
+        return []
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=CHUNK_SIZE_CHARS,
+        chunk_overlap=CHUNK_OVERLAP_CHARS,
+        length_function=len,
+        separators=HR_POLICY_CHUNK_SEPARATORS,
+        is_separator_regex=False,
+    )
+
+    return [chunk.strip() for chunk in splitter.split_text(normalized) if chunk.strip()]
 
 
 async def _create_embeddings(chunks: list[str]) -> list[list[float]]:
@@ -124,6 +146,7 @@ def _replace_document_chunks(
     document_name: str,
     chunks: list[str],
     embeddings: list[list[float]],
+    chunking_strategy: str,
     metadata: dict[str, Any] | None = None,
 ) -> None:
     (
@@ -143,7 +166,18 @@ def _replace_document_chunks(
             "content": content,
             "embedding": embedding,
             "embedding_model": EMBEDDING_MODEL,
-            "metadata": {"document_name": document_name, **base_metadata},
+            "metadata": {
+                **base_metadata,
+                "business_id": business_id,
+                "document_id": document_id,
+                "document_name": document_name,
+                "category": base_metadata.get("category") or "General",
+                "chunk_index": index,
+                "chunk_size_chars": len(content),
+                "chunking_strategy": chunking_strategy,
+                "chunk_overlap_chars": CHUNK_OVERLAP_CHARS,
+                "embedding_model": EMBEDDING_MODEL,
+            },
         }
         for index, (content, embedding) in enumerate(zip(chunks, embeddings, strict=True))
     ]
@@ -171,13 +205,29 @@ async def process_document_bytes(
             status="processing",
         )
         text = await asyncio.to_thread(extract_pdf_text, file_bytes)
-        chunks = chunk_document_text(text)
+        is_hr_policy_document = (metadata or {}).get("document_scope") == "hr_onboarding"
+        chunking_strategy = (
+            "langchain_recursive_character"
+            if is_hr_policy_document
+            else "custom_character_boundary"
+        )
+        chunks = (
+            chunk_hr_policy_document_text(text)
+            if is_hr_policy_document
+            else chunk_document_text(text)
+        )
         if not chunks:
             raise ValueError("No extractable text was found in this PDF.")
 
         embeddings = await _create_embeddings(chunks)
         if len(embeddings) != len(chunks):
             raise RuntimeError("Embedding response did not match the document chunk count.")
+
+        embedded_at = datetime.now(timezone.utc).isoformat()
+        enriched_metadata = {
+            **(metadata or {}),
+            "embedded_at": embedded_at,
+        }
 
         await asyncio.to_thread(
             _replace_document_chunks,
@@ -186,14 +236,15 @@ async def process_document_bytes(
             document_name=document_name,
             chunks=chunks,
             embeddings=embeddings,
-            metadata=metadata,
+            chunking_strategy=chunking_strategy,
+            metadata=enriched_metadata,
         )
         await asyncio.to_thread(
             _update_document_status,
             document_id,
             business_id,
             status="ready",
-            embedded_at=datetime.now(timezone.utc).isoformat(),
+            embedded_at=embedded_at,
         )
         logger.info(
             "Embedded HR document %s for business %s into %d chunks.",
@@ -234,7 +285,7 @@ async def process_stored_document(
         rows = await asyncio.to_thread(
             lambda: (
                 supabase_admin.table("business_documents")
-                .select("id,business_id,name,file_name,file_path,storage_bucket,document_scope,category,status")
+                .select("id,business_id,name,file_name,file_path,storage_bucket,document_scope,category,status,created_at")
                 .eq("id", document_id)
                 .eq("business_id", business_id)
                 .limit(1)
@@ -270,6 +321,7 @@ async def process_stored_document(
                 "category": document.get("category") or "General",
                 "status": document.get("status") or "published",
                 "storage_bucket": bucket,
+                "document_created_at": document.get("created_at"),
             },
             raise_on_error=True,
         )
@@ -350,6 +402,8 @@ async def retrieve_relevant_hr_policy_chunks(
     *,
     business_id: str,
     query: str,
+    document_id: str | None = None,
+    category: str | None = None,
     match_count: int = 6,
     match_threshold: float = 0.15,
 ) -> list[dict[str, Any]]:
@@ -375,6 +429,8 @@ async def retrieve_relevant_hr_policy_chunks(
             {
                 "query_embedding": query_embedding,
                 "match_business_id": business_id,
+                "match_document_id": document_id,
+                "match_category": category,
                 "match_count": match_count,
                 "match_threshold": match_threshold,
             },
