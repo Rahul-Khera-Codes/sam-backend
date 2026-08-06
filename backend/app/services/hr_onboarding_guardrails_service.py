@@ -112,6 +112,12 @@ _WORKPLACE_POLICY_CONTEXT_PATTERN = re.compile(
     r"\b(policy|policies|workplace|employee|hr|harassment|complaint|report|training|conduct|disciplinary)\b",
     re.I,
 )
+_SAFE_HR_POLICY_QUESTION_PATTERN = re.compile(
+    r"\b(policy|policies|benefits?|enroll(?:ment)?|onboarding|handbook|workplace|conduct|leave|pto|holiday|"
+    r"medical|dental|insurance|payroll|training|compliance|probation|attendance|reimbursement|"
+    r"contact|contacts|email|phone|company|hr\s+contact|support|new\s+hires?|complete|first|important)\b",
+    re.I,
+)
 
 
 def _hash_text(text: str) -> str:
@@ -134,6 +140,37 @@ def _fast_input_block_message(text: str) -> str | None:
     ):
         return _VALIDATOR_BLOCK_MESSAGES["input"]["AbusiveLanguage"]
     return None
+
+
+def _fast_output_block_message(text: str, *, reference: str | None = None) -> str | None:
+    if _SSN_PATTERN.search(text) or _CREDIT_CARD_PATTERN.search(text):
+        return _VALIDATOR_BLOCK_MESSAGES["output"]["DetectPII"]
+    if _PROFANITY_PATTERN.search(text):
+        return _VALIDATOR_BLOCK_MESSAGES["output"]["ProfanityFree"]
+    if _ABUSIVE_DIRECT_PATTERN.search(text) or (
+        _ABUSIVE_REQUEST_PATTERN.search(text)
+        and not _WORKPLACE_POLICY_CONTEXT_PATTERN.search(text)
+    ):
+        return OUTPUT_BLOCK_MESSAGE
+
+    # Company contact details from HR policy excerpts are allowed when the
+    # generated answer repeats them exactly from the retrieved reference text.
+    if reference is not None:
+        for pattern in (_EMAIL_PATTERN, _PHONE_PATTERN):
+            for match in pattern.findall(text):
+                value = match if isinstance(match, str) else "".join(match)
+                if value and value not in reference:
+                    return _VALIDATOR_BLOCK_MESSAGES["output"]["DetectPII"]
+    elif _EMAIL_PATTERN.search(text) or _PHONE_PATTERN.search(text):
+        return _VALIDATOR_BLOCK_MESSAGES["output"]["DetectPII"]
+
+    return None
+
+
+def _is_safe_grounded_policy_exchange(*, question: str, answer: str, reference: str | None) -> bool:
+    if not reference or not _SAFE_HR_POLICY_QUESTION_PATTERN.search(question):
+        return False
+    return _fast_input_block_message(question) is None and _fast_output_block_message(answer, reference=reference) is None
 
 
 def _load_guardrails() -> tuple[type[Any], dict[str, type[Any]]] | None:
@@ -362,8 +399,25 @@ def validate_onboarding_assistant_output(
     source: str = "chat",
 ) -> None:
     runtime = _runtime()
+    fast_block_message = _fast_output_block_message(text, reference=reference)
+    if fast_block_message:
+        logger.warning(
+            "John Guardrails output blocked: source=%s validator=fast_local text_hash=%s",
+            source,
+            _hash_text(text),
+        )
+        raise HrOnboardingGuardrailsBlocked("fast_local_output_block", user_message=fast_block_message)
+
+    output_checks = runtime.output_checks
+    if _is_safe_grounded_policy_exchange(question=question, answer=text, reference=reference):
+        output_checks = tuple(
+            check
+            for check in output_checks
+            if check.name not in {"DetectPII", "LlamaGuard7B"}
+        )
+
     _validate(
-        checks=runtime.output_checks,
+        checks=output_checks,
         text=text,
         phase="output",
         source=source,

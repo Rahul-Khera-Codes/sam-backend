@@ -66,6 +66,7 @@ class OnboardingChatRequest(BaseModel):
     business_id: str
     question: str = Field(min_length=1, max_length=2_000)
     document_id: Optional[str] = None
+    category: Optional[str] = None
 
 
 class OnboardingChatSource(BaseModel):

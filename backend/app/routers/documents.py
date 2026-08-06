@@ -278,6 +278,7 @@ async def upload_hr_policy_document(
             "category": normalized_category,
             "status": "published",
             "storage_bucket": HR_POLICY_DOCUMENT_BUCKET,
+            "document_created_at": inserted.get("created_at"),
         },
     )
 

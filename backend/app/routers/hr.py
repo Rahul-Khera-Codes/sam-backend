@@ -7,6 +7,7 @@ import os
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.core.auth import get_user_id, require_business_access, verify_business_access
@@ -27,7 +28,7 @@ from app.schemas.hr import (
     HrJobPostingUpsertRequest,
 )
 from app.services.hr_drafting_service import generate_hr_draft_assistance
-from app.services.hr_onboarding_chat_service import answer_onboarding_question
+from app.services.hr_onboarding_chat_service import answer_onboarding_question, stream_onboarding_question
 from app.services.greenhouse_service import (
     GreenhouseError,
     advance_harvest_application,
@@ -878,10 +879,32 @@ async def chat_with_hr_onboarding_agent(
             business_id=body.business_id,
             question=body.question.strip(),
             document_id=body.document_id,
+            category=body.category,
         )
     except Exception as exc:
         logger.error("HR onboarding chat failed for business %s: %s", body.business_id, exc)
         raise HTTPException(status_code=502, detail="The HR onboarding assistant is unavailable right now.") from exc
+
+
+@router.post("/onboarding/chat/stream")
+async def stream_chat_with_hr_onboarding_agent(
+    body: OnboardingChatRequest,
+    user_id: str = Depends(get_user_id),
+) -> StreamingResponse:
+    verify_business_access(user_id, body.business_id)
+    return StreamingResponse(
+        stream_onboarding_question(
+            business_id=body.business_id,
+            question=body.question.strip(),
+            document_id=body.document_id,
+            category=body.category,
+        ),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/onboarding/session", response_model=HrOnboardingVoiceSessionResponse)
