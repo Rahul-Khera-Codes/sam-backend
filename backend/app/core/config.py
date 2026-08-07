@@ -92,6 +92,10 @@ class Settings(BaseSettings):
     # App
     environment: str = "development"
     cors_origins: str = "http://localhost:5173,http://localhost:8081,http://localhost:8080"
+    valkey_url: str = "redis://localhost:6379/0"
+    hr_onboarding_cache_enabled: bool = True
+    hr_onboarding_cache_ttl_seconds: int = 3600
+    hr_onboarding_cache_client_name: str = "hr-onboarding-backend"
 
     @property
     def cors_origins_list(self) -> List[str]:

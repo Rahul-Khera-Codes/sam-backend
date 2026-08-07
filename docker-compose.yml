@@ -1,4 +1,26 @@
 services:
+  sam-valkey:
+    image: valkey/valkey:latest
+    container_name: sam-valkey
+    ports:
+      - "6379:6379"
+    command: valkey-server --save "" --appendonly no
+    restart: unless-stopped
+
+  sam-betterdb:
+    image: betterdb/monitor:latest
+    container_name: sam-betterdb
+    ports:
+      - "127.0.0.1:3001:3001"
+    environment:
+      DB_HOST: sam-valkey
+      DB_PORT: "6379"
+      DB_TYPE: valkey
+      STORAGE_TYPE: memory
+    depends_on:
+      - sam-valkey
+    restart: unless-stopped
+
   sam-backend:
     build:
       context: ./backend
@@ -12,8 +34,13 @@ services:
       - ./backend/.env
     environment:
       GUARDRAILS_TOKEN: ""
+      VALKEY_URL: redis://sam-valkey:6379/0
+      HR_ONBOARDING_CACHE_TTL_SECONDS: "3600"
+      HR_ONBOARDING_CACHE_CLIENT_NAME: hr-onboarding-backend
     volumes:
       - ./backend:/app
+    depends_on:
+      - sam-valkey
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     restart: unless-stopped
 
@@ -50,8 +77,14 @@ services:
       - "8004:8001"
     env_file:
       - ./agent/.env.local
+    environment:
+      VALKEY_URL: redis://sam-valkey:6379/0
+      HR_ONBOARDING_CACHE_TTL_SECONDS: "3600"
+      HR_ONBOARDING_CACHE_CLIENT_NAME: hr-onboarding-voice-agent
     volumes:
       - ./agent:/app
+    depends_on:
+      - sam-valkey
     command: python hr_onboarding_agent.py dev
     restart: unless-stopped
 

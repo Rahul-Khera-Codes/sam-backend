@@ -11,11 +11,18 @@ from openai import AsyncOpenAI
 from app.core.config import settings
 from app.schemas.documents import OnboardingChatResponse, OnboardingChatSource
 from app.services.hr_document_embedding_service import retrieve_relevant_hr_policy_chunks
+from app.services.hr_onboarding_cache_service import (
+    build_hr_onboarding_cache_key,
+    get_cached_hr_onboarding_response,
+    get_hr_policy_document_fingerprint,
+    set_cached_hr_onboarding_response,
+)
 from app.services.hr_onboarding_guardrails_service import (
     HrOnboardingGuardrailsBlocked,
     validate_onboarding_assistant_output,
     validate_onboarding_user_input,
 )
+from app.services.hr_onboarding_reranker_service import rerank_hr_policy_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +33,9 @@ ACTIVE_DOCUMENT_MAX_SOURCES = 3
 ACTIVE_DOCUMENT_MATCH_THRESHOLD = 0.05
 BROAD_MATCH_COUNT = 10
 CATEGORY_MATCH_COUNT = 8
+RERANKER_CANDIDATE_COUNT = 12
+LOW_CONFIDENCE_SIMILARITY = 0.35
+CLOSE_SIMILARITY_MARGIN = 0.03
 
 _GREETING_PATTERN = re.compile(
     r"^(hi|hello|hey|hello there|hi there|hey there|good morning|good afternoon|good evening|greetings)[.!?\s]*$",
@@ -93,6 +103,39 @@ def _format_sources(matches: list[dict]) -> list[OnboardingChatSource]:
     return sources
 
 
+def _sources_from_cached_payload(payload: dict) -> list[OnboardingChatSource]:
+    sources: list[OnboardingChatSource] = []
+    for source in payload.get("sources") or []:
+        if not isinstance(source, dict):
+            continue
+        try:
+            sources.append(OnboardingChatSource(**source))
+        except Exception:
+            logger.warning("Skipping malformed cached onboarding source: %s", source)
+    return sources
+
+
+async def _build_cache_key(
+    *,
+    business_id: str,
+    question: str,
+    document_id: str | None,
+    category: str | None,
+    channel: str,
+) -> str | None:
+    document_fingerprint = await get_hr_policy_document_fingerprint(business_id)
+    if not document_fingerprint:
+        return None
+    return build_hr_onboarding_cache_key(
+        business_id=business_id,
+        question=question,
+        document_id=document_id,
+        category=category,
+        document_fingerprint=document_fingerprint,
+        channel=channel,
+    )
+
+
 def _sse_event(event: str, payload: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=True)}\n\n"
 
@@ -110,6 +153,28 @@ def _infer_category_from_question(question: str) -> str | None:
 
 def _is_broad_policy_question(question: str) -> bool:
     return bool(_BROAD_QUERY_PATTERN.search(question))
+
+
+def _should_rerank_matches(
+    *,
+    question: str,
+    matches: list[dict],
+    inferred_category: str | None,
+) -> bool:
+    if len(matches) <= 1:
+        return False
+    if _is_broad_policy_question(question) or inferred_category:
+        return True
+
+    similarities = sorted(
+        (float(match.get("similarity") or 0) for match in matches),
+        reverse=True,
+    )
+    if not similarities:
+        return False
+    if similarities[0] < LOW_CONFIDENCE_SIMILARITY:
+        return True
+    return len(similarities) > 1 and similarities[0] - similarities[1] <= CLOSE_SIMILARITY_MARGIN
 
 
 async def _retrieve_onboarding_matches(
@@ -155,6 +220,20 @@ async def _retrieve_onboarding_matches(
         if chunk_id:
             seen_chunk_ids.add(chunk_id)
         merged_matches.append(match)
+    if _should_rerank_matches(
+        question=question,
+        matches=merged_matches,
+        inferred_category=inferred_category,
+    ):
+        try:
+            return await asyncio.to_thread(
+                rerank_hr_policy_chunks,
+                query=question,
+                matches=merged_matches,
+                max_candidates=RERANKER_CANDIDATE_COUNT,
+            )
+        except Exception as exc:
+            logger.warning("HR onboarding reranker unavailable; using vector order: %s", exc)
     return merged_matches
 
 
@@ -195,20 +274,32 @@ async def answer_onboarding_question(
     input_validation_task = asyncio.create_task(
         asyncio.to_thread(validate_onboarding_user_input, question, source="typed_chat")
     )
-    try:
-        matches = await _retrieve_onboarding_matches(
-            business_id=business_id,
-            question=question,
-            document_id=filtered_document_id,
-            category=filtered_category,
-        )
-    except Exception:
-        input_validation_task.cancel()
-        raise
+    cache_key = await _build_cache_key(
+        business_id=business_id,
+        question=question,
+        document_id=filtered_document_id,
+        category=filtered_category,
+        channel="typed",
+    )
+    cached_response = await get_cached_hr_onboarding_response(cache_key) if cache_key else None
     try:
         await input_validation_task
     except HrOnboardingGuardrailsBlocked as exc:
         return OnboardingChatResponse(answer=exc.user_message, sources=[])
+    if cached_response:
+        cached_answer = str(cached_response.get("answer") or "").strip()
+        if cached_answer:
+            return OnboardingChatResponse(
+                answer=cached_answer,
+                sources=_sources_from_cached_payload(cached_response),
+            )
+
+    matches = await _retrieve_onboarding_matches(
+        business_id=business_id,
+        question=question,
+        document_id=filtered_document_id,
+        category=filtered_category,
+    )
     if not matches:
         return OnboardingChatResponse(
             answer=(
@@ -275,7 +366,15 @@ async def answer_onboarding_question(
     except HrOnboardingGuardrailsBlocked as exc:
         return OnboardingChatResponse(answer=exc.user_message, sources=_format_sources(matches))
 
-    return OnboardingChatResponse(answer=answer, sources=_format_sources(matches))
+    sources = _format_sources(matches)
+    if cache_key:
+        await set_cached_hr_onboarding_response(
+            cache_key,
+            answer=answer,
+            sources=[source.model_dump() for source in sources],
+        )
+
+    return OnboardingChatResponse(answer=answer, sources=sources)
 
 
 async def stream_onboarding_question(
@@ -298,6 +397,33 @@ async def stream_onboarding_question(
         input_validation_task = asyncio.create_task(
             asyncio.to_thread(validate_onboarding_user_input, question, source="typed_chat_stream")
         )
+        cache_key = await _build_cache_key(
+            business_id=business_id,
+            question=question,
+            document_id=filtered_document_id,
+            category=filtered_category,
+            channel="typed",
+        )
+        cached_response = await get_cached_hr_onboarding_response(cache_key) if cache_key else None
+        try:
+            await input_validation_task
+        except HrOnboardingGuardrailsBlocked as exc:
+            yield _sse_event("sources", {"sources": []})
+            yield _sse_event("token", {"text": exc.user_message})
+            yield _sse_event("done", {})
+            return
+        if cached_response:
+            cached_answer = str(cached_response.get("answer") or "").strip()
+            if cached_answer:
+                cached_sources = _sources_from_cached_payload(cached_response)
+                yield _sse_event(
+                    "sources",
+                    {"sources": [source.model_dump() for source in cached_sources]},
+                )
+                yield _sse_event("token", {"text": cached_answer})
+                yield _sse_event("done", {"cached": True})
+                return
+
         try:
             matches = await _retrieve_onboarding_matches(
                 business_id=business_id,
@@ -308,13 +434,6 @@ async def stream_onboarding_question(
         except Exception:
             input_validation_task.cancel()
             raise
-        try:
-            await input_validation_task
-        except HrOnboardingGuardrailsBlocked as exc:
-            yield _sse_event("sources", {"sources": []})
-            yield _sse_event("token", {"text": exc.user_message})
-            yield _sse_event("done", {})
-            return
 
         if not matches:
             yield _sse_event("sources", {"sources": []})
@@ -331,9 +450,10 @@ async def stream_onboarding_question(
             return
 
         source_payload = _build_source_payload(matches)
+        sources = _format_sources(matches)
         yield _sse_event(
             "sources",
-            {"sources": [source.model_dump() for source in _format_sources(matches)]},
+            {"sources": [source.model_dump() for source in sources]},
         )
 
         client = AsyncOpenAI(
@@ -395,6 +515,13 @@ async def stream_onboarding_question(
         except HrOnboardingGuardrailsBlocked as exc:
             yield _sse_event("error", {"message": exc.user_message})
             return
+
+        if cache_key:
+            await set_cached_hr_onboarding_response(
+                cache_key,
+                answer=answer,
+                sources=[source.model_dump() for source in sources],
+            )
 
         yield _sse_event("done", {})
     except Exception as exc:

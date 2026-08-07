@@ -16,6 +16,8 @@ livekit-api==1.1.0
 openai[realtime]>=2.22.0
 numpy>=1.24.0
 langchain-text-splitters==0.3.11
+sentence-transformers==5.1.2
+redis==7.0.1
 guardrails-ai==0.10.2
 
 # AWS S3 (optional - for recordings if not using Supabase Storage)
