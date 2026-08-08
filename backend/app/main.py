@@ -34,6 +34,7 @@ from app.routers import (
     marketing_integrations as marketing_integrations_router,
     report_scheduler as report_scheduler_router,
     business_branding as business_branding_router,
+    command_center_mock as command_center_mock_router,
 )
 from app.services.scheduler_service import start_scheduler, stop_scheduler
 
@@ -90,6 +91,7 @@ app.include_router(marketing_router.router)
 app.include_router(marketing_integrations_router.router)
 app.include_router(report_scheduler_router.router)
 app.include_router(business_branding_router.router)
+app.include_router(command_center_mock_router.router)
 
 
 # ── Health check ──────────────────────────────
