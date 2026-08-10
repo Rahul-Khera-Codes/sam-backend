@@ -1,0 +1,14 @@
+# Developer-only HR onboarding Ragas eval dependencies.
+# Use Python 3.11, matching the backend Docker image. Python 3.9 cannot install
+# the backend's pinned guardrails-ai version.
+ragas
+python-dotenv==1.0.1
+pydantic>=2.10,<3
+pydantic-settings>=2.6,<3
+supabase>=2.28.0
+openai[realtime]>=2.22.0
+langchain-text-splitters==0.3.11
+pypdf>=5.0.0,<6
+sentence-transformers==5.1.2
+redis==7.0.1
+guardrails-ai==0.10.2
