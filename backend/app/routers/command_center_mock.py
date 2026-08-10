@@ -238,16 +238,6 @@ def _monday_kickoff() -> dict:
     }
 
 
-@router.get("/mission-control/dashboard")
-async def get_mission_control_dashboard(business_id: str | None = Query(default=None)):
-    return _mission_dashboard()
-
-
-@router.get("/mission-control/companies")
-async def get_mission_control_companies(business_id: str | None = Query(default=None)):
-    return _companies()
-
-
 @router.get("/sales-command-center/dashboard")
 async def get_sales_command_center_dashboard(business_id: str | None = Query(default=None)):
     return _sales_dashboard()

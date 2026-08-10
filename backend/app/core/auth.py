@@ -166,3 +166,28 @@ def require_role(*allowed_roles: str):
         return role_row.data[0]["business_id"]
 
     return _check
+
+
+def verify_platform_super_admin(user_id: str) -> None:
+    """Verify that the authenticated user has platform Super Admin privileges."""
+    from app.core.supabase import supabase_admin
+
+    role_row = (
+        supabase_admin.table("user_roles")
+        .select("id")
+        .eq("user_id", user_id)
+        .eq("role", "super_admin")
+        .limit(1)
+        .execute()
+    )
+    if not role_row.data:
+        raise HTTPException(
+            status_code=403,
+            detail="Mission Control requires Super Admin access",
+        )
+
+
+def require_platform_super_admin(user_id: str = Depends(get_user_id)) -> str:
+    """FastAPI dependency that returns the actor user id after Super Admin validation."""
+    verify_platform_super_admin(user_id)
+    return user_id
