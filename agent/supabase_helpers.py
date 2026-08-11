@@ -89,7 +89,7 @@ def _fetch_services(supabase, business_id: str) -> list[dict]:
     try:
         r = (
             supabase.table("services")
-            .select("id, name, description, duration_minutes, price")
+            .select("id, name, description, duration_minutes, price, is_onsite")
             .eq("business_id", business_id)
             .eq("is_active", True)
             .execute()
@@ -622,7 +622,7 @@ def _fetch_services_for_location(
                 return []
             sr = (
                 supabase.table("services")
-                .select("id, name, description, duration_minutes, price")
+                .select("id, name, description, duration_minutes, price, is_onsite")
                 .eq("business_id", business_id)
                 .eq("is_active", True)
                 .in_("id", service_ids)

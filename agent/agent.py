@@ -221,6 +221,7 @@ class Assistant(Agent):
                 parts.append(f"${price:.2f}")
             elif price == -1:
                 parts.append("price varies")
+            parts.append("on-site" if svc.get("is_onsite", True) else "off-site/customer-location; requires customer address")
             if desc:
                 parts.append(desc)
             lines.append(" — ".join(parts))
@@ -473,11 +474,17 @@ class Assistant(Agent):
         date: str,
         time: str,
         notes: str = "",
+        appointment_address_street: str = "",
+        appointment_address_city: str = "",
+        appointment_address_state: str = "",
+        appointment_address_postal_code: str = "",
+        appointment_address_country: str = "",
     ) -> str:
         """
         Book an appointment after confirming all details with the customer.
         date: YYYY-MM-DD  |  time: HH:MM (24h, e.g. 14:30)
         Always collect client_email — it is required to send a confirmation email.
+        For off-site/customer-location services, collect street, city, state/province, postal code, and country.
         Always repeat details back to the customer and get verbal confirmation before calling this.
         """
         if not self._supabase or not self._business_id:
@@ -493,6 +500,30 @@ class Assistant(Agent):
         duration_str = str(svc["duration_minutes"]) if svc and svc.get("duration_minutes") else "60"
         service_label = svc["name"] if svc else service_name
         location_label = loc["name"] if loc else location_name
+        appointment_is_onsite = bool(svc.get("is_onsite", True)) if svc else True
+        address_fields = {
+            "appointment_address_street": appointment_address_street.strip(),
+            "appointment_address_city": appointment_address_city.strip(),
+            "appointment_address_state": appointment_address_state.strip(),
+            "appointment_address_postal_code": appointment_address_postal_code.strip(),
+            "appointment_address_country": appointment_address_country.strip(),
+        }
+        if not appointment_is_onsite:
+            missing = [
+                label for key, label in {
+                    "appointment_address_street": "street address",
+                    "appointment_address_city": "city",
+                    "appointment_address_state": "state or province",
+                    "appointment_address_postal_code": "postal code",
+                    "appointment_address_country": "country",
+                }.items()
+                if not address_fields[key]
+            ]
+            if missing:
+                return (
+                    f"{service_label} is an off-site service, so I need the customer's "
+                    f"{', '.join(missing)} before booking."
+                )
 
         # Guard 1: date/time/business-hours validation
         booking_location_id = (loc["id"] if loc else None) or self._location_id
@@ -532,6 +563,12 @@ class Assistant(Agent):
                 "duration": duration_str,
                 "notes": combined_notes,
                 "created_by": staff["user_id"],
+                "appointment_is_onsite": appointment_is_onsite,
+                "appointment_address_street": None if appointment_is_onsite else address_fields["appointment_address_street"],
+                "appointment_address_city": None if appointment_is_onsite else address_fields["appointment_address_city"],
+                "appointment_address_state": None if appointment_is_onsite else address_fields["appointment_address_state"],
+                "appointment_address_postal_code": None if appointment_is_onsite else address_fields["appointment_address_postal_code"],
+                "appointment_address_country": None if appointment_is_onsite else address_fields["appointment_address_country"],
             }
             r = self._supabase.table("appointments").insert(row).execute()
             data = getattr(r, "data", None) or []
@@ -639,12 +676,16 @@ class Assistant(Agent):
                     except Exception:
                         pass
 
+                address_confirmation = ""
+                if not appointment_is_onsite:
+                    full_address = ", ".join(address_fields.values())
+                    address_confirmation = f" This is an off-site appointment at {full_address}."
                 return (
                     f"Appointment confirmed! "
                     f"{client_name} is booked for {service_label} "
                     f"with {staff['name']} at {location_label} "
                     f"on {date} at {_fmt_time_12h(time)}. "
-                    f"Confirmation reference: {short_id}."
+                    f"Confirmation reference: {short_id}.{address_confirmation}"
                 )
             return "The appointment was saved, but I could not retrieve the confirmation ID. Please note down the details."
         except Exception as e:

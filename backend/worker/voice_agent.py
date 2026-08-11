@@ -169,6 +169,7 @@ class VoiceAgentWorker:
         try:
             company_name = "your company"
             location_phrase = ""
+            services_prompt = ""
 
             biz_result = (
                 supabase_admin.table("businesses")
@@ -214,13 +215,54 @@ class VoiceAgentWorker:
                     if spoken:
                         location_phrase = f" in {spoken}"
 
+            services_query = (
+                supabase_admin.table("services")
+                .select("id, name, is_onsite")
+                .eq("business_id", self.business_id)
+                .eq("is_active", True)
+                .order("name")
+            )
+            services_result = services_query.execute()
+            services_data = getattr(services_result, "data", None) or []
+            if location_id and services_data:
+                location_services = (
+                    supabase_admin.table("location_services")
+                    .select("service_id")
+                    .eq("location_id", location_id)
+                    .eq("is_active", True)
+                    .execute()
+                )
+                allowed_ids = {
+                    row.get("service_id")
+                    for row in (getattr(location_services, "data", None) or [])
+                    if isinstance(row, dict)
+                }
+                if allowed_ids:
+                    services_data = [
+                        service for service in services_data
+                        if isinstance(service, dict) and service.get("id") in allowed_ids
+                    ]
+            service_lines = []
+            for service in services_data:
+                if not isinstance(service, dict):
+                    continue
+                location_type = "on-site" if service.get("is_onsite", True) else "off-site/customer-location"
+                service_lines.append(f"- {service.get('name')}: {location_type}")
+            if service_lines:
+                services_prompt = "\nConfigured services:\n" + "\n".join(service_lines)
+
             system_prompt = f"""
 You are the AI phone receptionist for {company_name}{location_phrase}.
 Always start the call with a short, friendly welcome that includes the business name{', and the location if helpful' if location_phrase else ''}.
 Example: \"Thank you for calling {company_name}{location_phrase}, how can I help you today?\"
+{services_prompt}
 
 Then continue the conversation following these rules:
 {SYSTEM_PROMPT}
+When booking an appointment, ask which service the customer needs before collecting address details.
+If the selected service is off-site/customer-location, ask for the customer's appointment address and capture it as separate fields: street address, city, state or province, postal code, and country.
+If the selected service is on-site, do not ask for a customer address unless the customer offers it or the business workflow requires it.
+Confirm whether the appointment is on-site or off-site when summarizing the booking, and repeat the address back for off-site appointments.
 """
         except Exception as e:
             logger.warning(f"[Worker] Failed to build business-aware prompt, falling back to default: {e}")

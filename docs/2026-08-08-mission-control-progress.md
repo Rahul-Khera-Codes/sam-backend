@@ -25,6 +25,7 @@ This first pass is UI-only and uses a typed mock backend layer. The mock service
 - Mission Control route group added under `/dashboard/mission-control`.
 - Nested Mission Control layout added with secondary navigation.
 - Main sidebar now includes a collapsible Mission Control group.
+- Duplicate internal Mission Control sidebar removed; Mission Control navigation now appears only once in the main left sidebar with the full section list.
 - Role permission entries added for Mission Control pages.
 - Default static role restrictions limit Mission Control pages to Admin.
 - Typed mock backend service added with 25 companies, KPI data, 90 days of time-series data, usage rankings, health scores, and AI insights.
