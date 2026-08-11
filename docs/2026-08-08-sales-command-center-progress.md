@@ -25,6 +25,7 @@ This first pass is UI-only and uses a typed mock backend layer. The mock service
 - Sales Command Center route group added under `/dashboard/sales-command-center`.
 - Nested Sales Command Center layout added with secondary navigation.
 - Main sidebar now includes a collapsible Sales Manager group.
+- Duplicate internal Sales Manager sidebar removed; Sales Manager navigation now appears only once in the main left sidebar with the full section list.
 - Role permission entries added for Sales Manager pages.
 - Default static role restrictions allow Admin and Manager access to Sales Manager pages.
 - Typed mock backend service added with 6 sales reps, 40 pipeline deals, meeting cards, action items, coaching notes, weekly targets, and 90 days of time-series data.

@@ -182,6 +182,24 @@ def _check_double_booking(
         return True
 
 
+def _validate_offsite_address(values: dict) -> None:
+    if values.get("appointment_is_onsite", True):
+        return
+    required = {
+        "appointment_address_street": "street address",
+        "appointment_address_city": "city",
+        "appointment_address_state": "state/province",
+        "appointment_address_postal_code": "postal code",
+        "appointment_address_country": "country",
+    }
+    missing = [label for key, label in required.items() if not (values.get(key) or "").strip()]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Off-site appointments require address details: {', '.join(missing)}.",
+        )
+
+
 def _get_superadmin_id(business_id: str) -> Optional[str]:
     try:
         r = (
@@ -281,7 +299,14 @@ async def create_appointment(
         "duration": str(req.duration or 60),
         "notes": req.notes or "",
         "created_by": created_by,
+        "appointment_is_onsite": req.appointment_is_onsite,
+        "appointment_address_street": req.appointment_address_street,
+        "appointment_address_city": req.appointment_address_city,
+        "appointment_address_state": req.appointment_address_state,
+        "appointment_address_postal_code": req.appointment_address_postal_code,
+        "appointment_address_country": req.appointment_address_country,
     }
+    _validate_offsite_address(row)
 
     r = supabase_admin.table("appointments").insert(row).execute()
     if not r.data:
@@ -451,6 +476,13 @@ async def update_appointment(
     appt = r.data[0]
 
     updates: dict = {}
+    fields_set = req.model_fields_set
+    if req.client_name is not None:
+        updates["client_name"] = req.client_name
+    if req.client_phone is not None:
+        updates["client_phone"] = req.client_phone
+    if req.client_email is not None:
+        updates["client_email"] = req.client_email
     if req.appointment_date is not None:
         updates["appointment_date"] = req.appointment_date
     if req.appointment_time is not None:
@@ -463,6 +495,18 @@ async def update_appointment(
         updates["duration"] = str(req.duration)
     if req.notes is not None:
         updates["notes"] = req.notes
+    if req.appointment_is_onsite is not None:
+        updates["appointment_is_onsite"] = req.appointment_is_onsite
+    if "appointment_address_street" in fields_set:
+        updates["appointment_address_street"] = req.appointment_address_street
+    if "appointment_address_city" in fields_set:
+        updates["appointment_address_city"] = req.appointment_address_city
+    if "appointment_address_state" in fields_set:
+        updates["appointment_address_state"] = req.appointment_address_state
+    if "appointment_address_postal_code" in fields_set:
+        updates["appointment_address_postal_code"] = req.appointment_address_postal_code
+    if "appointment_address_country" in fields_set:
+        updates["appointment_address_country"] = req.appointment_address_country
 
     if not updates:
         raise HTTPException(status_code=400, detail="No changes provided.")
@@ -478,6 +522,8 @@ async def update_appointment(
                 status_code=409,
                 detail="That time slot is already booked. Please choose a different time.",
             )
+
+    _validate_offsite_address({**appt, **updates})
 
     supabase_admin.table("appointments").update(updates).eq("id", appointment_id).execute()
 

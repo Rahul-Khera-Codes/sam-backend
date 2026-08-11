@@ -16,16 +16,31 @@ class CreateAppointmentRequest(BaseModel):
     appointment_time: str   # HH:MM 24h
     duration: Optional[int] = None
     notes: Optional[str] = None
+    appointment_is_onsite: bool = True
+    appointment_address_street: Optional[str] = None
+    appointment_address_city: Optional[str] = None
+    appointment_address_state: Optional[str] = None
+    appointment_address_postal_code: Optional[str] = None
+    appointment_address_country: Optional[str] = None
 
 
 class UpdateAppointmentRequest(BaseModel):
     business_id: str
+    client_name: Optional[str] = None
+    client_phone: Optional[str] = None
+    client_email: Optional[str] = None
     appointment_date: Optional[str] = None   # YYYY-MM-DD
     appointment_time: Optional[str] = None   # HH:MM 24h
     assigned_user_id: Optional[str] = None
     service: Optional[str] = None
     duration: Optional[int] = None
     notes: Optional[str] = None
+    appointment_is_onsite: Optional[bool] = None
+    appointment_address_street: Optional[str] = None
+    appointment_address_city: Optional[str] = None
+    appointment_address_state: Optional[str] = None
+    appointment_address_postal_code: Optional[str] = None
+    appointment_address_country: Optional[str] = None
 
 
 VALID_APPOINTMENT_STATUSES = {"confirmed", "checked_in", "no_show", "cancelled"}
@@ -50,6 +65,12 @@ class AppointmentResponse(BaseModel):
     appointment_time: str
     duration: Optional[int] = None
     notes: Optional[str] = None
+    appointment_is_onsite: Optional[bool] = True
+    appointment_address_street: Optional[str] = None
+    appointment_address_city: Optional[str] = None
+    appointment_address_state: Optional[str] = None
+    appointment_address_postal_code: Optional[str] = None
+    appointment_address_country: Optional[str] = None
     status: Optional[str] = None
     confirmation_ref: Optional[str] = None
     created_at: Optional[str] = None
