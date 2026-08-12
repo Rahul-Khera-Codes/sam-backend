@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List, Any, Dict
 from datetime import datetime
 
@@ -133,6 +133,34 @@ class CommunicationSettingsResponse(BaseModel):
 
 class UpdateCommunicationSettingsRequest(BaseModel):
     settings: List[CommunicationSettingItem]
+
+
+# ── Tax Settings ───────────────────────────────
+
+class BusinessTaxConfigResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    business_id: str
+    name: str
+    rate_percent: float
+    registration_number: Optional[str] = None
+    is_active: bool
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class CreateBusinessTaxConfigRequest(BaseModel):
+    name: str
+    rate_percent: float
+    registration_number: str
+    is_active: bool = True
+
+
+class UpdateBusinessTaxConfigRequest(BaseModel):
+    name: Optional[str] = None
+    rate_percent: Optional[float] = None
+    registration_number: Optional[str] = None
+    is_active: Optional[bool] = None
 
 
 # ── Analytics ─────────────────────────────────

@@ -12,6 +12,9 @@ from app.schemas.settings import (
     UpdateAgentScheduleRequest,
     CommunicationSettingsResponse,
     UpdateCommunicationSettingsRequest,
+    BusinessTaxConfigResponse,
+    CreateBusinessTaxConfigRequest,
+    UpdateBusinessTaxConfigRequest,
 )
 from datetime import datetime, timezone
 
@@ -415,6 +418,126 @@ async def update_communication_settings(
             supabase_admin.table("communication_settings").insert(row).execute()
 
     return {"success": True, "updated": len(body.settings)}
+
+
+# ── Tax Settings ───────────────────────────────────────────────────────────────
+
+@router.get("/taxes", response_model=list[BusinessTaxConfigResponse])
+async def list_tax_configs(
+    business_id: str,
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    result = (
+        supabase_admin.table("business_tax_configs")
+        .select("*")
+        .eq("business_id", business_id)
+        .order("name")
+        .execute()
+    )
+    return result.data or []
+
+
+@router.post("/taxes", response_model=BusinessTaxConfigResponse)
+async def create_tax_config(
+    business_id: str,
+    body: CreateBusinessTaxConfigRequest,
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Tax name is required")
+    if body.rate_percent < 0:
+        raise HTTPException(status_code=400, detail="Tax rate cannot be negative")
+    registration_number = body.registration_number.strip()
+    if not registration_number:
+        raise HTTPException(status_code=400, detail="GST or tax registration number is required")
+
+    result = (
+        supabase_admin.table("business_tax_configs")
+        .insert({
+            "business_id": business_id,
+            "name": name,
+            "rate_percent": body.rate_percent,
+            "registration_number": registration_number,
+            "is_active": body.is_active,
+        })
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to create tax")
+    return result.data[0]
+
+
+@router.patch("/taxes/{tax_id}", response_model=BusinessTaxConfigResponse)
+async def update_tax_config(
+    tax_id: str,
+    business_id: str,
+    body: UpdateBusinessTaxConfigRequest,
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    updates = {}
+    if "name" in body.model_fields_set:
+        name = (body.name or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Tax name is required")
+        updates["name"] = name
+    if "rate_percent" in body.model_fields_set:
+        if body.rate_percent is None or body.rate_percent < 0:
+            raise HTTPException(status_code=400, detail="Tax rate cannot be negative")
+        updates["rate_percent"] = body.rate_percent
+    if "registration_number" in body.model_fields_set:
+        registration_number = (body.registration_number or "").strip()
+        if not registration_number:
+            raise HTTPException(status_code=400, detail="GST or tax registration number is required")
+        updates["registration_number"] = registration_number
+    if "is_active" in body.model_fields_set:
+        updates["is_active"] = body.is_active
+
+    if not updates:
+        current = (
+            supabase_admin.table("business_tax_configs")
+            .select("*")
+            .eq("id", tax_id)
+            .eq("business_id", business_id)
+            .limit(1)
+            .execute()
+        )
+        if not current.data:
+            raise HTTPException(status_code=404, detail="Tax not found")
+        return current.data[0]
+
+    result = (
+        supabase_admin.table("business_tax_configs")
+        .update(updates)
+        .eq("id", tax_id)
+        .eq("business_id", business_id)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Tax not found")
+    return result.data[0]
+
+
+@router.delete("/taxes/{tax_id}")
+async def delete_tax_config(
+    tax_id: str,
+    business_id: str,
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    result = (
+        supabase_admin.table("business_tax_configs")
+        .delete()
+        .eq("id", tax_id)
+        .eq("business_id", business_id)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Tax not found")
+    return {"deleted": True}
 
 
 # ── POST /settings/business/deactivate ───────────────────────────────────────
