@@ -1,7 +1,7 @@
 # backend/app/schemas/appointments.py
 from __future__ import annotations
-from typing import Optional
-from pydantic import BaseModel, ConfigDict
+from typing import Literal, Optional
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CreateAppointmentRequest(BaseModel):
@@ -80,3 +80,45 @@ class CancelAppointmentResponse(BaseModel):
     id: str
     status: str   # "cancelled"
     message: str
+
+
+PaymentStatus = Literal["pending", "paid", "unpaid", "refunded"]
+PaymentType = Literal["cash", "credit_card", "debit_card", "e_transfer", "other"]
+
+
+class AppointmentPaymentLineItem(BaseModel):
+    service_id: Optional[str] = None
+    service_name: str
+    price: Optional[float] = None
+    quantity: int = 1
+
+
+class SaveAppointmentPaymentRequest(BaseModel):
+    business_id: str
+    location_id: Optional[str] = None
+    status: PaymentStatus = "pending"
+    payment_type: Optional[PaymentType] = None
+    line_items: list[AppointmentPaymentLineItem]
+    tax_config_ids: list[str] = Field(default_factory=list)
+    tip_amount: float = 0
+
+
+class AppointmentPaymentResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    appointment_id: str
+    business_id: str
+    location_id: Optional[str] = None
+    status: PaymentStatus
+    payment_type: Optional[PaymentType] = None
+    line_items: list[dict]
+    selected_taxes: list[dict]
+    subtotal: float
+    tax_total: float
+    tip_amount: float
+    grand_total: float
+    paid_at: Optional[str] = None
+    created_by: Optional[str] = None
+    updated_by: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None

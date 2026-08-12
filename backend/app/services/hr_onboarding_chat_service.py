@@ -34,6 +34,11 @@ ACTIVE_DOCUMENT_MATCH_THRESHOLD = 0.05
 BROAD_MATCH_COUNT = 10
 CATEGORY_MATCH_COUNT = 8
 RERANKER_CANDIDATE_COUNT = 12
+FINAL_RERANKED_MATCH_COUNT = 8
+BROAD_FINAL_RERANKED_MATCH_COUNT = 10
+MIN_RERANKED_MATCH_COUNT = 3
+MIN_BROAD_RERANKED_MATCH_COUNT = 5
+RERANKER_SCORE_THRESHOLD = -4.0
 LOW_CONFIDENCE_SIMILARITY = 0.35
 CLOSE_SIMILARITY_MARGIN = 0.03
 
@@ -177,6 +182,44 @@ def _should_rerank_matches(
     return len(similarities) > 1 and similarities[0] - similarities[1] <= CLOSE_SIMILARITY_MARGIN
 
 
+def _final_match_limit(*, question: str, inferred_category: str | None) -> int:
+    if _is_broad_policy_question(question) or inferred_category:
+        return BROAD_FINAL_RERANKED_MATCH_COUNT
+    return FINAL_RERANKED_MATCH_COUNT
+
+
+def _minimum_reranked_match_count(*, question: str, inferred_category: str | None) -> int:
+    if _is_broad_policy_question(question) or inferred_category:
+        return MIN_BROAD_RERANKED_MATCH_COUNT
+    return MIN_RERANKED_MATCH_COUNT
+
+
+def _select_final_matches(
+    *,
+    question: str,
+    matches: list[dict],
+    inferred_category: str | None,
+    used_reranker: bool,
+) -> list[dict]:
+    limit = _final_match_limit(question=question, inferred_category=inferred_category)
+    limited_matches = matches[:limit]
+    if not used_reranker:
+        return limited_matches
+
+    thresholded_matches = [
+        match
+        for match in limited_matches
+        if float(match.get("reranker_score") or 0) >= RERANKER_SCORE_THRESHOLD
+    ]
+    minimum_count = min(
+        _minimum_reranked_match_count(question=question, inferred_category=inferred_category),
+        len(limited_matches),
+    )
+    if len(thresholded_matches) < minimum_count:
+        return limited_matches[:minimum_count]
+    return thresholded_matches
+
+
 async def _retrieve_onboarding_matches(
     *,
     business_id: str,
@@ -220,21 +263,29 @@ async def _retrieve_onboarding_matches(
         if chunk_id:
             seen_chunk_ids.add(chunk_id)
         merged_matches.append(match)
+    used_reranker = False
+    selected_matches = merged_matches
     if _should_rerank_matches(
         question=question,
         matches=merged_matches,
         inferred_category=inferred_category,
     ):
         try:
-            return await asyncio.to_thread(
+            selected_matches = await asyncio.to_thread(
                 rerank_hr_policy_chunks,
                 query=question,
                 matches=merged_matches,
                 max_candidates=RERANKER_CANDIDATE_COUNT,
             )
+            used_reranker = True
         except Exception as exc:
             logger.warning("HR onboarding reranker unavailable; using vector order: %s", exc)
-    return merged_matches
+    return _select_final_matches(
+        question=question,
+        matches=selected_matches,
+        inferred_category=inferred_category,
+        used_reranker=used_reranker,
+    )
 
 
 def _build_source_payload(matches: list[dict]) -> list[dict[str, str]]:
