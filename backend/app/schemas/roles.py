@@ -29,5 +29,11 @@ class RolePermissionsResponse(BaseModel):
     permissions: list[PagePermission]
 
 
+class UserPermissionsResponse(BaseModel):
+    user_id: str
+    business_id: str
+    permissions: list[PagePermission]
+
+
 class UpdatePermissionsRequest(BaseModel):
     permissions: list[PagePermission]

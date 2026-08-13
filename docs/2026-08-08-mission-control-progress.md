@@ -27,7 +27,7 @@ This first pass is UI-only and uses a typed mock backend layer. The mock service
 - Main sidebar now includes a collapsible Mission Control group.
 - Duplicate internal Mission Control sidebar removed; Mission Control navigation now appears only once in the main left sidebar with the full section list.
 - Role permission entries added for Mission Control pages.
-- Default static role restrictions limit Mission Control pages to Admin.
+- Default static role restrictions limit Mission Control pages to Super Admin.
 - Typed mock backend service added with 25 companies, KPI data, 90 days of time-series data, usage rankings, health scores, and AI insights.
 - Mock backend endpoints added in `sam-backend/backend/app/routers/command_center_mock.py`:
   - `GET /mission-control/dashboard`
@@ -51,17 +51,36 @@ This first pass is UI-only and uses a typed mock backend layer. The mock service
   - `GET /mission-control/audit-logs`
 - Frontend Super Admin route guard added for Mission Control.
 - Frontend role labels now show `super_admin` as Super Admin.
-- Frontend auth now prioritizes `super_admin` when a user has multiple business roles, so Mission Control permissions do not depend on Supabase row ordering.
-- Frontend scoped impersonation context added. The Super Admin keeps their own Supabase session while the app uses the target company as active business context.
+- Active-business role resolution: `appRole`, permissions, and `isSuperAdmin()` are scoped to the selected location’s business (not “any super_admin across businesses”).
+- Mission Control is gated by **active-business Super Admin** (`isSuperAdmin()`) and also remains available to platform Super Admins.
+- DB role_page_permissions cannot grant Mission Control paths; `canAccessPathDynamic` requires an explicit Super Admin gate.
+- Roles & Permissions uses draft checkbox state with a Save Changes confirmation dialog (app AlertDialog). Non–Super Admins remain read-only.
+- System Manager (`admin`) roles are granted Sales Manager pages via migration `20260813090000_sales_manager_permissions_for_admin.sql`.
+- Profile Settings binds email to the authenticated user only, isolates password fields, and shows the active-business role badge.
+- Locations settings lists all `user_locations` memberships with Created / Invited markers (Invited when a `location_invitations` record exists or the user is not the business owner; Created otherwise).
+- Promoting a member to Super Admin clears `custom_role_id` and roles refresh on tab focus so Mission Control appears without a full re-login.
 - Mission Control Companies screen now includes a `Login As Company` confirmation flow.
 - Dashboard shell now shows a prominent `Impersonating [Company]` banner with an end action.
+- Mission Control visibility bug fixed: dynamic permissions no longer treat missing DB page keys as allowed. Restricted paths now fall back to `RESTRICTED_PAGES`.
+- Parent route `/dashboard/mission-control` restricted to `super_admin` only.
+- Migration `20260813043000_mission_control_deny_non_super_admin.sql` inserts explicit `false` Mission Control permissions for system `admin`/`user` roles and keeps `true` for `super_admin`.
+- Invite Edge Functions reject Super Admin invites and only assign `admin` or `user` on acceptance.
+- Team Management role changes (including promotion to Super Admin) require an existing Super Admin; RLS already enforces the same rule on `user_roles`.
+
+## Super Admin Role Model
+
+- Business/location creators receive `super_admin` through `create_business_with_owner` (business Super Admin for that company only).
+- Invited company members receive only `admin` or `user`.
+- `rahul.excel2011@gmail.com` is seeded as a platform Super Admin via the Mission Control migration when the Auth user exists (membership on the `type = 'platform'` business).
+- Any existing Super Admin for a business may promote another member of that business to Super Admin from Team Management → Change Role.
+- Mission Control is visible to Super Admins of the **active business** (`isSuperAdmin()`), and also to platform Super Admins.
 
 ## Pending After MVP
 
 - Full Company Profile route and detail tabs.
 - Real export endpoints for Excel and PDF beyond the current CSV mock export.
 - Mobile design review for dense tables and charts.
-- Apply the Supabase migration in the target environment and confirm Rahul's Supabase auth user exists before or during migration.
+- Apply the Supabase migrations in the target environment and confirm Rahul's Supabase auth user exists before or during migration.
 - Expand impersonation auditing from session start/end into selected sensitive actions.
 - Add admin-facing audit log screen inside Mission Control Operations.
 - Add impersonation expiry handling in the UI when the two-hour session expires.
