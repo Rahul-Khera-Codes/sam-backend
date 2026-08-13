@@ -3,7 +3,7 @@ from app.core.auth import get_user_id, verify_business_access
 from app.core.supabase import supabase_admin
 from app.schemas.roles import (
     CustomRoleResponse, CreateCustomRoleRequest,
-    RolePermissionsResponse, PagePermission, UpdatePermissionsRequest,
+    RolePermissionsResponse, UserPermissionsResponse, PagePermission, UpdatePermissionsRequest,
 )
 
 router = APIRouter(prefix="/roles", tags=["roles"])
@@ -25,6 +25,12 @@ def _require_admin(user_id: str, business_id: str):
     role_row = supabase_admin.table("user_roles").select("role").eq("user_id", user_id).eq("business_id", business_id).limit(1).execute()
     if not role_row.data or role_row.data[0]["role"] not in ("super_admin", "admin"):
         raise HTTPException(status_code=403, detail="Only admins can perform this action")
+
+
+def _require_business_member(target_user_id: str, business_id: str):
+    role_row = supabase_admin.table("user_roles").select("id").eq("user_id", target_user_id).eq("business_id", business_id).limit(1).execute()
+    if not role_row.data:
+        raise HTTPException(status_code=404, detail="User is not a member of this business")
 
 
 @router.get("", response_model=list[CustomRoleResponse])
@@ -83,6 +89,64 @@ async def delete_role(role_id: str, user_id: str = Depends(get_user_id)):
         raise HTTPException(status_code=400, detail="System roles cannot be deleted")
 
     supabase_admin.table("custom_roles").delete().eq("id", role_id).execute()
+
+
+@router.get("/users/{target_user_id}/permissions", response_model=UserPermissionsResponse)
+async def get_user_permissions(
+    target_user_id: str,
+    business_id: str,
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    if target_user_id != user_id:
+        _require_admin(user_id, business_id)
+    _require_business_member(target_user_id, business_id)
+
+    r = (
+        supabase_admin.table("user_page_permissions")
+        .select("page_key, is_allowed")
+        .eq("business_id", business_id)
+        .eq("user_id", target_user_id)
+        .execute()
+    )
+    perms = [PagePermission(page_key=p["page_key"], is_allowed=p["is_allowed"]) for p in (r.data or [])]
+    return UserPermissionsResponse(user_id=target_user_id, business_id=business_id, permissions=perms)
+
+
+@router.put("/users/{target_user_id}/permissions", response_model=UserPermissionsResponse)
+async def update_user_permissions(
+    target_user_id: str,
+    business_id: str,
+    body: UpdatePermissionsRequest,
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    _require_admin(user_id, business_id)
+    _require_business_member(target_user_id, business_id)
+
+    rows = [
+        {
+            "business_id": business_id,
+            "user_id": target_user_id,
+            "page_key": p.page_key,
+            "is_allowed": p.is_allowed,
+        }
+        for p in body.permissions
+    ]
+    supabase_admin.table("user_page_permissions").upsert(
+        rows,
+        on_conflict="business_id,user_id,page_key",
+    ).execute()
+
+    r = (
+        supabase_admin.table("user_page_permissions")
+        .select("page_key, is_allowed")
+        .eq("business_id", business_id)
+        .eq("user_id", target_user_id)
+        .execute()
+    )
+    perms = [PagePermission(page_key=p["page_key"], is_allowed=p["is_allowed"]) for p in (r.data or [])]
+    return UserPermissionsResponse(user_id=target_user_id, business_id=business_id, permissions=perms)
 
 
 @router.get("/{role_id}/permissions", response_model=RolePermissionsResponse)
