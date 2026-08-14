@@ -16,7 +16,7 @@ class CreateAppointmentRequest(BaseModel):
     appointment_time: str   # HH:MM 24h
     duration: Optional[int] = None
     notes: Optional[str] = None
-    appointment_is_onsite: bool = True
+    appointment_is_onsite: bool = False
     appointment_address_street: Optional[str] = None
     appointment_address_city: Optional[str] = None
     appointment_address_state: Optional[str] = None
@@ -65,7 +65,7 @@ class AppointmentResponse(BaseModel):
     appointment_time: str
     duration: Optional[int] = None
     notes: Optional[str] = None
-    appointment_is_onsite: Optional[bool] = True
+    appointment_is_onsite: Optional[bool] = False
     appointment_address_street: Optional[str] = None
     appointment_address_city: Optional[str] = None
     appointment_address_state: Optional[str] = None

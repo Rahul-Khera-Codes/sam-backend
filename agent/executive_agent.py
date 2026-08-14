@@ -200,6 +200,7 @@ You are Remi, the personal executive assistant for {business_name}. You work dir
 - ANSWER GENERAL AND PERSONAL QUESTIONS DIRECTLY. Your name is Remi — if asked who you are or your name, say "I'm Remi, your assistant for {business_name}." Do NOT turn casual or identity questions into a task, and never say you don't have a name.
 - Only use a tool when the owner actually wants an email, calendar, or appointment action. Never assume a message is a scheduling/appointment request unless they clearly ask for one.
 - Always confirm before sending emails or creating calendar events — draft first, show the preview, then wait for "yes, go ahead".
+- If an email draft is already shown and the owner asks for changes, call `update_email_draft` with the revised recipient, subject, or full body as needed. Do not merely say the changes are complete.
 - When a tool shows a card on screen (emails, schedule), the details are visible to the owner — give a brief one-line summary and ask what they'd like to do; do NOT read every item aloud.
 - If you can't do something, say so clearly and briefly.
 - Documents in the library can change at any time — the owner may add one mid-conversation. Always call `list_documents` (or resolve an attachment) fresh before saying none are available or telling the owner what's there; never rely on an earlier `list_documents` result from earlier in this same conversation.
@@ -269,7 +270,7 @@ class ExecutiveAssistant(Agent):
         await _publish(self._room, payload)
         return card_id
 
-    async def _send_preview(self, preview: dict) -> None:
+    async def _send_preview(self, preview: dict, *, reuse_card: bool = False) -> None:
         """Show an approval card (email draft or calendar event) and remember it for confirm.
 
         Approval cards reuse the unified card envelope; action buttons resolve via the
@@ -283,6 +284,7 @@ class ExecutiveAssistant(Agent):
                 "to": preview.get("to", ""),
                 "subject": preview.get("subject", ""),
                 "body": preview.get("body", ""),
+                "attachmentDocName": preview.get("attachmentDocName", ""),
             }
             actions = [
                 {"id": "send", "label": "Send", "intent": "approve"},
@@ -301,8 +303,9 @@ class ExecutiveAssistant(Agent):
                 {"id": "confirm", "label": "Create Event", "intent": "approve"},
                 {"id": "cancel", "label": "Cancel", "intent": "reject"},
             ]
+        card_id = self._pending_card_id if reuse_card else None
         self._pending_card_id = await self._send_card(
-            card_type, data, actions=actions, ephemeral=True
+            card_type, data, actions=actions, ephemeral=True, card_id=card_id
         )
 
     async def _clear_preview(self) -> None:
@@ -516,6 +519,41 @@ class ExecutiveAssistant(Agent):
             + (f" and attachment '{attachment_doc_name}'" if attachment_doc_name else "")
             + ". The draft is shown on screen. Say 'yes, go ahead' to send it, or tell me what to change."
         )
+
+    @function_tool()
+    async def update_email_draft(
+        self,
+        context: RunContext,
+        to: str = "",
+        subject: str = "",
+        body: str = "",
+    ) -> str:
+        """
+        Update the email draft currently shown on screen.
+        Use this when the owner asks to change an existing draft.
+        Pass complete replacement values for any fields that should change.
+        Leave a field empty to keep its current value.
+        For body edits, pass the full revised email body, not just the requested change.
+        The owner must still approve the updated draft before it is sent.
+        """
+        draft = self._pending_draft if (self._pending_draft or {}).get("kind") == "email_draft" else None
+        if not draft:
+            return "There isn't an email draft on screen to update. Ask me to draft an email first."
+
+        await _set_state(self._room, "thinking")
+        await self._activity_start("Updating the email draft…")
+
+        updated = dict(draft)
+        if to.strip():
+            updated["to"] = to.strip()
+        if subject.strip():
+            updated["subject"] = subject.strip()
+        if body.strip():
+            updated["body"] = body.strip()
+
+        await self._send_preview(updated, reuse_card=True)
+        await self._activity_done("Draft updated")
+        return "I've updated the draft shown on screen. Please review it and click Send when you're ready."
 
     @function_tool()
     async def send_email_draft(
@@ -1255,12 +1293,12 @@ async def executive_agent(ctx: agents.JobContext):
         room_options=room_io.RoomOptions(),
     )
 
-    # Greet the owner
+    # Greet the owner with the fixed product intro.
     await session.generate_reply(
         instructions=(
-            f"Greet the business owner warmly and introduce yourself by name. Say something like: "
-            "'Hi, I'm Remi — how can I help you today?' "
-            "Keep it very short — one sentence."
+            "Say exactly: \"Hi, I'm Remi—how can I help you today?\" "
+            "Do not include the business name, company name, or location. "
+            "Keep it to this single sentence."
         )
     )
 

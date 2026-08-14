@@ -8,11 +8,20 @@ from typing import Any
 
 import httpx
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langsmith import traceable
 from openai import AsyncOpenAI
 from pypdf import PdfReader
 
 from app.core.config import settings
 from app.core.supabase import supabase_admin
+from app.services.hr_onboarding_langsmith_service import (
+    HR_ONBOARDING_TRACE_METADATA,
+    HR_ONBOARDING_TRACE_TAGS,
+    compact_text,
+    summarize_chunks,
+    summarize_matches,
+    summarize_metadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +35,104 @@ CHUNK_OVERLAP_CHARS = 300
 EMBEDDING_BATCH_SIZE = 32
 INSERT_BATCH_SIZE = 20
 HR_POLICY_CHUNK_SEPARATORS = ["\n\n", "\n", ". ", "; ", " ", ""]
+
+
+def _process_extract_pdf_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+    file_bytes = inputs.get("file_bytes") or b""
+    return {"file_size_bytes": len(file_bytes)}
+
+
+def _process_extract_pdf_outputs(outputs: str) -> dict[str, Any]:
+    return {
+        "text_chars": len(outputs or ""),
+        "text_preview": compact_text(outputs),
+    }
+
+
+def _process_chunk_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+    text = str(inputs.get("text") or "")
+    return {
+        "text_chars": len(text),
+        "text_preview": compact_text(text),
+    }
+
+
+def _process_chunk_outputs(outputs: list[str]) -> dict[str, Any]:
+    return summarize_chunks(outputs)
+
+
+def _process_embedding_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+    chunks = inputs.get("chunks") or inputs.get("batch") or []
+    return summarize_chunks(chunks)
+
+
+def _process_embedding_outputs(outputs: list[list[float]]) -> dict[str, Any]:
+    first_embedding = outputs[0] if outputs else []
+    return {
+        "embedding_count": len(outputs),
+        "embedding_dimensions": len(first_embedding),
+        "embedding_model": EMBEDDING_MODEL,
+    }
+
+
+def _process_query_embedding_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+    query = str(inputs.get("query") or "")
+    return {
+        "query_chars": len(query),
+        "query_preview": compact_text(query),
+        "embedding_model": EMBEDDING_MODEL,
+        "embedding_dimensions": EMBEDDING_DIMENSIONS,
+    }
+
+
+def _process_query_embedding_outputs(outputs: list[float]) -> dict[str, Any]:
+    return {
+        "embedding_dimensions": len(outputs),
+        "embedding_model": EMBEDDING_MODEL,
+    }
+
+
+def _process_replace_chunks_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+    chunks = inputs.get("chunks") or []
+    embeddings = inputs.get("embeddings") or []
+    return {
+        "document_id": inputs.get("document_id"),
+        "business_id": inputs.get("business_id"),
+        "document_name": inputs.get("document_name"),
+        "chunking_strategy": inputs.get("chunking_strategy"),
+        "metadata": summarize_metadata(inputs.get("metadata")),
+        "chunks": summarize_chunks(chunks),
+        "embedding_count": len(embeddings),
+    }
+
+
+def _process_document_bytes_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+    file_bytes = inputs.get("file_bytes") or b""
+    return {
+        "document_id": inputs.get("document_id"),
+        "business_id": inputs.get("business_id"),
+        "document_name": inputs.get("document_name"),
+        "file_size_bytes": len(file_bytes),
+        "metadata": summarize_metadata(inputs.get("metadata")),
+        "raise_on_error": inputs.get("raise_on_error", False),
+    }
+
+
+def _process_retrieval_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+    query = str(inputs.get("query") or "")
+    return {
+        "business_id": inputs.get("business_id"),
+        "query_chars": len(query),
+        "query_preview": compact_text(query),
+        "document_id": inputs.get("document_id"),
+        "category": inputs.get("category"),
+        "match_count": inputs.get("match_count"),
+        "match_threshold": inputs.get("match_threshold"),
+    }
+
+
+def _process_retrieval_outputs(outputs: list[dict[str, Any]]) -> dict[str, Any]:
+    return summarize_matches(outputs)
 
 
 def _update_document_status(
@@ -70,6 +177,18 @@ def extract_pdf_text(file_bytes: bytes) -> str:
     return "\n\n".join(pages).strip()
 
 
+@traceable(
+    name="hr_onboarding.ingestion.extract_pdf_text",
+    run_type="parser",
+    metadata=HR_ONBOARDING_TRACE_METADATA,
+    tags=HR_ONBOARDING_TRACE_TAGS,
+    process_inputs=_process_extract_pdf_inputs,
+    process_outputs=_process_extract_pdf_outputs,
+)
+def _extract_pdf_text_traced(file_bytes: bytes) -> str:
+    return extract_pdf_text(file_bytes)
+
+
 def _normalize_document_text(text: str) -> str:
     return "\n".join(line.rstrip() for line in text.splitlines()).strip()
 
@@ -102,6 +221,14 @@ def chunk_document_text(text: str) -> list[str]:
     return chunks
 
 
+@traceable(
+    name="hr_onboarding.ingestion.split_hr_policy_text",
+    run_type="parser",
+    metadata=HR_ONBOARDING_TRACE_METADATA,
+    tags=HR_ONBOARDING_TRACE_TAGS,
+    process_inputs=_process_chunk_inputs,
+    process_outputs=_process_chunk_outputs,
+)
 def chunk_hr_policy_document_text(text: str) -> list[str]:
     normalized = "\n".join(line.rstrip() for line in text.splitlines()).strip()
     if not normalized:
@@ -128,15 +255,70 @@ async def _create_embeddings(chunks: list[str]) -> list[list[float]]:
 
     for start in range(0, len(chunks), EMBEDDING_BATCH_SIZE):
         batch = chunks[start : start + EMBEDDING_BATCH_SIZE]
-        response = await client.embeddings.create(
-            model=EMBEDDING_MODEL,
-            input=batch,
-            dimensions=EMBEDDING_DIMENSIONS,
-            encoding_format="float",
-        )
-        embeddings.extend(item.embedding for item in sorted(response.data, key=lambda item: item.index))
+        embeddings.extend(await _create_embedding_batch(client=client, batch=batch, batch_index=start // EMBEDDING_BATCH_SIZE))
 
     return embeddings
+
+
+@traceable(
+    name="hr_onboarding.ingestion.create_embeddings",
+    run_type="embedding",
+    metadata=HR_ONBOARDING_TRACE_METADATA,
+    tags=HR_ONBOARDING_TRACE_TAGS,
+    process_inputs=_process_embedding_inputs,
+    process_outputs=_process_embedding_outputs,
+)
+async def _create_embeddings_traced(chunks: list[str]) -> list[list[float]]:
+    client = AsyncOpenAI(
+        api_key=settings.openai_api_key,
+        timeout=60.0,
+        max_retries=2,
+    )
+    embeddings: list[list[float]] = []
+
+    for start in range(0, len(chunks), EMBEDDING_BATCH_SIZE):
+        batch = chunks[start : start + EMBEDDING_BATCH_SIZE]
+        embeddings.extend(
+            await _create_embedding_batch_traced(
+                client=client,
+                batch=batch,
+                batch_index=start // EMBEDDING_BATCH_SIZE,
+            )
+        )
+
+    return embeddings
+
+
+async def _create_embedding_batch(
+    *,
+    client: AsyncOpenAI,
+    batch: list[str],
+    batch_index: int,
+) -> list[list[float]]:
+    response = await client.embeddings.create(
+        model=EMBEDDING_MODEL,
+        input=batch,
+        dimensions=EMBEDDING_DIMENSIONS,
+        encoding_format="float",
+    )
+    return [item.embedding for item in sorted(response.data, key=lambda item: item.index)]
+
+
+@traceable(
+    name="hr_onboarding.ingestion.create_embedding_batch",
+    run_type="embedding",
+    metadata=HR_ONBOARDING_TRACE_METADATA,
+    tags=HR_ONBOARDING_TRACE_TAGS,
+    process_inputs=_process_embedding_inputs,
+    process_outputs=_process_embedding_outputs,
+)
+async def _create_embedding_batch_traced(
+    *,
+    client: AsyncOpenAI,
+    batch: list[str],
+    batch_index: int,
+) -> list[list[float]]:
+    return await _create_embedding_batch(client=client, batch=batch, batch_index=batch_index)
 
 
 def _replace_document_chunks(
@@ -188,7 +370,35 @@ def _replace_document_chunks(
         ).execute()
 
 
-async def process_document_bytes(
+@traceable(
+    name="hr_onboarding.ingestion.store_chunks",
+    run_type="tool",
+    metadata=HR_ONBOARDING_TRACE_METADATA,
+    tags=HR_ONBOARDING_TRACE_TAGS,
+    process_inputs=_process_replace_chunks_inputs,
+)
+def _replace_document_chunks_traced(
+    *,
+    document_id: str,
+    business_id: str,
+    document_name: str,
+    chunks: list[str],
+    embeddings: list[list[float]],
+    chunking_strategy: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    _replace_document_chunks(
+        document_id=document_id,
+        business_id=business_id,
+        document_name=document_name,
+        chunks=chunks,
+        embeddings=embeddings,
+        chunking_strategy=chunking_strategy,
+        metadata=metadata,
+    )
+
+
+async def _process_document_bytes_impl(
     *,
     document_id: str,
     business_id: str,
@@ -204,8 +414,11 @@ async def process_document_bytes(
             business_id,
             status="processing",
         )
-        text = await asyncio.to_thread(extract_pdf_text, file_bytes)
         is_hr_policy_document = (metadata or {}).get("document_scope") == "hr_onboarding"
+        text = await asyncio.to_thread(
+            _extract_pdf_text_traced if is_hr_policy_document else extract_pdf_text,
+            file_bytes,
+        )
         chunking_strategy = (
             "langchain_recursive_character"
             if is_hr_policy_document
@@ -219,7 +432,11 @@ async def process_document_bytes(
         if not chunks:
             raise ValueError("No extractable text was found in this PDF.")
 
-        embeddings = await _create_embeddings(chunks)
+        embeddings = await (
+            _create_embeddings_traced(chunks)
+            if is_hr_policy_document
+            else _create_embeddings(chunks)
+        )
         if len(embeddings) != len(chunks):
             raise RuntimeError("Embedding response did not match the document chunk count.")
 
@@ -230,7 +447,7 @@ async def process_document_bytes(
         }
 
         await asyncio.to_thread(
-            _replace_document_chunks,
+            _replace_document_chunks_traced if is_hr_policy_document else _replace_document_chunks,
             document_id=document_id,
             business_id=business_id,
             document_name=document_name,
@@ -266,6 +483,62 @@ async def process_document_bytes(
             logger.exception("Failed to persist embedding failure for document %s.", document_id)
         if raise_on_error:
             raise
+
+
+@traceable(
+    name="hr_onboarding.ingestion.process_document",
+    run_type="chain",
+    metadata=HR_ONBOARDING_TRACE_METADATA,
+    tags=HR_ONBOARDING_TRACE_TAGS,
+    process_inputs=_process_document_bytes_inputs,
+)
+async def _process_hr_policy_document_bytes_traced(
+    *,
+    document_id: str,
+    business_id: str,
+    document_name: str,
+    file_bytes: bytes,
+    metadata: dict[str, Any] | None = None,
+    raise_on_error: bool = False,
+) -> None:
+    await _process_document_bytes_impl(
+        document_id=document_id,
+        business_id=business_id,
+        document_name=document_name,
+        file_bytes=file_bytes,
+        metadata=metadata,
+        raise_on_error=raise_on_error,
+    )
+
+
+async def process_document_bytes(
+    *,
+    document_id: str,
+    business_id: str,
+    document_name: str,
+    file_bytes: bytes,
+    metadata: dict[str, Any] | None = None,
+    raise_on_error: bool = False,
+) -> None:
+    if (metadata or {}).get("document_scope") == "hr_onboarding":
+        await _process_hr_policy_document_bytes_traced(
+            document_id=document_id,
+            business_id=business_id,
+            document_name=document_name,
+            file_bytes=file_bytes,
+            metadata=metadata,
+            raise_on_error=raise_on_error,
+        )
+        return
+
+    await _process_document_bytes_impl(
+        document_id=document_id,
+        business_id=business_id,
+        document_name=document_name,
+        file_bytes=file_bytes,
+        metadata=metadata,
+        raise_on_error=raise_on_error,
+    )
 
 
 async def process_stored_document(
@@ -361,6 +634,29 @@ async def process_business_documents(business_id: str) -> None:
         )
 
 
+@traceable(
+    name="hr_onboarding.chat.create_query_embedding",
+    run_type="embedding",
+    metadata=HR_ONBOARDING_TRACE_METADATA,
+    tags=HR_ONBOARDING_TRACE_TAGS,
+    process_inputs=_process_query_embedding_inputs,
+    process_outputs=_process_query_embedding_outputs,
+)
+async def _create_query_embedding(query: str) -> list[float]:
+    client = AsyncOpenAI(
+        api_key=settings.openai_api_key,
+        timeout=15.0,
+        max_retries=1,
+    )
+    response = await client.embeddings.create(
+        model=EMBEDDING_MODEL,
+        input=query,
+        dimensions=EMBEDDING_DIMENSIONS,
+        encoding_format="float",
+    )
+    return response.data[0].embedding
+
+
 async def retrieve_relevant_document_chunks(
     *,
     business_id: str,
@@ -398,6 +694,14 @@ async def retrieve_relevant_document_chunks(
     return result.data or []
 
 
+@traceable(
+    name="hr_onboarding.chat.vector_retrieval",
+    run_type="retriever",
+    metadata=HR_ONBOARDING_TRACE_METADATA,
+    tags=HR_ONBOARDING_TRACE_TAGS,
+    process_inputs=_process_retrieval_inputs,
+    process_outputs=_process_retrieval_outputs,
+)
 async def retrieve_relevant_hr_policy_chunks(
     *,
     business_id: str,
@@ -410,18 +714,7 @@ async def retrieve_relevant_hr_policy_chunks(
     if not query.strip():
         return []
 
-    client = AsyncOpenAI(
-        api_key=settings.openai_api_key,
-        timeout=15.0,
-        max_retries=1,
-    )
-    response = await client.embeddings.create(
-        model=EMBEDDING_MODEL,
-        input=query,
-        dimensions=EMBEDDING_DIMENSIONS,
-        encoding_format="float",
-    )
-    query_embedding = response.data[0].embedding
+    query_embedding = await _create_query_embedding(query)
 
     result = await asyncio.to_thread(
         lambda: supabase_admin.rpc(
