@@ -30,12 +30,12 @@ If you cannot help with something, offer to transfer the caller to a human agent
 Booking a new appointment:
 1. If this call is already tied to a specific location, default to that location. Only ask about another branch if the caller explicitly asks for one.
 2. Ask what service they need, then use get_services if you don't already have the list.
-3. If the selected service is off-site/customer-location, ask for the appointment address and collect these separate fields: street address, city, state or province, postal code, and country.
+3. If the selected service is on-site/customer-location, ask for the appointment address and collect these separate fields: street address, city, state or province, postal code, and country.
 4. Ask if they have a preferred staff member.
 5. Use find_next_available_slot to proactively offer the next available time — pass staff_name if they expressed a preference, leave it empty to search all qualified staff. Offer the caller 2–3 options from the result. Do NOT ask the caller to pick a date before calling this tool.
 6. If the caller prefers a specific date instead, use get_available_slots for that date and staff member.
 7. Collect the customer's name, phone number, and email address (required for confirmation email). After the customer gives their phone number, read it back digit-by-digit to confirm (e.g. "Just to confirm, that's 6-1-3-5-5-5-0-1-2-3?"). After they give their email, spell it back letter-by-letter including any dots, underscores, and the domain (e.g. "So that's j-o-h-n dot s-m-i-t-h at g-m-a-i-l dot com — is that right?"). Only proceed once the customer confirms both are correct.
-8. Repeat all details back clearly before calling book_appointment. For off-site appointments, include the full customer address in the confirmation.
+8. Repeat all details back clearly before calling book_appointment. For on-site appointments, include the full customer address in the confirmation.
 9. Confirm the booking reference once done.
 10. After confirming the booking, ask "Is there anything else I can help you with?" If the customer has nothing further, say "Thank you for calling and have a great day!" then end the call.
 
@@ -305,7 +305,7 @@ def _format_services_for_prompt(services: list[dict]) -> str:
             details.append(f"${price:.2f}")
         elif price == -1:
             details.append("price varies")
-        details.append("on-site" if svc.get("is_onsite", True) else "off-site/customer-location; requires customer address")
+        details.append("on-site/customer-location; requires customer address" if svc.get("is_onsite", False) else "off-site/remote or business-location")
         if desc:
             details.append(desc)
         if details:

@@ -4,6 +4,15 @@ import logging
 from functools import lru_cache
 from typing import Any
 
+from langsmith import traceable
+
+from app.services.hr_onboarding_langsmith_service import (
+    HR_ONBOARDING_TRACE_METADATA,
+    HR_ONBOARDING_TRACE_TAGS,
+    compact_text,
+    summarize_matches,
+)
+
 logger = logging.getLogger(__name__)
 
 RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L6-v2"
@@ -27,6 +36,34 @@ def _reranker_text(match: dict[str, Any]) -> str:
     return text[:RERANKER_TEXT_LIMIT_CHARS]
 
 
+def _process_reranker_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+    query = str(inputs.get("query") or "")
+    matches = inputs.get("matches") or []
+    return {
+        "query_chars": len(query),
+        "query_preview": compact_text(query),
+        "candidate_count": len(matches),
+        "max_candidates": inputs.get("max_candidates"),
+        "candidates": summarize_matches(matches),
+        "reranker_model": RERANKER_MODEL_NAME,
+    }
+
+
+def _process_reranker_outputs(outputs: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        **summarize_matches(outputs),
+        "reranker_model": RERANKER_MODEL_NAME,
+    }
+
+
+@traceable(
+    name="hr_onboarding.chat.rerank_policy_chunks",
+    run_type="tool",
+    metadata=HR_ONBOARDING_TRACE_METADATA,
+    tags=HR_ONBOARDING_TRACE_TAGS,
+    process_inputs=_process_reranker_inputs,
+    process_outputs=_process_reranker_outputs,
+)
 def rerank_hr_policy_chunks(
     *,
     query: str,

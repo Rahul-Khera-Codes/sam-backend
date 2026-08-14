@@ -182,8 +182,8 @@ def _check_double_booking(
         return True
 
 
-def _validate_offsite_address(values: dict) -> None:
-    if values.get("appointment_is_onsite", True):
+def _validate_onsite_address(values: dict) -> None:
+    if not values.get("appointment_is_onsite", False):
         return
     required = {
         "appointment_address_street": "street address",
@@ -196,7 +196,7 @@ def _validate_offsite_address(values: dict) -> None:
     if missing:
         raise HTTPException(
             status_code=400,
-            detail=f"Off-site appointments require address details: {', '.join(missing)}.",
+            detail=f"On-site appointments require address details: {', '.join(missing)}.",
         )
 
 
@@ -306,7 +306,7 @@ async def create_appointment(
         "appointment_address_postal_code": req.appointment_address_postal_code,
         "appointment_address_country": req.appointment_address_country,
     }
-    _validate_offsite_address(row)
+    _validate_onsite_address(row)
 
     r = supabase_admin.table("appointments").insert(row).execute()
     if not r.data:
@@ -523,7 +523,7 @@ async def update_appointment(
                 detail="That time slot is already booked. Please choose a different time.",
             )
 
-    _validate_offsite_address({**appt, **updates})
+    _validate_onsite_address({**appt, **updates})
 
     supabase_admin.table("appointments").update(updates).eq("id", appointment_id).execute()
 

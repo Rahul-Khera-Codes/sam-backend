@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Callable
 
+from openai import RateLimitError as OpenAIRateLimitError
+
 logger = logging.getLogger(__name__)
 
 INPUT_BLOCK_MESSAGE = (
@@ -19,6 +21,10 @@ INPUT_BLOCK_MESSAGE = (
 OUTPUT_BLOCK_MESSAGE = (
     "I'm sorry, but I can't display the generated answer because it did not meet the "
     "chatbot's safety guidelines. Please contact HR for help with this question."
+)
+RATE_LIMIT_MESSAGE = (
+    "The HR onboarding assistant is temporarily rate limited by OpenAI. "
+    "Please wait a minute and try again."
 )
 
 GUARDRAILS_ENABLED = os.getenv("HR_ONBOARDING_GUARDRAILS_ENABLED", "true").lower() not in {
@@ -47,6 +53,12 @@ _VALIDATOR_PACKAGE_IMPORTS = {
 
 class HrOnboardingGuardrailsBlocked(ValueError):
     def __init__(self, message: str, *, user_message: str):
+        super().__init__(message)
+        self.user_message = user_message
+
+
+class HrOnboardingRateLimited(RuntimeError):
+    def __init__(self, message: str = "openai_rate_limited", *, user_message: str = RATE_LIMIT_MESSAGE):
         super().__init__(message)
         self.user_message = user_message
 
@@ -122,6 +134,20 @@ _SAFE_HR_POLICY_QUESTION_PATTERN = re.compile(
 
 def _hash_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def is_openai_rate_limit_error(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    while current is not None:
+        if isinstance(current, OpenAIRateLimitError):
+            return True
+        if getattr(current, "status_code", None) == 429:
+            return True
+        message = str(current).lower()
+        if "rate limit" in message or "rate_limit" in message or "status code: 429" in message:
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _fast_input_block_message(text: str) -> str | None:
@@ -351,6 +377,17 @@ def _validate(
             if getattr(outcome, "validation_passed", True) is False:
                 raise ValueError("validation_passed=false")
         except Exception as exc:
+            if is_openai_rate_limit_error(exc):
+                logger.warning(
+                    "John Guardrails %s rate limited: source=%s validator=%s text_hash=%s error=%s",
+                    phase,
+                    source,
+                    check.name,
+                    text_hash,
+                    exc,
+                )
+                raise HrOnboardingRateLimited(str(exc)) from exc
+
             block_message = _VALIDATOR_BLOCK_MESSAGES.get(phase, {}).get(check.name, user_message)
             logger.warning(
                 "John Guardrails %s blocked: source=%s validator=%s text_hash=%s error=%s",

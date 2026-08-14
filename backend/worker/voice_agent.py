@@ -246,7 +246,7 @@ class VoiceAgentWorker:
             for service in services_data:
                 if not isinstance(service, dict):
                     continue
-                location_type = "on-site" if service.get("is_onsite", True) else "off-site/customer-location"
+                location_type = "on-site/customer-location" if service.get("is_onsite", False) else "off-site/remote or business-location"
                 service_lines.append(f"- {service.get('name')}: {location_type}")
             if service_lines:
                 services_prompt = "\nConfigured services:\n" + "\n".join(service_lines)
@@ -260,9 +260,9 @@ Example: \"Thank you for calling {company_name}{location_phrase}, how can I help
 Then continue the conversation following these rules:
 {SYSTEM_PROMPT}
 When booking an appointment, ask which service the customer needs before collecting address details.
-If the selected service is off-site/customer-location, ask for the customer's appointment address and capture it as separate fields: street address, city, state or province, postal code, and country.
-If the selected service is on-site, do not ask for a customer address unless the customer offers it or the business workflow requires it.
-Confirm whether the appointment is on-site or off-site when summarizing the booking, and repeat the address back for off-site appointments.
+If the selected service is on-site/customer-location, ask for the customer's appointment address and capture it as separate fields: street address, city, state or province, postal code, and country.
+If the selected service is off-site/remote or at the business location, do not ask for a customer address unless the customer offers it or the business workflow requires it.
+Confirm whether the appointment is on-site or off-site when summarizing the booking, and repeat the address back for on-site appointments.
 """
         except Exception as e:
             logger.warning(f"[Worker] Failed to build business-aware prompt, falling back to default: {e}")
