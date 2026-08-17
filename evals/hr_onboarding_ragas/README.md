@@ -165,6 +165,22 @@ Each line is one JSON object:
 
 You can add cases for each tenant or category. If a case has `document_id`, the eval will pass it through to the same active-document retrieval path used by the chatbot.
 
+A draft golden-response dataset lives in:
+
+```text
+datasets/hr_policy_golden_cases.jsonl
+```
+
+These cases include `expected_answer` values copied from prior HR onboarding chatbot experiment outputs, plus `review_status: "draft"` so they can be reviewed before becoming quality gates. When `expected_answer` is present, the harness uses it as the Ragas reference and keeps any `reference` text as review criteria.
+
+Run the golden dataset explicitly:
+
+```bash
+python evals.py \
+  --business-id "<business-id>" \
+  --dataset datasets/hr_policy_golden_cases.jsonl
+```
+
 ## Outputs
 
 Reports are saved under:
@@ -176,7 +192,7 @@ experiments/<run-name>/
 Files:
 
 - `summary.json` - run metadata and aggregate Ragas scores
-- `rows.csv` - per-case question/answer/reference/source summary
+- `rows.csv` - per-case question/answer/reference/source summary, including retrieval and answer latency
 - `ragas_scores.csv` - per-row metric details when available from Ragas
 
 ## Useful Commands

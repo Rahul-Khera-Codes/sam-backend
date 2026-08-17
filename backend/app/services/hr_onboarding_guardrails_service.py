@@ -130,6 +130,14 @@ _SAFE_HR_POLICY_QUESTION_PATTERN = re.compile(
     r"contact|contacts|email|phone|company|hr\s+contact|support|new\s+hires?|complete|first|important)\b",
     re.I,
 )
+_SUSPICIOUS_INPUT_PATTERN = re.compile(
+    r"\b("
+    r"ignore|override|bypass|jailbreak|developer\s+message|system\s+prompt|hidden\s+instructions?|"
+    r"reveal|print|show|exfiltrate|disable\s+(guardrails?|safety)|act\s+as|pretend\s+to\s+be|"
+    r"do\s+anything\s+now|dan\s+mode|prompt\s+injection"
+    r")\b",
+    re.I,
+)
 
 
 def _hash_text(text: str) -> str:
@@ -166,6 +174,17 @@ def _fast_input_block_message(text: str) -> str | None:
     ):
         return _VALIDATOR_BLOCK_MESSAGES["input"]["AbusiveLanguage"]
     return None
+
+
+def _is_fast_safe_hr_question(text: str) -> bool:
+    normalized = " ".join(text.split()).strip()
+    if not normalized or len(normalized) > 500:
+        return False
+    if _fast_input_block_message(normalized) is not None:
+        return False
+    if _SUSPICIOUS_INPUT_PATTERN.search(normalized):
+        return False
+    return bool(_SAFE_HR_POLICY_QUESTION_PATTERN.search(normalized))
 
 
 def _fast_output_block_message(text: str, *, reference: str | None = None) -> str | None:
@@ -417,6 +436,13 @@ def validate_onboarding_user_input(text: str, *, source: str = "chat") -> None:
                 _hash_text(text),
             )
             raise HrOnboardingGuardrailsBlocked("fast_local_input_block", user_message=fast_block_message)
+        if _is_fast_safe_hr_question(text):
+            logger.info(
+                "John Guardrails input passed: source=%s validators=fast_local_safe_hr text_hash=%s",
+                source,
+                _hash_text(text),
+            )
+            return
 
     runtime = _runtime()
     _validate(
@@ -469,3 +495,10 @@ def validate_onboarding_assistant_output(
             user_message=OUTPUT_BLOCK_MESSAGE,
             metadata={"query": question, "reference": reference},
         )
+
+
+def warm_hr_onboarding_guardrails() -> None:
+    try:
+        _runtime()
+    except Exception as exc:
+        logger.warning("John Guardrails warmup failed: %s", exc)

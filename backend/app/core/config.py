@@ -96,6 +96,11 @@ class Settings(BaseSettings):
     hr_onboarding_cache_enabled: bool = True
     hr_onboarding_cache_ttl_seconds: int = 3600
     hr_onboarding_cache_client_name: str = "hr-onboarding-backend"
+    hr_onboarding_semantic_cache_enabled: bool = True
+    hr_onboarding_semantic_cache_similarity_threshold: float = 0.985
+    hr_onboarding_semantic_cache_max_entries: int = 32
+    hr_onboarding_validation_cache_enabled: bool = True
+    hr_onboarding_validation_cache_ttl_seconds: int = 3600
 
     @property
     def cors_origins_list(self) -> List[str]:

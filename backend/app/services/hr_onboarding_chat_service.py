@@ -11,12 +11,19 @@ from openai import AsyncOpenAI
 
 from app.core.config import settings
 from app.schemas.documents import OnboardingChatResponse, OnboardingChatSource
-from app.services.hr_document_embedding_service import retrieve_relevant_hr_policy_chunks
+from app.services.hr_document_embedding_service import (
+    create_hr_policy_query_embedding,
+    retrieve_relevant_hr_policy_chunks_with_embedding,
+)
 from app.services.hr_onboarding_cache_service import (
     build_hr_onboarding_cache_key,
+    get_cached_hr_onboarding_validation_pass,
     get_cached_hr_onboarding_response,
     get_hr_policy_document_fingerprint,
+    get_semantically_cached_hr_onboarding_response,
+    set_cached_hr_onboarding_validation_pass,
     set_cached_hr_onboarding_response,
+    set_semantically_cached_hr_onboarding_response,
 )
 from app.services.hr_onboarding_guardrails_service import (
     HrOnboardingGuardrailsBlocked,
@@ -49,6 +56,7 @@ FINAL_RERANKED_MATCH_COUNT = 8
 BROAD_FINAL_RERANKED_MATCH_COUNT = 10
 MIN_RERANKED_MATCH_COUNT = 3
 MIN_BROAD_RERANKED_MATCH_COUNT = 5
+MIN_RERANKER_CANDIDATES = 4
 RERANKER_SCORE_THRESHOLD = -4.0
 LOW_CONFIDENCE_SIMILARITY = 0.35
 CLOSE_SIMILARITY_MARGIN = 0.03
@@ -166,18 +174,35 @@ def _process_cache_key_inputs(inputs: dict) -> dict:
     }
 
 
-def _process_cache_key_outputs(outputs: str | None) -> dict:
-    return {"cache_key_available": bool(outputs)}
+def _process_cache_key_outputs(outputs: dict | None) -> dict:
+    return {
+        "cache_key_available": bool((outputs or {}).get("cache_key")),
+        "document_fingerprint_available": bool((outputs or {}).get("document_fingerprint")),
+    }
 
 
 def _process_cache_lookup_inputs(inputs: dict) -> dict:
     return {"cache_key_available": bool(inputs.get("cache_key"))}
 
 
+def _process_semantic_cache_lookup_inputs(inputs: dict) -> dict:
+    embedding = inputs.get("question_embedding") or []
+    return {
+        "business_id": inputs.get("business_id"),
+        "embedding_dimensions": len(embedding),
+        "document_fingerprint_available": bool(inputs.get("document_fingerprint")),
+        "document_id": inputs.get("document_id"),
+        "category": inputs.get("category"),
+        "channel": inputs.get("channel"),
+    }
+
+
 def _process_cache_lookup_outputs(outputs: dict | None) -> dict:
     cached_answer = str((outputs or {}).get("answer") or "")
     return {
         "cache_hit": bool(outputs),
+        "semantic_cache_hit": bool((outputs or {}).get("semantic_cache_hit")),
+        "semantic_similarity": (outputs or {}).get("semantic_similarity"),
         "answer_chars": len(cached_answer),
         "answer_preview": compact_text(cached_answer),
         "source_count": len((outputs or {}).get("sources") or []),
@@ -196,7 +221,7 @@ def _process_cache_store_inputs(inputs: dict) -> dict:
 
 def _process_validation_inputs(inputs: dict) -> dict:
     text = str(inputs.get("text") or "")
-    question = str(inputs.get("question") or "")
+    question = str(inputs.get("question") or text)
     reference = inputs.get("reference")
     return {
         "source": inputs.get("source"),
@@ -216,18 +241,21 @@ async def _build_cache_key(
     document_id: str | None,
     category: str | None,
     channel: str,
-) -> str | None:
+) -> dict[str, str] | None:
     document_fingerprint = await get_hr_policy_document_fingerprint(business_id)
     if not document_fingerprint:
         return None
-    return build_hr_onboarding_cache_key(
-        business_id=business_id,
-        question=question,
-        document_id=document_id,
-        category=category,
-        document_fingerprint=document_fingerprint,
-        channel=channel,
-    )
+    return {
+        "cache_key": build_hr_onboarding_cache_key(
+            business_id=business_id,
+            question=question,
+            document_id=document_id,
+            category=category,
+            document_fingerprint=document_fingerprint,
+            channel=channel,
+        ),
+        "document_fingerprint": document_fingerprint,
+    }
 
 
 @traceable(
@@ -245,7 +273,7 @@ async def _build_cache_key_traced(
     document_id: str | None,
     category: str | None,
     channel: str,
-) -> str | None:
+) -> dict[str, str] | None:
     return await _build_cache_key(
         business_id=business_id,
         question=question,
@@ -268,6 +296,33 @@ async def _get_cached_response_traced(cache_key: str | None) -> dict | None:
 
 
 @traceable(
+    name="hr_onboarding.chat.semantic_cache_lookup",
+    run_type="tool",
+    metadata=HR_ONBOARDING_TRACE_METADATA,
+    tags=HR_ONBOARDING_TRACE_TAGS,
+    process_inputs=_process_semantic_cache_lookup_inputs,
+    process_outputs=_process_cache_lookup_outputs,
+)
+async def _get_semantically_cached_response_traced(
+    *,
+    business_id: str,
+    question_embedding: list[float],
+    document_fingerprint: str | None,
+    document_id: str | None,
+    category: str | None,
+    channel: str,
+) -> dict | None:
+    return await get_semantically_cached_hr_onboarding_response(
+        business_id=business_id,
+        question_embedding=question_embedding,
+        document_fingerprint=document_fingerprint,
+        document_id=document_id,
+        category=category,
+        channel=channel,
+    )
+
+
+@traceable(
     name="hr_onboarding.chat.cache_store",
     run_type="tool",
     metadata=HR_ONBOARDING_TRACE_METADATA,
@@ -282,6 +337,38 @@ async def _set_cached_response_traced(
 ) -> None:
     if cache_key:
         await set_cached_hr_onboarding_response(cache_key, answer=answer, sources=sources)
+
+
+@traceable(
+    name="hr_onboarding.chat.semantic_cache_store",
+    run_type="tool",
+    metadata=HR_ONBOARDING_TRACE_METADATA,
+    tags=HR_ONBOARDING_TRACE_TAGS,
+    process_inputs=_process_cache_store_inputs,
+)
+async def _set_semantically_cached_response_traced(
+    *,
+    business_id: str,
+    question: str,
+    question_embedding: list[float],
+    document_fingerprint: str | None,
+    document_id: str | None,
+    category: str | None,
+    channel: str,
+    answer: str,
+    sources: list[dict],
+) -> None:
+    await set_semantically_cached_hr_onboarding_response(
+        business_id=business_id,
+        question=question,
+        question_embedding=question_embedding,
+        document_fingerprint=document_fingerprint,
+        document_id=document_id,
+        category=category,
+        channel=channel,
+        answer=answer,
+        sources=sources,
+    )
 
 
 def _sse_event(event: str, payload: dict) -> str:
@@ -309,7 +396,7 @@ def _should_rerank_matches(
     matches: list[dict],
     inferred_category: str | None,
 ) -> bool:
-    if len(matches) <= 1:
+    if len(matches) < MIN_RERANKER_CANDIDATES:
         return False
     if _is_broad_policy_question(question) or inferred_category:
         return True
@@ -377,43 +464,65 @@ async def _retrieve_onboarding_matches(
     question: str,
     document_id: str | None,
     category: str | None,
+    query_embedding: list[float] | None = None,
 ) -> list[dict]:
+    if not question.strip():
+        return []
+
     inferred_category = category or _infer_category_from_question(question)
     broad_match_count = BROAD_MATCH_COUNT if _is_broad_policy_question(question) or inferred_category else MAX_SOURCES
-    active_matches = []
+    query_embedding = query_embedding or await create_hr_policy_query_embedding(question)
+    if not query_embedding:
+        return []
+
+    retrieval_tasks = []
     if document_id:
-        active_matches = await retrieve_relevant_hr_policy_chunks(
-            business_id=business_id,
-            query=question,
-            document_id=document_id,
-            category=None,
-            match_count=ACTIVE_DOCUMENT_MAX_SOURCES,
-            match_threshold=ACTIVE_DOCUMENT_MATCH_THRESHOLD,
+        retrieval_tasks.append(
+            retrieve_relevant_hr_policy_chunks_with_embedding(
+                business_id=business_id,
+                query=question,
+                query_embedding=query_embedding,
+                document_id=document_id,
+                category=None,
+                match_count=ACTIVE_DOCUMENT_MAX_SOURCES,
+                match_threshold=ACTIVE_DOCUMENT_MATCH_THRESHOLD,
+                retrieval_label="active_document",
+            )
         )
-    category_matches = []
     if inferred_category:
-        category_matches = await retrieve_relevant_hr_policy_chunks(
+        retrieval_tasks.append(
+            retrieve_relevant_hr_policy_chunks_with_embedding(
+                business_id=business_id,
+                query=question,
+                query_embedding=query_embedding,
+                category=inferred_category,
+                match_count=CATEGORY_MATCH_COUNT,
+                match_threshold=ACTIVE_DOCUMENT_MATCH_THRESHOLD,
+                retrieval_label="inferred_category",
+            )
+        )
+    retrieval_tasks.append(
+        retrieve_relevant_hr_policy_chunks_with_embedding(
             business_id=business_id,
             query=question,
-            category=inferred_category,
-            match_count=CATEGORY_MATCH_COUNT,
-            match_threshold=ACTIVE_DOCUMENT_MATCH_THRESHOLD,
+            query_embedding=query_embedding,
+            category=category,
+            match_count=broad_match_count,
+            retrieval_label="fallback",
         )
-    fallback_matches = await retrieve_relevant_hr_policy_chunks(
-        business_id=business_id,
-        query=question,
-        category=category,
-        match_count=broad_match_count,
     )
+
+    branch_results = await asyncio.gather(*retrieval_tasks)
     merged_matches: list[dict] = []
     seen_chunk_ids: set[str] = set()
-    for match in [*active_matches, *category_matches, *fallback_matches]:
-        chunk_id = str(match.get("chunk_id") or "")
-        if chunk_id and chunk_id in seen_chunk_ids:
-            continue
-        if chunk_id:
-            seen_chunk_ids.add(chunk_id)
-        merged_matches.append(match)
+    for matches in branch_results:
+        for match in matches:
+            chunk_id = str(match.get("chunk_id") or "")
+            if chunk_id and chunk_id in seen_chunk_ids:
+                continue
+            if chunk_id:
+                seen_chunk_ids.add(chunk_id)
+            merged_matches.append(match)
     used_reranker = False
     selected_matches = merged_matches
     if _should_rerank_matches(
@@ -596,7 +705,7 @@ def _stream_answer_messages(*, question: str, source_payload: list[dict[str, str
 async def _generate_json_answer(*, question: str, source_payload: list[dict[str, str]]) -> str:
     response = await _openai_client().chat.completions.create(
         model=ONBOARDING_CHAT_MODEL,
-        temperature=0.2,
+        temperature=0,
         response_format={"type": "json_object"},
         messages=_json_answer_messages(question=question, source_payload=source_payload),
     )
@@ -614,7 +723,7 @@ async def _generate_json_answer(*, question: str, source_payload: list[dict[str,
 async def _stream_answer_tokens(*, question: str, source_payload: list[dict[str, str]]) -> AsyncIterator[str]:
     stream = await _openai_client().chat.completions.create(
         model=ONBOARDING_CHAT_MODEL,
-        temperature=0.2,
+        temperature=0,
         stream=True,
         messages=_stream_answer_messages(question=question, source_payload=source_payload),
     )
@@ -632,7 +741,10 @@ async def _stream_answer_tokens(*, question: str, source_payload: list[dict[str,
     process_inputs=_process_validation_inputs,
 )
 async def _validate_user_input_traced(text: str, *, source: str) -> None:
+    if await get_cached_hr_onboarding_validation_pass(text):
+        return
     await asyncio.to_thread(validate_onboarding_user_input, text, source=source)
+    await set_cached_hr_onboarding_validation_pass(text)
 
 
 @traceable(
@@ -682,13 +794,15 @@ async def answer_onboarding_question(
     input_validation_task = asyncio.create_task(
         _validate_user_input_traced(question, source="typed_chat")
     )
-    cache_key = await _build_cache_key_traced(
+    cache_context = await _build_cache_key_traced(
         business_id=business_id,
         question=question,
         document_id=filtered_document_id,
         category=filtered_category,
         channel="typed",
     )
+    cache_key = (cache_context or {}).get("cache_key")
+    document_fingerprint = (cache_context or {}).get("document_fingerprint")
     cached_response = await _get_cached_response_traced(cache_key)
     try:
         await input_validation_task
@@ -704,12 +818,30 @@ async def answer_onboarding_question(
                 sources=_sources_from_cached_payload(cached_response),
             )
 
+    query_embedding = await create_hr_policy_query_embedding(question)
+    semantic_cached_response = await _get_semantically_cached_response_traced(
+        business_id=business_id,
+        question_embedding=query_embedding,
+        document_fingerprint=document_fingerprint,
+        document_id=filtered_document_id,
+        category=filtered_category,
+        channel="typed",
+    )
+    if semantic_cached_response:
+        cached_answer = str(semantic_cached_response.get("answer") or "").strip()
+        if cached_answer:
+            return OnboardingChatResponse(
+                answer=cached_answer,
+                sources=_sources_from_cached_payload(semantic_cached_response),
+            )
+
     try:
         matches = await _retrieve_onboarding_matches(
             business_id=business_id,
             question=question,
             document_id=filtered_document_id,
             category=filtered_category,
+            query_embedding=query_embedding,
         )
     except Exception as exc:
         if _is_rate_limit_exception(exc):
@@ -757,10 +889,24 @@ async def answer_onboarding_question(
         return OnboardingChatResponse(answer=exc.user_message, sources=_format_sources(matches))
 
     sources = _format_sources(matches)
-    await _set_cached_response_traced(
-        cache_key,
-        answer=answer,
-        sources=[source.model_dump() for source in sources],
+    source_dicts = [source.model_dump() for source in sources]
+    await asyncio.gather(
+        _set_cached_response_traced(
+            cache_key,
+            answer=answer,
+            sources=source_dicts,
+        ),
+        _set_semantically_cached_response_traced(
+            business_id=business_id,
+            question=question,
+            question_embedding=query_embedding,
+            document_fingerprint=document_fingerprint,
+            document_id=filtered_document_id,
+            category=filtered_category,
+            channel="typed",
+            answer=answer,
+            sources=source_dicts,
+        ),
     )
 
     return OnboardingChatResponse(answer=answer, sources=sources)
@@ -794,13 +940,15 @@ async def stream_onboarding_question(
         input_validation_task = asyncio.create_task(
             _validate_user_input_traced(question, source="typed_chat_stream")
         )
-        cache_key = await _build_cache_key_traced(
+        cache_context = await _build_cache_key_traced(
             business_id=business_id,
             question=question,
             document_id=filtered_document_id,
             category=filtered_category,
             channel="typed",
         )
+        cache_key = (cache_context or {}).get("cache_key")
+        document_fingerprint = (cache_context or {}).get("document_fingerprint")
         cached_response = await _get_cached_response_traced(cache_key)
         try:
             await input_validation_task
@@ -826,12 +974,34 @@ async def stream_onboarding_question(
                 yield _sse_event("done", {"cached": True})
                 return
 
+        query_embedding = await create_hr_policy_query_embedding(question)
+        semantic_cached_response = await _get_semantically_cached_response_traced(
+            business_id=business_id,
+            question_embedding=query_embedding,
+            document_fingerprint=document_fingerprint,
+            document_id=filtered_document_id,
+            category=filtered_category,
+            channel="typed",
+        )
+        if semantic_cached_response:
+            cached_answer = str(semantic_cached_response.get("answer") or "").strip()
+            if cached_answer:
+                cached_sources = _sources_from_cached_payload(semantic_cached_response)
+                yield _sse_event(
+                    "sources",
+                    {"sources": [source.model_dump() for source in cached_sources]},
+                )
+                yield _sse_event("token", {"text": cached_answer})
+                yield _sse_event("done", {"cached": True, "semantic_cached": True})
+                return
+
         try:
             matches = await _retrieve_onboarding_matches(
                 business_id=business_id,
                 question=question,
                 document_id=filtered_document_id,
                 category=filtered_category,
+                query_embedding=query_embedding,
             )
         except Exception as exc:
             if _is_rate_limit_exception(exc):
@@ -895,10 +1065,24 @@ async def stream_onboarding_question(
             yield _sse_event("error", {"message": exc.user_message})
             return
 
-        await _set_cached_response_traced(
-            cache_key,
-            answer=answer,
-            sources=[source.model_dump() for source in sources],
+        source_dicts = [source.model_dump() for source in sources]
+        await asyncio.gather(
+            _set_cached_response_traced(
+                cache_key,
+                answer=answer,
+                sources=source_dicts,
+            ),
+            _set_semantically_cached_response_traced(
+                business_id=business_id,
+                question=question,
+                question_embedding=query_embedding,
+                document_fingerprint=document_fingerprint,
+                document_id=filtered_document_id,
+                category=filtered_category,
+                channel="typed",
+                answer=answer,
+                sources=source_dicts,
+            ),
         )
 
         yield _sse_event("done", {})
