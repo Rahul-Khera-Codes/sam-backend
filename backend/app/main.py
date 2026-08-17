@@ -38,10 +38,12 @@ from app.routers import (
     command_center_mock as command_center_mock_router,
 )
 from app.services.scheduler_service import start_scheduler, stop_scheduler
+from app.services.hr_onboarding_guardrails_service import warm_hr_onboarding_guardrails
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    warm_hr_onboarding_guardrails()
     start_scheduler()
     yield
     stop_scheduler()

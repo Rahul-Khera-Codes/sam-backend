@@ -1,0 +1,9 @@
+{
+  "run_name": "latency-golden-after-retrieval-optimization",
+  "business_id": "f46ce260-45da-4db8-9bc1-b0af01ec3acc",
+  "env_file": "/workspace/backend/.env",
+  "cache_enabled": "false",
+  "case_count": 6,
+  "aggregate_scores": {},
+  "created_at": "2026-08-17T05:21:31.957337+00:00"
+}

@@ -1,0 +1,11 @@
+{
+  "run_name": "latency-golden-ragas-after-expected-answer-reference",
+  "business_id": "f46ce260-45da-4db8-9bc1-b0af01ec3acc",
+  "env_file": "/workspace/backend/.env",
+  "cache_enabled": "false",
+  "case_count": 6,
+  "aggregate_scores": {
+    "repr": "{'faithfulness': 0.1667, 'context_recall': 0.1667, 'factual_correctness(mode=f1)': 1.0000}"
+  },
+  "created_at": "2026-08-17T05:34:44.777063+00:00"
+}

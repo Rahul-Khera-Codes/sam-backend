@@ -1,0 +1,32 @@
+case_id,business_id,user_input,response,reference,expected_answer,source_count,source_documents,expected_category,retrieval_latency_ms,answer_latency_ms
+golden-benefits-summary,f46ce260-45da-4db8-9bc1-b0af01ec3acc,Summarize the benefits policies.,"I could not find that in the published HR policy documents. Please upload or publish the relevant policy document, then try again.",The expected answer is based on prior chatbot output for this tenant. It should not invent benefits details when the Benefits-filtered retrieval path returns no supporting published HR policy chunks.,"I could not find that in the published HR policy documents. Please upload or publish the relevant policy document, then try again.",0,,Benefits,2068,4219
+golden-new-hire-first-steps,f46ce260-45da-4db8-9bc1-b0af01ec3acc,What should new hires complete first?,"I could not find that in the published HR policy documents. Please upload or publish the relevant policy document, then try again.",The expected answer is based on prior chatbot output for this tenant. It should not invent onboarding steps when the Onboarding-filtered retrieval path returns no supporting published HR policy chunks.,"I could not find that in the published HR policy documents. Please upload or publish the relevant policy document, then try again.",0,,Onboarding,1037,1282
+golden-compliance-important-points,f46ce260-45da-4db8-9bc1-b0af01ec3acc,What are the most important compliance points?,"I could not find that in the published HR policy documents. Please upload or publish the relevant policy document, then try again.",The expected answer is based on prior chatbot output for this tenant. It should not invent compliance requirements when the Compliance-filtered retrieval path returns no supporting published HR policy chunks.,"I could not find that in the published HR policy documents. Please upload or publish the relevant policy document, then try again.",0,,Compliance,1029,1442
+golden-policy-summary,f46ce260-45da-4db8-9bc1-b0af01ec3acc,Summarize Policy policies.,"- **Health & Dental Benefits**: Comprehensive package for full-time employees; includes medical, dental, and vision coverage effective the first of the month after hire. 
+  - **Medical Plans**: PPO, HDHP with HSA, and HMO options available. 
+  - **Dental Coverage**: Two free preventive cleanings per year; coinsurance applies after deductible. 
+  - **Enrollment**: 30 days from start date; limited outside this window. 
+
+- **Employee Code of Conduct**: Outlines expected behavior standards; promotes integrity, respect, and professionalism. 
+  - **Core Principles**: Respect, honesty, compliance with laws, confidentiality, and conflict of interest management. 
+  - **Professional Conduct**: Diligent performance, professional communication, and a positive workplace culture are expected. 
+  - **Reporting Violations**: Report to manager, HR, or ethics hotline; violations may lead to disciplinary action. 
+
+- **New Hire Onboarding**: Guide for first two weeks; includes completing onboarding paperwork, setting up direct deposit, and training. 
+  - **Key Contacts**: HR, IT Helpdesk, Payroll support available. 
+  - **Resources**: Employee handbook and benefits guide on HR portal.","The answer should summarize only retrieved HR onboarding policy excerpts for the business and should cover the benefits overview, employee code of conduct, and new hire onboarding guide when those are the retrieved sources.","- **Health & Dental Benefits**: Comprehensive package for eligible full-time employees; includes medical, dental, and vision coverage effective the first of the month after hire.
+  - **Medical Plans**: PPO, HDHP with HSA, and HMO options available.
+  - **Dental Coverage**: Two free preventive cleanings per year; coinsurance applies after deductible.
+  - **Enrollment**: 30 days from start date; otherwise limited to annual open enrollment or qualifying life events.
+
+- **Employee Code of Conduct**: Outlines expected behavior; promotes integrity, respect, and professionalism.
+  - **Core Principles**: Treat others with respect, act ethically, comply with laws, protect confidential information, avoid conflicts of interest.
+  - **Professional Conduct**: Diligent performance and positive workplace culture are expected; harassment and discrimination are not tolerated.
+  - **Reporting Violations**: Report to manager, HR, or ethics hotline.
+  - **Consequences**: Violations may lead to disciplinary action, including termination.
+
+- **New Hire Onboarding**: Guide for first two weeks; includes completing onboarding paperwork, setting up direct deposit, and training.
+  - **Key Contacts**: HR Support, IT Helpdesk, Payroll.
+  - **Resources**: Employee handbook and benefits guide available on HR portal.",3,01_Employee_Code_of_Conduct_2024; 02_New_Hire_Onboarding_Guide; 03_Health_Dental_Benefits_Overview,Policy,1079,4687
+golden-benefits-contact,f46ce260-45da-4db8-9bc1-b0af01ec3acc,Who should I contact for benefits or enrollment questions?,"I could not find that in the published HR policy documents. Please upload or publish the relevant policy document, then try again.",The expected answer is based on prior chatbot output for this tenant. It should provide benefits contact details only when those details are present in retrieved published HR policy chunks.,"I could not find that in the published HR policy documents. Please upload or publish the relevant policy document, then try again.",0,,Benefits,1635,1411
+golden-unsupported-payroll-question,f46ce260-45da-4db8-9bc1-b0af01ec3acc,What is the payroll reimbursement policy for international travel?,I could not find it in the uploaded HR policy documents.,The answer should say the international travel payroll reimbursement policy was not found in the uploaded HR policy documents and should not guess unsupported policy details.,I could not find it in the uploaded HR policy documents.,3,01_Employee_Code_of_Conduct_2024; 02_New_Hire_Onboarding_Guide; 03_Health_Dental_Benefits_Overview,Policy,1032,2926

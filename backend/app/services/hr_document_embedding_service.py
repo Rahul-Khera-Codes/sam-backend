@@ -121,6 +121,7 @@ def _process_document_bytes_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
 def _process_retrieval_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
     query = str(inputs.get("query") or "")
     return {
+        "retrieval_label": inputs.get("retrieval_label"),
         "business_id": inputs.get("business_id"),
         "query_chars": len(query),
         "query_preview": compact_text(query),
@@ -657,6 +658,12 @@ async def _create_query_embedding(query: str) -> list[float]:
     return response.data[0].embedding
 
 
+async def create_hr_policy_query_embedding(query: str) -> list[float]:
+    if not query.strip():
+        return []
+    return await _create_query_embedding(query)
+
+
 async def retrieve_relevant_document_chunks(
     *,
     business_id: str,
@@ -702,19 +709,19 @@ async def retrieve_relevant_document_chunks(
     process_inputs=_process_retrieval_inputs,
     process_outputs=_process_retrieval_outputs,
 )
-async def retrieve_relevant_hr_policy_chunks(
+async def retrieve_relevant_hr_policy_chunks_with_embedding(
     *,
     business_id: str,
     query: str,
+    query_embedding: list[float],
     document_id: str | None = None,
     category: str | None = None,
     match_count: int = 6,
     match_threshold: float = 0.15,
+    retrieval_label: str | None = None,
 ) -> list[dict[str, Any]]:
-    if not query.strip():
+    if not query.strip() or not query_embedding:
         return []
-
-    query_embedding = await _create_query_embedding(query)
 
     result = await asyncio.to_thread(
         lambda: supabase_admin.rpc(
@@ -726,7 +733,31 @@ async def retrieve_relevant_hr_policy_chunks(
                 "match_category": category,
                 "match_count": match_count,
                 "match_threshold": match_threshold,
+                "query_text": query,
             },
         ).execute()
     )
     return result.data or []
+
+
+async def retrieve_relevant_hr_policy_chunks(
+    *,
+    business_id: str,
+    query: str,
+    document_id: str | None = None,
+    category: str | None = None,
+    match_count: int = 6,
+    match_threshold: float = 0.15,
+    retrieval_label: str | None = None,
+) -> list[dict[str, Any]]:
+    query_embedding = await create_hr_policy_query_embedding(query)
+    return await retrieve_relevant_hr_policy_chunks_with_embedding(
+        business_id=business_id,
+        query=query,
+        query_embedding=query_embedding,
+        document_id=document_id,
+        category=category,
+        match_count=match_count,
+        match_threshold=match_threshold,
+        retrieval_label=retrieval_label,
+    )

@@ -6,6 +6,7 @@ import csv
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -165,18 +166,22 @@ async def collect_case_result(
     question = str(case["question"]).strip()
     document_id = case.get("document_id")
     category = case.get("category")
+    retrieval_started_at = time.perf_counter()
     matches = await retrieve_onboarding_matches(
         business_id=business_id,
         question=question,
         document_id=document_id,
         category=category,
     )
+    retrieval_latency_ms = round((time.perf_counter() - retrieval_started_at) * 1000)
+    answer_started_at = time.perf_counter()
     response = await answer_onboarding_question(
         business_id=business_id,
         question=question,
         document_id=document_id,
         category=category,
     )
+    answer_latency_ms = round((time.perf_counter() - answer_started_at) * 1000)
     retrieved_contexts = [
         str(match.get("content") or "").strip()
         for match in matches
@@ -189,16 +194,23 @@ async def collect_case_result(
             if match.get("content")
         }
     )
+    reference_criteria = str(case.get("reference") or "")
+    expected_answer = str(case.get("expected_answer") or "")
+    reference = expected_answer or reference_criteria
     return {
         "case_id": case["id"],
         "business_id": business_id,
         "user_input": question,
         "response": response.answer,
-        "reference": str(case.get("reference") or ""),
+        "reference": reference,
+        "reference_criteria": reference_criteria,
+        "expected_answer": expected_answer,
         "retrieved_contexts": retrieved_contexts,
         "source_documents": source_documents,
         "source_count": len(retrieved_contexts),
         "expected_category": category or "",
+        "retrieval_latency_ms": retrieval_latency_ms,
+        "answer_latency_ms": answer_latency_ms,
     }
 
 
@@ -292,9 +304,13 @@ def write_reports(
                 "user_input",
                 "response",
                 "reference",
+                "reference_criteria",
+                "expected_answer",
                 "source_count",
                 "source_documents",
                 "expected_category",
+                "retrieval_latency_ms",
+                "answer_latency_ms",
             ],
         )
         writer.writeheader()
