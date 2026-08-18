@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 DOCUMENT_BUCKET = "business-documents"
 HR_POLICY_DOCUMENT_BUCKET = "hr-policy-docs"
+REMI_DOCUMENT_BUCKET = "remi-documents"
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIMENSIONS = 1536
 MAX_DOCUMENT_TEXT_CHARS = 240_000
@@ -331,9 +332,10 @@ def _replace_document_chunks(
     embeddings: list[list[float]],
     chunking_strategy: str,
     metadata: dict[str, Any] | None = None,
+    chunk_table: str = "hr_document_chunks",
 ) -> None:
     (
-        supabase_admin.table("hr_document_chunks")
+        supabase_admin.table(chunk_table)
         .delete()
         .eq("document_id", document_id)
         .eq("business_id", business_id)
@@ -341,6 +343,7 @@ def _replace_document_chunks(
     )
 
     base_metadata = metadata or {}
+    location_id = base_metadata.get("location_id")
     rows = [
         {
             "business_id": business_id,
@@ -364,9 +367,12 @@ def _replace_document_chunks(
         }
         for index, (content, embedding) in enumerate(zip(chunks, embeddings, strict=True))
     ]
+    if chunk_table == "remi_document_chunks":
+        for row in rows:
+            row["location_id"] = location_id
 
     for start in range(0, len(rows), INSERT_BATCH_SIZE):
-        supabase_admin.table("hr_document_chunks").insert(
+        supabase_admin.table(chunk_table).insert(
             rows[start : start + INSERT_BATCH_SIZE]
         ).execute()
 
@@ -387,6 +393,7 @@ def _replace_document_chunks_traced(
     embeddings: list[list[float]],
     chunking_strategy: str,
     metadata: dict[str, Any] | None = None,
+    chunk_table: str = "hr_document_chunks",
 ) -> None:
     _replace_document_chunks(
         document_id=document_id,
@@ -396,6 +403,7 @@ def _replace_document_chunks_traced(
         embeddings=embeddings,
         chunking_strategy=chunking_strategy,
         metadata=metadata,
+        chunk_table=chunk_table,
     )
 
 
@@ -415,7 +423,9 @@ async def _process_document_bytes_impl(
             business_id,
             status="processing",
         )
-        is_hr_policy_document = (metadata or {}).get("document_scope") == "hr_onboarding"
+        document_scope = (metadata or {}).get("document_scope")
+        is_hr_policy_document = document_scope == "hr_onboarding"
+        is_remi_document = document_scope == "executive_remi"
         text = await asyncio.to_thread(
             _extract_pdf_text_traced if is_hr_policy_document else extract_pdf_text,
             file_bytes,
@@ -456,6 +466,7 @@ async def _process_document_bytes_impl(
             embeddings=embeddings,
             chunking_strategy=chunking_strategy,
             metadata=enriched_metadata,
+            chunk_table="remi_document_chunks" if is_remi_document else "hr_document_chunks",
         )
         await asyncio.to_thread(
             _update_document_status,
@@ -465,13 +476,13 @@ async def _process_document_bytes_impl(
             embedded_at=embedded_at,
         )
         logger.info(
-            "Embedded HR document %s for business %s into %d chunks.",
+            "Embedded document %s for business %s into %d chunks.",
             document_id,
             business_id,
             len(chunks),
         )
     except Exception as exc:
-        logger.exception("Failed to embed HR document %s: %s", document_id, exc)
+        logger.exception("Failed to embed document %s: %s", document_id, exc)
         try:
             await asyncio.to_thread(
                 _update_document_status,
@@ -532,6 +543,17 @@ async def process_document_bytes(
         )
         return
 
+    if (metadata or {}).get("document_scope") == "executive_remi":
+        await _process_document_bytes_impl(
+            document_id=document_id,
+            business_id=business_id,
+            document_name=document_name,
+            file_bytes=file_bytes,
+            metadata=metadata,
+            raise_on_error=raise_on_error,
+        )
+        return
+
     await _process_document_bytes_impl(
         document_id=document_id,
         business_id=business_id,
@@ -559,7 +581,7 @@ async def process_stored_document(
         rows = await asyncio.to_thread(
             lambda: (
                 supabase_admin.table("business_documents")
-                .select("id,business_id,name,file_name,file_path,storage_bucket,document_scope,category,status,created_at")
+                .select("id,business_id,location_id,name,file_name,file_path,storage_bucket,document_scope,category,status,created_at,uploaded_by,remi_document_purpose")
                 .eq("id", document_id)
                 .eq("business_id", business_id)
                 .limit(1)
@@ -596,6 +618,9 @@ async def process_stored_document(
                 "status": document.get("status") or "published",
                 "storage_bucket": bucket,
                 "document_created_at": document.get("created_at"),
+                "location_id": document.get("location_id"),
+                "uploaded_by": document.get("uploaded_by"),
+                "remi_document_purpose": document.get("remi_document_purpose"),
             },
             raise_on_error=True,
         )
@@ -761,3 +786,41 @@ async def retrieve_relevant_hr_policy_chunks(
         match_threshold=match_threshold,
         retrieval_label=retrieval_label,
     )
+
+
+async def retrieve_relevant_remi_document_chunks(
+    *,
+    business_id: str,
+    query: str,
+    location_id: str | None = None,
+    document_id: str | None = None,
+    category: str | None = None,
+    created_after: str | None = None,
+    created_before: str | None = None,
+    metadata_filter: dict[str, Any] | None = None,
+    match_count: int = 6,
+    match_threshold: float = 0.15,
+) -> list[dict[str, Any]]:
+    if not query.strip():
+        return []
+
+    query_embedding = await _create_query_embedding(query)
+    result = await asyncio.to_thread(
+        lambda: supabase_admin.rpc(
+            "match_remi_document_chunks",
+            {
+                "query_embedding": query_embedding,
+                "match_business_id": business_id,
+                "match_location_id": location_id,
+                "match_document_id": document_id,
+                "match_category": category,
+                "match_created_after": created_after,
+                "match_created_before": created_before,
+                "match_metadata": metadata_filter,
+                "match_count": match_count,
+                "match_threshold": match_threshold,
+                "query_text": query,
+            },
+        ).execute()
+    )
+    return result.data or []

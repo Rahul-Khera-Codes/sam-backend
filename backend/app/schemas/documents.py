@@ -22,9 +22,19 @@ class DocumentResponse(BaseModel):
     status: str = "published"
     uploaded_by: Optional[str] = None
     storage_bucket: str = "business-documents"
+    remi_document_purpose: Optional[str] = None
 
 
 class DocumentListResponse(BaseModel):
+    documents: list[DocumentResponse] = Field(default_factory=list)
+
+
+class RemiDocumentPurposeRequest(BaseModel):
+    business_id: str
+    purpose: str = Field(pattern="^(email_attachment|conversation_context)$")
+
+
+class RemiDocumentListResponse(BaseModel):
     documents: list[DocumentResponse] = Field(default_factory=list)
 
 
