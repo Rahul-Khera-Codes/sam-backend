@@ -8,7 +8,7 @@ email to customers on request during a call.
 import logging
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form, Query
 from typing import Optional
 
 from app.core.auth import get_user_id, verify_business_access
@@ -22,9 +22,12 @@ from app.schemas.documents import (
     HrPolicyDocumentUpdateRequest,
     HrPolicyMergeCategoriesRequest,
     HrPolicyReadProgressRequest,
+    RemiDocumentListResponse,
+    RemiDocumentPurposeRequest,
 )
 from app.services.hr_document_embedding_service import (
     HR_POLICY_DOCUMENT_BUCKET,
+    REMI_DOCUMENT_BUCKET,
     process_business_documents,
     process_document_bytes,
     process_stored_document,
@@ -35,6 +38,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 BUCKET = "business-documents"
+
+
+def _validate_pdf_upload(file: UploadFile) -> None:
+    if file.content_type not in ("application/pdf", "application/octet-stream"):
+        filename_lower = (file.filename or "").lower()
+        if not filename_lower.endswith(".pdf"):
+            raise HTTPException(status_code=422, detail="Only PDF files are allowed")
 
 
 def _require_admin(user_id: str, business_id: str) -> None:
@@ -51,6 +61,24 @@ def _parse_tags(raw_tags: str) -> list[str]:
 def _normalize_category(category: str | None) -> str:
     normalized = (category or "").strip()
     return normalized or "General"
+
+
+def _validate_location_access(business_id: str, location_id: str | None) -> None:
+    if not location_id:
+        return
+    location = (
+        supabase_admin.table("locations")
+        .select("id")
+        .eq("id", location_id)
+        .eq("business_id", business_id)
+        .limit(1)
+        .execute()
+    )
+    if not location.data:
+        raise HTTPException(
+            status_code=403,
+            detail="The selected location does not belong to this business.",
+        )
 
 
 def _hr_policy_response(row: dict, progress_percent: int = 0) -> HrPolicyDocumentResponse:
@@ -85,6 +113,21 @@ def _fetch_hr_policy_document(document_id: str, business_id: str) -> dict:
     return result.data[0]
 
 
+def _fetch_remi_document(document_id: str, business_id: str) -> dict:
+    result = (
+        supabase_admin.table("business_documents")
+        .select("*")
+        .eq("id", document_id)
+        .eq("business_id", business_id)
+        .eq("document_scope", "executive_remi")
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Remi document not found")
+    return result.data[0]
+
+
 @router.post("/upload", response_model=DocumentResponse)
 async def upload_document(
     background_tasks: BackgroundTasks,
@@ -98,26 +141,8 @@ async def upload_document(
     """Upload a PDF document for a business. Stored in Supabase Storage."""
     verify_business_access(user_id, business_id)
 
-    if location_id:
-        location = (
-            supabase_admin.table("locations")
-            .select("id")
-            .eq("id", location_id)
-            .eq("business_id", business_id)
-            .limit(1)
-            .execute()
-        )
-        if not location.data:
-            raise HTTPException(
-                status_code=403,
-                detail="The selected location does not belong to this business.",
-            )
-
-    if file.content_type not in ("application/pdf", "application/octet-stream"):
-        # Accept octet-stream as well since some browsers send that for PDFs
-        filename_lower = (file.filename or "").lower()
-        if not filename_lower.endswith(".pdf"):
-            raise HTTPException(status_code=422, detail="Only PDF files are allowed")
+    _validate_location_access(business_id, location_id)
+    _validate_pdf_upload(file)
 
     file_bytes = await file.read()
     if not file_bytes:
@@ -196,6 +221,152 @@ async def list_documents(
     result = query.execute()
     docs = result.data or []
     return DocumentListResponse(documents=[DocumentResponse(**d) for d in docs])
+
+
+@router.post("/remi/upload", response_model=DocumentResponse)
+async def upload_remi_document(
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    business_id: str = Form(...),
+    description: str = Form(""),
+    category: str = Form("General"),
+    tags: str = Form(""),
+    location_id: Optional[str] = Form(None),
+    user_id: str = Depends(get_user_id),
+):
+    """Upload a PDF linked to a Remi chat and wait for the owner to choose its purpose."""
+    verify_business_access(user_id, business_id)
+    _validate_location_access(business_id, location_id)
+    _validate_pdf_upload(file)
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=422, detail="Uploaded file is empty")
+
+    doc_id = str(uuid.uuid4())
+    safe_filename = (file.filename or "remi-document.pdf").replace(" ", "_")
+    storage_path = f"{business_id}/{doc_id}_{safe_filename}"
+    normalized_category = _normalize_category(category)
+    parsed_tags = _parse_tags(tags)
+
+    try:
+        supabase_admin.storage.from_(REMI_DOCUMENT_BUCKET).upload(
+            storage_path,
+            file_bytes,
+            {"content-type": "application/pdf"},
+        )
+    except Exception as e:
+        logger.error("Remi document storage upload failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Failed to upload file to storage: {e}")
+
+    row = {
+        "id": doc_id,
+        "business_id": business_id,
+        "location_id": location_id or None,
+        "name": name.strip() or (file.filename or "Remi document"),
+        "description": description or "",
+        "file_path": storage_path,
+        "file_name": file.filename or safe_filename,
+        "file_size_bytes": len(file_bytes),
+        "document_scope": "executive_remi",
+        "category": normalized_category,
+        "tags": parsed_tags,
+        "status": "published",
+        "uploaded_by": user_id,
+        "storage_bucket": REMI_DOCUMENT_BUCKET,
+        "remi_document_purpose": None,
+    }
+
+    try:
+        result = supabase_admin.table("business_documents").insert(row).execute()
+        if not result.data:
+            raise Exception("Insert returned no data")
+        inserted = result.data[0]
+    except Exception as e:
+        try:
+            supabase_admin.storage.from_(REMI_DOCUMENT_BUCKET).remove([storage_path])
+        except Exception:
+            pass
+        logger.error("Remi document DB insert failed after storage upload: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to save Remi document record")
+
+    return DocumentResponse(**inserted)
+
+
+@router.get("/remi", response_model=RemiDocumentListResponse)
+async def list_remi_documents(
+    business_id: str,
+    location_id: Optional[str] = None,
+    purpose: Optional[str] = Query(None, pattern="^(email_attachment|conversation_context)$"),
+    user_id: str = Depends(get_user_id),
+):
+    """List PDFs uploaded from Remi chat."""
+    verify_business_access(user_id, business_id)
+    _validate_location_access(business_id, location_id)
+
+    query = (
+        supabase_admin.table("business_documents")
+        .select("*")
+        .eq("business_id", business_id)
+        .eq("document_scope", "executive_remi")
+        .eq("status", "published")
+        .order("created_at", desc=True)
+    )
+    if location_id:
+        query = query.eq("location_id", location_id)
+    else:
+        query = query.is_("location_id", "null")
+    if purpose:
+        query = query.eq("remi_document_purpose", purpose)
+
+    result = query.execute()
+    return RemiDocumentListResponse(
+        documents=[DocumentResponse(**row) for row in (result.data or [])]
+    )
+
+
+@router.post("/remi/{document_id}/choose-purpose", response_model=DocumentResponse)
+async def choose_remi_document_purpose(
+    document_id: str,
+    req: RemiDocumentPurposeRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(get_user_id),
+):
+    """Mark a Remi chat PDF for email attachment or persistent conversation context."""
+    verify_business_access(user_id, req.business_id)
+    doc = _fetch_remi_document(document_id, req.business_id)
+
+    updates = {
+        "remi_document_purpose": req.purpose,
+        "embedding_error": None,
+    }
+    if req.purpose == "conversation_context":
+        updates["embedding_status"] = "pending"
+        updates["embedded_at"] = None
+    else:
+        updates["embedding_status"] = "ready"
+
+    result = (
+        supabase_admin.table("business_documents")
+        .update(updates)
+        .eq("id", document_id)
+        .eq("business_id", req.business_id)
+        .eq("document_scope", "executive_remi")
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Remi document not found")
+    updated = result.data[0]
+
+    if req.purpose == "conversation_context":
+        background_tasks.add_task(
+            process_stored_document,
+            document_id=document_id,
+            business_id=req.business_id,
+            storage_bucket=doc.get("storage_bucket") or REMI_DOCUMENT_BUCKET,
+        )
+
+    return DocumentResponse(**updated)
 
 
 @router.post("/hr-policy/upload", response_model=HrPolicyDocumentResponse)

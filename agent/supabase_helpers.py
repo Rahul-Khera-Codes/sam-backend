@@ -669,21 +669,40 @@ def _fetch_documents_for_location(
     business_id: str,
     location_id: str | None,
 ) -> list[dict]:
-    """Fetch uploaded documents for a specific location."""
+    """Fetch uploaded documents that Remi may attach to email for a location."""
     if not supabase or not business_id:
         return []
     try:
-        query = (
+        base_select = (
+            "id, name, description, file_path, file_name, storage_bucket, "
+            "document_scope, remi_document_purpose"
+        )
+        business_query = (
             supabase.table("business_documents")
-            .select("id, name, description, file_path, file_name")
+            .select(base_select)
             .eq("business_id", business_id)
+            .eq("document_scope", "business")
         )
         if location_id:
-            query = query.eq("location_id", location_id)
+            business_query = business_query.eq("location_id", location_id)
         else:
-            query = query.is_("location_id", "null")
-        r = query.execute()
-        return getattr(r, "data", None) or []
+            business_query = business_query.is_("location_id", "null")
+        business_docs = getattr(business_query.execute(), "data", None) or []
+
+        remi_query = (
+            supabase.table("business_documents")
+            .select(base_select)
+            .eq("business_id", business_id)
+            .eq("document_scope", "executive_remi")
+            .eq("remi_document_purpose", "email_attachment")
+            .eq("status", "published")
+        )
+        if location_id:
+            remi_query = remi_query.eq("location_id", location_id)
+        else:
+            remi_query = remi_query.is_("location_id", "null")
+        remi_docs = getattr(remi_query.execute(), "data", None) or []
+        return [*business_docs, *remi_docs]
     except Exception as e:
         logger.warning("Failed to fetch documents: %s", e)
         return []

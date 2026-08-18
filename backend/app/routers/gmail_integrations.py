@@ -44,6 +44,18 @@ def _get_token_row_for_location(business_id: str, location_id: Optional[str]) ->
     return result.data[0] if result.data else None
 
 
+def _get_business_token_row(business_id: str) -> Optional[dict]:
+    result = (
+        supabase_admin.table("gmail_tokens")
+        .select("*")
+        .eq("business_id", business_id)
+        .is_("location_id", "null")
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
 # ── GET /integrations/gmail/auth-url ─────────────────────────────────────────
 
 @router.get("/auth-url")
@@ -186,6 +198,8 @@ async def get_status(
 ):
     verify_business_access(user_id, business_id)
     row = _get_token_row_for_location(business_id, location_id)
+    if not row and location_id:
+        row = _get_business_token_row(business_id)
     if row:
         google_email = row.get("google_email", "")
         if not google_email and row.get("access_token"):

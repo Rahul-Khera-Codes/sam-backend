@@ -143,7 +143,7 @@ async def has_gmail_send_scope(access_token: str, scope_string: str | None = Non
 def get_token_row(
     supabase, business_id: str, location_id: Optional[str] = None
 ) -> Optional[dict]:
-    """Fetch gmail token scoped to (business_id, location_id)."""
+    """Fetch Gmail token scoped to a location, falling back to the business sender."""
     query = (
         supabase.table("gmail_tokens")
         .select("*")
@@ -154,7 +154,19 @@ def get_token_row(
     else:
         query = query.is_("location_id", "null")
     result = query.limit(1).execute()
-    return result.data[0] if result.data else None
+    if result.data:
+        return result.data[0]
+    if location_id:
+        fallback = (
+            supabase.table("gmail_tokens")
+            .select("*")
+            .eq("business_id", business_id)
+            .is_("location_id", "null")
+            .limit(1)
+            .execute()
+        )
+        return fallback.data[0] if fallback.data else None
+    return None
 
 
 async def get_valid_access_token(
