@@ -8,6 +8,7 @@ logging.basicConfig(level=logging.INFO)
 
 from app.core.config import settings
 from app.routers import (
+    auth_checks,
     calls,
     settings as settings_router,
     forwarding,
@@ -68,6 +69,7 @@ app.add_middleware(
 
 # ── Routers ───────────────────────────────────
 
+app.include_router(auth_checks.router)
 app.include_router(calls.router)
 app.include_router(settings_router.router)
 app.include_router(forwarding.router)

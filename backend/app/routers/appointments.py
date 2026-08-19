@@ -13,6 +13,9 @@ from app.schemas.appointments import (
     VALID_APPOINTMENT_STATUSES,
     AppointmentPaymentResponse,
     SaveAppointmentPaymentRequest,
+    CreatePaymentEntryRequest,
+    UpdatePaymentEntryRequest,
+    RefundPaymentRequest,
 )
 from app.services import booking_service
 
@@ -95,8 +98,6 @@ def _build_payment_snapshot(body: SaveAppointmentPaymentRequest) -> tuple[list[d
         if not item.service_name.strip():
             raise HTTPException(status_code=400, detail="Line item service name is required")
         if item.price is None:
-            if body.status == "paid":
-                raise HTTPException(status_code=400, detail="All service prices are required before marking payment paid")
             price = None
             line_total = Decimal("0.00")
         else:
@@ -122,6 +123,64 @@ def _build_payment_snapshot(body: SaveAppointmentPaymentRequest) -> tuple[list[d
     selected_taxes, tax_total = _fetch_tax_snapshots(body.business_id, body.tax_config_ids, subtotal)
     grand_total = (subtotal + tax_total + tip_amount).quantize(MONEY_QUANT, rounding=ROUND_HALF_UP)
     return line_items, selected_taxes, subtotal, tax_total, tip_amount, grand_total
+
+
+def _fetch_payment_entries(appointment_payment_id: str) -> list[dict]:
+    result = (
+        supabase_admin.table("appointment_payment_entries")
+        .select("*")
+        .eq("appointment_payment_id", appointment_payment_id)
+        .order("paid_at")
+        .execute()
+    )
+    return result.data or []
+
+
+def _get_payment_row_or_404(appointment_id: str, business_id: str) -> dict:
+    result = (
+        supabase_admin.table("appointment_payments")
+        .select("*")
+        .eq("appointment_id", appointment_id)
+        .eq("business_id", business_id)
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Save payment details before recording a payment")
+    return result.data[0]
+
+
+def _build_full_payment_response(payment_row: dict) -> dict:
+    entries = _fetch_payment_entries(payment_row["id"])
+    grand_total = _money(payment_row.get("grand_total"))
+
+    paid_amount = Decimal("0.00")
+    fully_paid_at: str | None = None
+    for entry in entries:
+        paid_amount += _money(entry.get("amount"))
+        if fully_paid_at is None and paid_amount >= grand_total and grand_total > 0:
+            fully_paid_at = entry.get("paid_at")
+
+    owing_amount = (grand_total - paid_amount).quantize(MONEY_QUANT, rounding=ROUND_HALF_UP)
+
+    refunded_at = payment_row.get("refunded_at")
+    if refunded_at:
+        status = "refunded"
+    elif paid_amount <= 0:
+        status = "unpaid"
+    elif paid_amount < grand_total:
+        status = "partially_paid"
+    else:
+        status = "paid"
+
+    return {
+        **payment_row,
+        "entries": entries,
+        "paid_amount": float(paid_amount),
+        "owing_amount": float(owing_amount),
+        "status": status,
+        "paid_at": fully_paid_at,
+    }
 
 
 @router.post("", response_model=AppointmentResponse)
@@ -195,7 +254,7 @@ async def get_appointment_payment(
     )
     if not result.data:
         return None
-    return result.data[0]
+    return _build_full_payment_response(result.data[0])
 
 
 @router.put("/{appointment_id}/payment", response_model=AppointmentPaymentResponse)
@@ -206,36 +265,27 @@ async def save_appointment_payment(
 ):
     verify_business_access(user_id, body.business_id)
     appointment = _get_appointment_for_business(appointment_id, body.business_id)
-    if body.status == "paid" and not body.payment_type:
-        raise HTTPException(status_code=400, detail="Payment type is required before marking payment paid")
 
     line_items, selected_taxes, subtotal, tax_total, tip_amount, grand_total = _build_payment_snapshot(body)
     existing = (
         supabase_admin.table("appointment_payments")
-        .select("id, paid_at")
+        .select("id")
         .eq("appointment_id", appointment_id)
         .eq("business_id", body.business_id)
         .limit(1)
         .execute()
     )
 
-    paid_at = None
-    if body.status == "paid":
-        paid_at = (existing.data or [{}])[0].get("paid_at") or datetime.now(timezone.utc).isoformat()
-
     row = {
         "appointment_id": appointment_id,
         "business_id": body.business_id,
         "location_id": body.location_id or appointment.get("location_id"),
-        "status": body.status,
-        "payment_type": body.payment_type,
         "line_items": line_items,
         "selected_taxes": selected_taxes,
         "subtotal": float(subtotal),
         "tax_total": float(tax_total),
         "tip_amount": float(tip_amount),
         "grand_total": float(grand_total),
-        "paid_at": paid_at,
         "updated_by": user_id,
     }
 
@@ -255,4 +305,137 @@ async def save_appointment_payment(
 
     if not result.data:
         raise HTTPException(status_code=500, detail="Failed to save payment details")
-    return result.data[0]
+    return _build_full_payment_response(result.data[0])
+
+
+@router.post("/{appointment_id}/payment/entries", response_model=AppointmentPaymentResponse)
+async def add_payment_entry(
+    appointment_id: str,
+    body: CreatePaymentEntryRequest,
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, body.business_id)
+    payment_row = _get_payment_row_or_404(appointment_id, body.business_id)
+
+    line_items = payment_row.get("line_items") or []
+    if any(item.get("price") is None for item in line_items):
+        raise HTTPException(status_code=400, detail="Enter a price for every service before recording a payment")
+
+    amount = _money(body.amount)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Payment amount must be greater than zero")
+
+    entry_row = {
+        "appointment_payment_id": payment_row["id"],
+        "business_id": body.business_id,
+        "payment_type": body.payment_type,
+        "amount": float(amount),
+        "note": body.note,
+        "created_by": user_id,
+        "updated_by": user_id,
+    }
+    if body.paid_at:
+        entry_row["paid_at"] = body.paid_at
+
+    result = supabase_admin.table("appointment_payment_entries").insert(entry_row).execute()
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to record payment")
+
+    return _build_full_payment_response(payment_row)
+
+
+@router.patch("/{appointment_id}/payment/entries/{entry_id}", response_model=AppointmentPaymentResponse)
+async def update_payment_entry(
+    appointment_id: str,
+    entry_id: str,
+    body: UpdatePaymentEntryRequest,
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, body.business_id)
+    payment_row = _get_payment_row_or_404(appointment_id, body.business_id)
+
+    updates: dict = {"updated_by": user_id}
+    if body.payment_type is not None:
+        updates["payment_type"] = body.payment_type
+    if body.amount is not None:
+        amount = _money(body.amount)
+        if amount <= 0:
+            raise HTTPException(status_code=400, detail="Payment amount must be greater than zero")
+        updates["amount"] = float(amount)
+    if body.note is not None:
+        updates["note"] = body.note
+
+    result = (
+        supabase_admin.table("appointment_payment_entries")
+        .update(updates)
+        .eq("id", entry_id)
+        .eq("appointment_payment_id", payment_row["id"])
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Payment entry not found")
+
+    return _build_full_payment_response(payment_row)
+
+
+@router.delete("/{appointment_id}/payment/entries/{entry_id}", response_model=AppointmentPaymentResponse)
+async def delete_payment_entry(
+    appointment_id: str,
+    entry_id: str,
+    business_id: str,
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    payment_row = _get_payment_row_or_404(appointment_id, business_id)
+
+    result = (
+        supabase_admin.table("appointment_payment_entries")
+        .delete()
+        .eq("id", entry_id)
+        .eq("appointment_payment_id", payment_row["id"])
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Payment entry not found")
+
+    return _build_full_payment_response(payment_row)
+
+
+@router.post("/{appointment_id}/payment/refund", response_model=AppointmentPaymentResponse)
+async def refund_appointment_payment(
+    appointment_id: str,
+    body: RefundPaymentRequest,
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, body.business_id)
+    payment_row = _get_payment_row_or_404(appointment_id, body.business_id)
+
+    result = (
+        supabase_admin.table("appointment_payments")
+        .update({"refunded_at": datetime.now(timezone.utc).isoformat(), "updated_by": user_id})
+        .eq("id", payment_row["id"])
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to mark payment refunded")
+    return _build_full_payment_response(result.data[0])
+
+
+@router.delete("/{appointment_id}/payment/refund", response_model=AppointmentPaymentResponse)
+async def unrefund_appointment_payment(
+    appointment_id: str,
+    business_id: str,
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    payment_row = _get_payment_row_or_404(appointment_id, business_id)
+
+    result = (
+        supabase_admin.table("appointment_payments")
+        .update({"refunded_at": None, "updated_by": user_id})
+        .eq("id", payment_row["id"])
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to clear refund status")
+    return _build_full_payment_response(result.data[0])
