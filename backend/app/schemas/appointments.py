@@ -82,7 +82,9 @@ class CancelAppointmentResponse(BaseModel):
     message: str
 
 
-PaymentStatus = Literal["pending", "paid", "unpaid", "refunded"]
+# "unpaid"/"partially_paid"/"paid" are always computed from entries vs grand_total — never
+# stored directly. "refunded" is the one manual override, tracked via refunded_at.
+PaymentStatus = Literal["unpaid", "partially_paid", "paid", "refunded"]
 PaymentType = Literal["cash", "credit_card", "debit_card", "e_transfer", "other"]
 
 
@@ -96,11 +98,41 @@ class AppointmentPaymentLineItem(BaseModel):
 class SaveAppointmentPaymentRequest(BaseModel):
     business_id: str
     location_id: Optional[str] = None
-    status: PaymentStatus = "pending"
-    payment_type: Optional[PaymentType] = None
     line_items: list[AppointmentPaymentLineItem]
     tax_config_ids: list[str] = Field(default_factory=list)
     tip_amount: float = 0
+
+
+class AppointmentPaymentEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    payment_type: PaymentType
+    amount: float
+    note: Optional[str] = None
+    paid_at: str
+    created_by: Optional[str] = None
+    updated_by: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class CreatePaymentEntryRequest(BaseModel):
+    business_id: str
+    payment_type: PaymentType
+    amount: float
+    note: Optional[str] = None
+    paid_at: Optional[str] = None
+
+
+class UpdatePaymentEntryRequest(BaseModel):
+    business_id: str
+    payment_type: Optional[PaymentType] = None
+    amount: Optional[float] = None
+    note: Optional[str] = None
+
+
+class RefundPaymentRequest(BaseModel):
+    business_id: str
 
 
 class AppointmentPaymentResponse(BaseModel):
@@ -110,13 +142,16 @@ class AppointmentPaymentResponse(BaseModel):
     business_id: str
     location_id: Optional[str] = None
     status: PaymentStatus
-    payment_type: Optional[PaymentType] = None
     line_items: list[dict]
     selected_taxes: list[dict]
     subtotal: float
     tax_total: float
     tip_amount: float
     grand_total: float
+    paid_amount: float
+    owing_amount: float
+    entries: list[AppointmentPaymentEntry] = Field(default_factory=list)
+    refunded_at: Optional[str] = None
     paid_at: Optional[str] = None
     created_by: Optional[str] = None
     updated_by: Optional[str] = None

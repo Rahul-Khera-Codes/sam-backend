@@ -44,5 +44,10 @@ anyio==4.3.0
 twilio==9.10.4
 stripe>=11.0.0
 
+# Disposable-email-domain blocklist for signup alias blocking. Version tracks the
+# underlying domain list (github.com/disposable-email-domains/disposable-email-domains),
+# so no upper bound.
+disposable-email-domains>=0.0.239
+
 # Scheduler (reminder + reschedule outbound calls cron)
 apscheduler>=3.10,<4

@@ -25,6 +25,17 @@
    - "Product owner" means: how does this change what the end user experiences? Does it conflict with another flow, create confusion, or introduce a hidden cost?
    - **Mandatory sequence: verify → spec → implement. No exceptions.**
 
+7. **Rebuild the backend Docker container after every backend code change.** Code edits to `backend/` or `agent/` don't take effect in the running stack until the image is rebuilt. As the last step of any backend task, without waiting to be asked, run:
+   ```bash
+   docker compose down
+   docker compose up --build -d
+   ```
+
+8. **Maintain a per-feature doc in `docs/features/`.** This is the single shared feature-doc location for both repos (sam-backend and ai-employees-app).
+   - Starting or resuming work on a feature: read `docs/features/<feature-name>.md` first if it exists, for context on what already exists, past decisions, and open issues — before assuming or re-deriving anything.
+   - First time implementing a feature: create `docs/features/<feature-name>.md` covering what it does, the key files/endpoints involved (across both repos), and important decisions/tradeoffs made.
+   - Any time the feature changes: update that file in the same piece of work — not deferred to end-of-session. Stale feature docs are worse than none.
+
 ---
 
 ## Dev Process (ALWAYS follow — every task, every session)
@@ -68,6 +79,7 @@ Do not skip or merge phases. Do not start the next phase without completing the 
 
 ## Memory + Docs (REQUIRED at end of every session)
 - Update `docs/SESSION_HANDOFF.md` — rewrite the "What Was Done This Session" block with this session's work; update System Status, Pending Manual Steps, Applied Migrations
+- Update `docs/features/<feature-name>.md` for every feature touched this session (see Working Rule 8) — create it if it doesn't exist yet
 - Update `memory/project_voice_agent.md` — keep "What's Working" and "Blocked" current
 - Update `memory/project_blockers.md` — remove resolved blockers, add new ones
 - These must be updated **before ending the session** — not optional
@@ -89,6 +101,8 @@ Active agent: `agent/agent.py` (`USE_LIVEKIT_AGENT=1`). Legacy worker in `backen
 ## Running the Stack
 ```bash
 docker compose up -d                          # start all services
+docker compose down                           # REQUIRED before rebuilding — stop + remove containers
+docker compose up --build -d                  # REQUIRED after any backend/agent code change — rebuild image + start
 docker logs -f sam-backend-sam-agent-1        # agent logs
 docker compose restart sam-agent              # restart agent (if hot reload missed a change)
 ```
