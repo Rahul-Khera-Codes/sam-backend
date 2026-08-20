@@ -41,10 +41,20 @@ from app.services.hr_onboarding_langsmith_service import (
     summarize_source_payload,
 )
 from app.services.hr_onboarding_reranker_service import rerank_hr_policy_chunks
+from app.services.hr_onboarding_conversation_memory_service import (
+    append_turn,
+    fetch_conversation_history,
+    get_or_create_conversation,
+)
+from app.services.token_budget_service import ConversationTurn, window_to_budget
 
 logger = logging.getLogger(__name__)
 
 ONBOARDING_CHAT_MODEL = "gpt-4o-mini"
+# Working-memory budget for prior turns injected into the prompt. Conservative
+# relative to gpt-4o-mini's context window since RAG source excerpts (up to
+# MAX_SOURCES chunks) share the same request.
+HISTORY_TOKEN_BUDGET = 2_500
 MAX_SOURCES = 6
 MAX_EXCERPT_CHARS = 1_400
 ACTIVE_DOCUMENT_MAX_SOURCES = 3
@@ -62,8 +72,8 @@ LOW_CONFIDENCE_SIMILARITY = 0.35
 CLOSE_SIMILARITY_MARGIN = 0.03
 
 
-def _rate_limit_response() -> OnboardingChatResponse:
-    return OnboardingChatResponse(answer=RATE_LIMIT_MESSAGE, sources=[])
+def _rate_limit_response(conversation_id: str | None = None) -> OnboardingChatResponse:
+    return OnboardingChatResponse(answer=RATE_LIMIT_MESSAGE, sources=[], conversation_id=conversation_id)
 
 
 def _is_rate_limit_exception(exc: BaseException) -> bool:
@@ -73,12 +83,33 @@ _GREETING_PATTERN = re.compile(
     r"^(hi|hello|hey|hello there|hi there|hey there|good morning|good afternoon|good evening|greetings)[.!?\s]*$",
     re.I,
 )
-_THANKS_PATTERN = re.compile(r"^(thanks|thank you|thx|appreciate it|thanks john)[.!?\s]*$", re.I)
+_THANKS_PATTERN = re.compile(r"^(thanks|thank you|thx|appreciate it)[.!?\s]*$", re.I)
 _GOODBYE_PATTERN = re.compile(r"^(bye|goodbye|see you|see ya|talk to you later)[.!?\s]*$", re.I)
 _CAPABILITY_PATTERN = re.compile(
     r"\b(what can you do|how can you help|help me|who are you|what do you help with|what are you able to do)\b",
     re.I,
 )
+_CONTEXT_DEPENDENT_START_PATTERN = re.compile(
+    r"^\s*(and|also|what about|how about|plus|additionally|"
+    r"that|it|this|those|these|there|then|so)\b",
+    re.I,
+)
+
+
+def _looks_context_dependent(question: str) -> bool:
+    """Heuristic for "this question can't be understood on its own, it leans
+    on the prior turn" (e.g. "What about dental?", "And sick leave?", "It?").
+    Used to decide whether the response cache is safe to use for THIS
+    question — an exact repeat of a self-contained question (however short,
+    e.g. "Summarize policies") is safe to cache/serve regardless of how much
+    conversation came before it; a referential follow-up isn't, because the
+    cache key doesn't carry the context that resolves it. Deliberately not
+    length-based — word count doesn't distinguish "What about dental?" from
+    "Summarize Policy policies", both 3 words."""
+    text = question.strip()
+    if not text:
+        return False
+    return bool(_CONTEXT_DEPENDENT_START_PATTERN.match(text))
 _BROAD_QUERY_PATTERN = re.compile(
     r"\b(summarize|summary|overview|important|points?|key|main|first|complete|checklist|steps?|what should)\b",
     re.I,
@@ -98,17 +129,39 @@ def _truncate(value: str, limit: int) -> str:
     return text[: limit - 3].rstrip() + "..."
 
 
+def _strip_address(text: str) -> str:
+    """Remove a leading or trailing direct address to "John" (e.g. "Hey John",
+    "Thanks John!", "John, hi") so casual-message patterns match regardless of
+    whether the user names the bot. A bare "John" with nothing else strips to
+    "" — callers treat that as a greeting."""
+    words = text.split()
+    if not words:
+        return text
+
+    def _is_john(word: str) -> bool:
+        return word.strip(".,!?:;\"'").lower() == "john"
+
+    if _is_john(words[-1]):
+        return " ".join(words[:-1]).strip()
+    if _is_john(words[0]):
+        return " ".join(words[1:]).strip()
+    return text
+
+
 def _answer_casual_message(question: str) -> str | None:
     text = " ".join(question.split()).strip()
     if not text:
         return "Hi, I'm John. Ask me a question about your HR policies, benefits, onboarding steps, or workplace documents."
-    if _GREETING_PATTERN.match(text):
+    candidate = _strip_address(text)
+    if not candidate:
         return "Hi, I'm John. I'm here to help with HR policy, benefits, onboarding, and workplace questions."
-    if _THANKS_PATTERN.match(text):
+    if _GREETING_PATTERN.match(candidate):
+        return "Hi, I'm John. I'm here to help with HR policy, benefits, onboarding, and workplace questions."
+    if _THANKS_PATTERN.match(candidate):
         return "You're welcome. I'm here if you have another HR or onboarding question."
-    if _GOODBYE_PATTERN.match(text):
+    if _GOODBYE_PATTERN.match(candidate):
         return "Goodbye. Feel free to come back whenever you need help with HR or onboarding questions."
-    if _CAPABILITY_PATTERN.search(text) and len(text) <= 140:
+    if _CAPABILITY_PATTERN.search(candidate) and len(candidate) <= 140:
         return (
             "I can help you understand your company's uploaded HR policy documents, including onboarding steps, "
             "benefits, workplace policies, handbook details, and compliance guidance. If a policy answer is not in "
@@ -642,7 +695,19 @@ def _reduce_token_outputs(tokens: list[str]) -> dict[str, int | str]:
     }
 
 
-def _json_answer_messages(*, question: str, source_payload: list[dict[str, str]]) -> list[dict[str, str]]:
+def _history_messages(history: list[ConversationTurn] | None) -> list[dict[str, str]]:
+    """Prior turns as real chat messages, placed after the system prompt and
+    before the grounded question — this is the working-memory injection point.
+    Document excerpts stay in the final user message regardless of history so
+    RAG grounding always reflects the current question, not a stale one."""
+    if not history:
+        return []
+    return [{"role": t["role"], "content": t["content"]} for t in history]
+
+
+def _json_answer_messages(
+    *, question: str, source_payload: list[dict[str, str]], history: list[ConversationTurn] | None = None
+) -> list[dict[str, str]]:
     return [
         {
             "role": "system",
@@ -653,9 +718,12 @@ def _json_answer_messages(*, question: str, source_payload: list[dict[str, str]]
                 "Use all excerpts collectively; if any excerpt supports the answer, answer from that excerpt. "
                 "For broad, summary, checklist, or important-points questions, return concise bullets from the relevant excerpts. "
                 "If no excerpt supports the answer, say you could not find it in the uploaded HR policy documents. "
+                "Prior conversation turns, if present, are for context only (e.g. resolving 'it'/'that') — "
+                "still ground the answer itself in the document excerpts below. "
                 "Keep answers concise, practical, and friendly. Return valid JSON only with an 'answer' string."
             ),
         },
+        *_history_messages(history),
         {
             "role": "user",
             "content": (
@@ -668,7 +736,9 @@ def _json_answer_messages(*, question: str, source_payload: list[dict[str, str]]
     ]
 
 
-def _stream_answer_messages(*, question: str, source_payload: list[dict[str, str]]) -> list[dict[str, str]]:
+def _stream_answer_messages(
+    *, question: str, source_payload: list[dict[str, str]], history: list[ConversationTurn] | None = None
+) -> list[dict[str, str]]:
     return [
         {
             "role": "system",
@@ -679,9 +749,12 @@ def _stream_answer_messages(*, question: str, source_payload: list[dict[str, str
                 "Use all excerpts collectively; if any excerpt supports the answer, answer from that excerpt. "
                 "For broad, summary, checklist, or important-points questions, return concise bullets from the relevant excerpts. "
                 "If no excerpt supports the answer, say you could not find it in the uploaded HR policy documents. "
+                "Prior conversation turns, if present, are for context only (e.g. resolving 'it'/'that') — "
+                "still ground the answer itself in the document excerpts below. "
                 "Keep answers concise, practical, and friendly. Return only the answer text."
             ),
         },
+        *_history_messages(history),
         {
             "role": "user",
             "content": (
@@ -702,12 +775,14 @@ def _stream_answer_messages(*, question: str, source_payload: list[dict[str, str
     process_inputs=_process_llm_inputs,
     process_outputs=_process_llm_outputs,
 )
-async def _generate_json_answer(*, question: str, source_payload: list[dict[str, str]]) -> str:
+async def _generate_json_answer(
+    *, question: str, source_payload: list[dict[str, str]], history: list[ConversationTurn] | None = None
+) -> str:
     response = await _openai_client().chat.completions.create(
         model=ONBOARDING_CHAT_MODEL,
         temperature=0,
         response_format={"type": "json_object"},
-        messages=_json_answer_messages(question=question, source_payload=source_payload),
+        messages=_json_answer_messages(question=question, source_payload=source_payload, history=history),
     )
     return response.choices[0].message.content or "{}"
 
@@ -720,12 +795,14 @@ async def _generate_json_answer(*, question: str, source_payload: list[dict[str,
     process_inputs=_process_llm_inputs,
     reduce_fn=_reduce_token_outputs,
 )
-async def _stream_answer_tokens(*, question: str, source_payload: list[dict[str, str]]) -> AsyncIterator[str]:
+async def _stream_answer_tokens(
+    *, question: str, source_payload: list[dict[str, str]], history: list[ConversationTurn] | None = None
+) -> AsyncIterator[str]:
     stream = await _openai_client().chat.completions.create(
         model=ONBOARDING_CHAT_MODEL,
         temperature=0,
         stream=True,
-        messages=_stream_answer_messages(question=question, source_payload=source_payload),
+        messages=_stream_answer_messages(question=question, source_payload=source_payload, history=history),
     )
     async for chunk in stream:
         token = chunk.choices[0].delta.content or ""
@@ -784,55 +861,102 @@ async def answer_onboarding_question(
     question: str,
     document_id: str | None = None,
     category: str | None = None,
+    user_id: str | None = None,
+    conversation_id: str | None = None,
 ) -> OnboardingChatResponse:
+    conversation_id = (
+        get_or_create_conversation(conversation_id=conversation_id, business_id=business_id, user_id=user_id)
+        if user_id
+        else conversation_id
+    )
+
+    history = fetch_conversation_history(conversation_id=conversation_id, business_id=business_id) if conversation_id else []
+    windowed_history = window_to_budget(history, HISTORY_TOKEN_BUDGET)
+    # Only skip the cache when THIS question actually leans on prior context —
+    # an exact repeat of a self-contained question ("What is the PTO policy?"
+    # asked twice in the same chat) is always safe to serve from cache, even
+    # deep into a conversation. A short/referential follow-up ("What about
+    # dental?") isn't, since the cache key has no way to carry that context.
+    skip_cache = bool(windowed_history) and _looks_context_dependent(question)
+
+    def _persist(answer_text: str) -> None:
+        # Every exchange is recorded — casual chit-chat, cache hits, and
+        # blocked/rate-limited responses too — so history shows exactly what
+        # the user actually saw, not just LLM-generated answers.
+        if conversation_id:
+            append_turn(
+                conversation_id=conversation_id,
+                business_id=business_id,
+                prior_turn_count=len(history),
+                question=question,
+                answer=answer_text,
+            )
+
     casual_answer = _answer_casual_message(question)
     if casual_answer:
-        return OnboardingChatResponse(answer=casual_answer, sources=[])
+        _persist(casual_answer)
+        return OnboardingChatResponse(answer=casual_answer, sources=[], conversation_id=conversation_id)
 
     filtered_document_id = _normalize_optional_filter(document_id)
     filtered_category = _normalize_optional_filter(category)
     input_validation_task = asyncio.create_task(
         _validate_user_input_traced(question, source="typed_chat")
     )
-    cache_context = await _build_cache_key_traced(
-        business_id=business_id,
-        question=question,
-        document_id=filtered_document_id,
-        category=filtered_category,
-        channel="typed",
-    )
-    cache_key = (cache_context or {}).get("cache_key")
-    document_fingerprint = (cache_context or {}).get("document_fingerprint")
-    cached_response = await _get_cached_response_traced(cache_key)
+    # skip_cache is only true for short/referential follow-ups that can't be
+    # safely served from cache — see _looks_context_dependent above and
+    # docs/features/chat-memory-architecture.md.
+    cache_key: str | None = None
+    document_fingerprint: str | None = None
+    if not skip_cache:
+        cache_context = await _build_cache_key_traced(
+            business_id=business_id,
+            question=question,
+            document_id=filtered_document_id,
+            category=filtered_category,
+            channel="typed",
+        )
+        cache_key = (cache_context or {}).get("cache_key")
+        document_fingerprint = (cache_context or {}).get("document_fingerprint")
+        cached_response = await _get_cached_response_traced(cache_key)
+    else:
+        cached_response = None
     try:
         await input_validation_task
     except HrOnboardingRateLimited:
-        return _rate_limit_response()
+        _persist(RATE_LIMIT_MESSAGE)
+        return _rate_limit_response(conversation_id)
     except HrOnboardingGuardrailsBlocked as exc:
-        return OnboardingChatResponse(answer=exc.user_message, sources=[])
+        _persist(exc.user_message)
+        return OnboardingChatResponse(answer=exc.user_message, sources=[], conversation_id=conversation_id)
     if cached_response:
         cached_answer = str(cached_response.get("answer") or "").strip()
         if cached_answer:
+            _persist(cached_answer)
             return OnboardingChatResponse(
                 answer=cached_answer,
                 sources=_sources_from_cached_payload(cached_response),
+                conversation_id=conversation_id,
             )
 
     query_embedding = await create_hr_policy_query_embedding(question)
-    semantic_cached_response = await _get_semantically_cached_response_traced(
-        business_id=business_id,
-        question_embedding=query_embedding,
-        document_fingerprint=document_fingerprint,
-        document_id=filtered_document_id,
-        category=filtered_category,
-        channel="typed",
-    )
+    semantic_cached_response = None
+    if not skip_cache:
+        semantic_cached_response = await _get_semantically_cached_response_traced(
+            business_id=business_id,
+            question_embedding=query_embedding,
+            document_fingerprint=document_fingerprint,
+            document_id=filtered_document_id,
+            category=filtered_category,
+            channel="typed",
+        )
     if semantic_cached_response:
         cached_answer = str(semantic_cached_response.get("answer") or "").strip()
         if cached_answer:
+            _persist(cached_answer)
             return OnboardingChatResponse(
                 answer=cached_answer,
                 sources=_sources_from_cached_payload(semantic_cached_response),
+                conversation_id=conversation_id,
             )
 
     try:
@@ -846,25 +970,30 @@ async def answer_onboarding_question(
     except Exception as exc:
         if _is_rate_limit_exception(exc):
             logger.warning("HR onboarding chat rate limited during retrieval: %s", exc)
-            return _rate_limit_response()
+            _persist(RATE_LIMIT_MESSAGE)
+            return _rate_limit_response(conversation_id)
         raise
     if not matches:
+        no_match_answer = (
+            "I could not find that in the published HR policy documents. "
+            "Please upload or publish the relevant policy document, then try again."
+        )
+        _persist(no_match_answer)
         return OnboardingChatResponse(
-            answer=(
-                "I could not find that in the published HR policy documents. "
-                "Please upload or publish the relevant policy document, then try again."
-            ),
+            answer=no_match_answer,
             sources=[],
+            conversation_id=conversation_id,
         )
 
     source_payload = _build_source_payload(matches)
 
     try:
-        raw = await _generate_json_answer(question=question, source_payload=source_payload)
+        raw = await _generate_json_answer(question=question, source_payload=source_payload, history=windowed_history)
     except Exception as exc:
         if _is_rate_limit_exception(exc):
             logger.warning("HR onboarding chat rate limited during generation: %s", exc)
-            return _rate_limit_response()
+            _persist(RATE_LIMIT_MESSAGE)
+            return _rate_limit_response(conversation_id)
         raise
     try:
         parsed = json.loads(raw)
@@ -884,32 +1013,36 @@ async def answer_onboarding_question(
             source="typed_chat",
         )
     except HrOnboardingRateLimited:
-        return _rate_limit_response()
+        _persist(RATE_LIMIT_MESSAGE)
+        return _rate_limit_response(conversation_id)
     except HrOnboardingGuardrailsBlocked as exc:
-        return OnboardingChatResponse(answer=exc.user_message, sources=_format_sources(matches))
+        _persist(exc.user_message)
+        return OnboardingChatResponse(answer=exc.user_message, sources=_format_sources(matches), conversation_id=conversation_id)
 
     sources = _format_sources(matches)
     source_dicts = [source.model_dump() for source in sources]
-    await asyncio.gather(
-        _set_cached_response_traced(
-            cache_key,
-            answer=answer,
-            sources=source_dicts,
-        ),
-        _set_semantically_cached_response_traced(
-            business_id=business_id,
-            question=question,
-            question_embedding=query_embedding,
-            document_fingerprint=document_fingerprint,
-            document_id=filtered_document_id,
-            category=filtered_category,
-            channel="typed",
-            answer=answer,
-            sources=source_dicts,
-        ),
-    )
+    if not skip_cache:
+        await asyncio.gather(
+            _set_cached_response_traced(
+                cache_key,
+                answer=answer,
+                sources=source_dicts,
+            ),
+            _set_semantically_cached_response_traced(
+                business_id=business_id,
+                question=question,
+                question_embedding=query_embedding,
+                document_fingerprint=document_fingerprint,
+                document_id=filtered_document_id,
+                category=filtered_category,
+                channel="typed",
+                answer=answer,
+                sources=source_dicts,
+            ),
+        )
+    _persist(answer)
 
-    return OnboardingChatResponse(answer=answer, sources=sources)
+    return OnboardingChatResponse(answer=answer, sources=sources, conversation_id=conversation_id)
 
 
 @traceable(
@@ -926,12 +1059,43 @@ async def stream_onboarding_question(
     question: str,
     document_id: str | None = None,
     category: str | None = None,
+    user_id: str | None = None,
+    conversation_id: str | None = None,
 ) -> AsyncIterator[str]:
+    conversation_id = (
+        get_or_create_conversation(conversation_id=conversation_id, business_id=business_id, user_id=user_id)
+        if user_id
+        else conversation_id
+    )
+
+    history = fetch_conversation_history(conversation_id=conversation_id, business_id=business_id) if conversation_id else []
+    windowed_history = window_to_budget(history, HISTORY_TOKEN_BUDGET)
+    # Only skip the cache when THIS question actually leans on prior context —
+    # an exact repeat of a self-contained question ("What is the PTO policy?"
+    # asked twice in the same chat) is always safe to serve from cache, even
+    # deep into a conversation. A short/referential follow-up ("What about
+    # dental?") isn't, since the cache key has no way to carry that context.
+    skip_cache = bool(windowed_history) and _looks_context_dependent(question)
+
+    def _persist(answer_text: str) -> None:
+        # Every exchange is recorded — casual chit-chat, cache hits, and
+        # blocked/rate-limited responses too — so history shows exactly what
+        # the user actually saw, not just LLM-generated answers.
+        if conversation_id:
+            append_turn(
+                conversation_id=conversation_id,
+                business_id=business_id,
+                prior_turn_count=len(history),
+                question=question,
+                answer=answer_text,
+            )
+
     casual_answer = _answer_casual_message(question)
     if casual_answer:
+        _persist(casual_answer)
         yield _sse_event("sources", {"sources": []})
         yield _sse_event("token", {"text": casual_answer})
-        yield _sse_event("done", {})
+        yield _sse_event("done", {"conversation_id": conversation_id})
         return
 
     filtered_document_id = _normalize_optional_filter(document_id)
@@ -940,59 +1104,72 @@ async def stream_onboarding_question(
         input_validation_task = asyncio.create_task(
             _validate_user_input_traced(question, source="typed_chat_stream")
         )
-        cache_context = await _build_cache_key_traced(
-            business_id=business_id,
-            question=question,
-            document_id=filtered_document_id,
-            category=filtered_category,
-            channel="typed",
-        )
-        cache_key = (cache_context or {}).get("cache_key")
-        document_fingerprint = (cache_context or {}).get("document_fingerprint")
-        cached_response = await _get_cached_response_traced(cache_key)
+        # See answer_onboarding_question / _looks_context_dependent: only skip
+        # the cache for short/referential follow-ups, not just because there's
+        # prior history.
+        cache_key: str | None = None
+        document_fingerprint: str | None = None
+        cached_response = None
+        if not skip_cache:
+            cache_context = await _build_cache_key_traced(
+                business_id=business_id,
+                question=question,
+                document_id=filtered_document_id,
+                category=filtered_category,
+                channel="typed",
+            )
+            cache_key = (cache_context or {}).get("cache_key")
+            document_fingerprint = (cache_context or {}).get("document_fingerprint")
+            cached_response = await _get_cached_response_traced(cache_key)
         try:
             await input_validation_task
         except HrOnboardingRateLimited:
+            _persist(RATE_LIMIT_MESSAGE)
             yield _sse_event("sources", {"sources": []})
             yield _sse_event("token", {"text": RATE_LIMIT_MESSAGE})
-            yield _sse_event("done", {})
+            yield _sse_event("done", {"conversation_id": conversation_id})
             return
         except HrOnboardingGuardrailsBlocked as exc:
+            _persist(exc.user_message)
             yield _sse_event("sources", {"sources": []})
             yield _sse_event("token", {"text": exc.user_message})
-            yield _sse_event("done", {})
+            yield _sse_event("done", {"conversation_id": conversation_id})
             return
         if cached_response:
             cached_answer = str(cached_response.get("answer") or "").strip()
             if cached_answer:
+                _persist(cached_answer)
                 cached_sources = _sources_from_cached_payload(cached_response)
                 yield _sse_event(
                     "sources",
                     {"sources": [source.model_dump() for source in cached_sources]},
                 )
                 yield _sse_event("token", {"text": cached_answer})
-                yield _sse_event("done", {"cached": True})
+                yield _sse_event("done", {"cached": True, "conversation_id": conversation_id})
                 return
 
         query_embedding = await create_hr_policy_query_embedding(question)
-        semantic_cached_response = await _get_semantically_cached_response_traced(
-            business_id=business_id,
-            question_embedding=query_embedding,
-            document_fingerprint=document_fingerprint,
-            document_id=filtered_document_id,
-            category=filtered_category,
-            channel="typed",
-        )
+        semantic_cached_response = None
+        if not skip_cache:
+            semantic_cached_response = await _get_semantically_cached_response_traced(
+                business_id=business_id,
+                question_embedding=query_embedding,
+                document_fingerprint=document_fingerprint,
+                document_id=filtered_document_id,
+                category=filtered_category,
+                channel="typed",
+            )
         if semantic_cached_response:
             cached_answer = str(semantic_cached_response.get("answer") or "").strip()
             if cached_answer:
+                _persist(cached_answer)
                 cached_sources = _sources_from_cached_payload(semantic_cached_response)
                 yield _sse_event(
                     "sources",
                     {"sources": [source.model_dump() for source in cached_sources]},
                 )
                 yield _sse_event("token", {"text": cached_answer})
-                yield _sse_event("done", {"cached": True, "semantic_cached": True})
+                yield _sse_event("done", {"cached": True, "semantic_cached": True, "conversation_id": conversation_id})
                 return
 
         try:
@@ -1005,25 +1182,23 @@ async def stream_onboarding_question(
             )
         except Exception as exc:
             if _is_rate_limit_exception(exc):
+                _persist(RATE_LIMIT_MESSAGE)
                 yield _sse_event("sources", {"sources": []})
                 yield _sse_event("token", {"text": RATE_LIMIT_MESSAGE})
-                yield _sse_event("done", {})
+                yield _sse_event("done", {"conversation_id": conversation_id})
                 return
             input_validation_task.cancel()
             raise
 
         if not matches:
-            yield _sse_event("sources", {"sources": []})
-            yield _sse_event(
-                "token",
-                {
-                    "text": (
-                        "I could not find that in the published HR policy documents. "
-                        "Please upload or publish the relevant policy document, then try again."
-                    )
-                },
+            no_match_answer = (
+                "I could not find that in the published HR policy documents. "
+                "Please upload or publish the relevant policy document, then try again."
             )
-            yield _sse_event("done", {})
+            _persist(no_match_answer)
+            yield _sse_event("sources", {"sources": []})
+            yield _sse_event("token", {"text": no_match_answer})
+            yield _sse_event("done", {"conversation_id": conversation_id})
             return
 
         source_payload = _build_source_payload(matches)
@@ -1035,11 +1210,14 @@ async def stream_onboarding_question(
 
         answer_parts: list[str] = []
         try:
-            async for token in _stream_answer_tokens(question=question, source_payload=source_payload):
+            async for token in _stream_answer_tokens(
+                question=question, source_payload=source_payload, history=windowed_history
+            ):
                 answer_parts.append(token)
                 yield _sse_event("token", {"text": token})
         except Exception as exc:
             if _is_rate_limit_exception(exc):
+                _persist(RATE_LIMIT_MESSAGE)
                 yield _sse_event("error", {"message": RATE_LIMIT_MESSAGE})
                 return
             raise
@@ -1059,33 +1237,37 @@ async def stream_onboarding_question(
                 source="typed_chat_stream",
             )
         except HrOnboardingRateLimited:
+            _persist(RATE_LIMIT_MESSAGE)
             yield _sse_event("error", {"message": RATE_LIMIT_MESSAGE})
             return
         except HrOnboardingGuardrailsBlocked as exc:
+            _persist(exc.user_message)
             yield _sse_event("error", {"message": exc.user_message})
             return
 
         source_dicts = [source.model_dump() for source in sources]
-        await asyncio.gather(
-            _set_cached_response_traced(
-                cache_key,
-                answer=answer,
-                sources=source_dicts,
-            ),
-            _set_semantically_cached_response_traced(
-                business_id=business_id,
-                question=question,
-                question_embedding=query_embedding,
-                document_fingerprint=document_fingerprint,
-                document_id=filtered_document_id,
-                category=filtered_category,
-                channel="typed",
-                answer=answer,
-                sources=source_dicts,
-            ),
-        )
+        if not skip_cache:
+            await asyncio.gather(
+                _set_cached_response_traced(
+                    cache_key,
+                    answer=answer,
+                    sources=source_dicts,
+                ),
+                _set_semantically_cached_response_traced(
+                    business_id=business_id,
+                    question=question,
+                    question_embedding=query_embedding,
+                    document_fingerprint=document_fingerprint,
+                    document_id=filtered_document_id,
+                    category=filtered_category,
+                    channel="typed",
+                    answer=answer,
+                    sources=source_dicts,
+                ),
+            )
+        _persist(answer)
 
-        yield _sse_event("done", {})
+        yield _sse_event("done", {"conversation_id": conversation_id})
     except Exception as exc:
         if _is_rate_limit_exception(exc):
             yield _sse_event("error", {"message": RATE_LIMIT_MESSAGE})

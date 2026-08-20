@@ -77,6 +77,9 @@ class OnboardingChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2_000)
     document_id: Optional[str] = None
     category: Optional[str] = None
+    # Omit to start a new conversation; pass back the conversation_id returned
+    # by the previous response to continue it (working-memory history applies).
+    conversation_id: Optional[str] = None
 
 
 class OnboardingChatSource(BaseModel):
@@ -90,3 +93,4 @@ class OnboardingChatSource(BaseModel):
 class OnboardingChatResponse(BaseModel):
     answer: str
     sources: list[OnboardingChatSource] = Field(default_factory=list)
+    conversation_id: Optional[str] = None
