@@ -26,7 +26,13 @@ import httpx as _httpx
 from constants import GOOGLE_TOKEN_URL, GOOGLE_CALENDAR_BASE, GMAIL_SEND_URL
 from gmail_helpers import _gmail_get_valid_token
 from gcal_helpers import _gcal_get_valid_token, _gcal_refresh_token
-from supabase_helpers import _get_supabase, _fetch_business, _fetch_documents_for_location
+from supabase_helpers import (
+    _get_supabase,
+    _fetch_business,
+    _fetch_documents_for_location,
+    _create_voice_conversation,
+    _finalize_voice_conversation,
+)
 
 load_dotenv(".env.local")
 logger = logging.getLogger("executive-agent")
@@ -1289,6 +1295,58 @@ async def executive_agent(ctx: agents.JobContext):
         room=ctx.room,
         location_id=location_id,
     )
+
+    # ── Conversation persistence (episodic memory) ───────────────────────────
+    # Captures every turn in-memory and flushes it to remi_messages once the
+    # owner disconnects — same shape as the phone agent's transcript capture
+    # in agent.py, just against a Remi-specific table pair.
+    conversation_id = _create_voice_conversation(
+        supabase,
+        conversations_table="remi_conversations",
+        business_id=business_id,
+        user_id=user_id or "",
+        location_id=location_id,
+        room_name=ctx.room.name,
+    )
+    message_log: list[dict] = []
+    _msg_seq = 0
+
+    @session.on("conversation_item_added")
+    def _on_conversation_item_added(ev) -> None:
+        nonlocal _msg_seq
+        try:
+            item = getattr(ev, "item", ev)
+            role = getattr(item, "role", None)
+            if role not in ("user", "assistant"):
+                return
+            text = ""
+            if hasattr(item, "text_content"):
+                text = item.text_content or ""
+            elif hasattr(item, "content"):
+                for block in item.content:
+                    if hasattr(block, "text") and block.text:
+                        text += block.text
+            text = text.strip()
+            if not text:
+                return
+            message_log.append({"role": role, "content": text, "sequence_order": _msg_seq})
+            _msg_seq += 1
+        except Exception as e:
+            logger.warning("Error capturing Remi conversation turn: %s", e)
+
+    async def _finalize_remi_conversation() -> None:
+        _finalize_voice_conversation(
+            supabase,
+            conversations_table="remi_conversations",
+            messages_table="remi_messages",
+            conversation_id=conversation_id,
+            business_id=business_id,
+            messages=message_log,
+        )
+
+    @ctx.room.on("participant_disconnected")
+    def _on_owner_disconnected(_p: rtc.RemoteParticipant) -> None:
+        asyncio.ensure_future(_finalize_remi_conversation())
 
     # ── HeyGen LiveAvatar (Phase 2) ───────────────────────────────────────────
     # Must start BEFORE session.start(). Guarded so agent still works without keys.

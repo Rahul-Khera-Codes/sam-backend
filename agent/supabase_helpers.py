@@ -21,6 +21,83 @@ def _get_supabase():
     return None
 
 
+def _create_voice_conversation(
+    supabase,
+    *,
+    conversations_table: str,
+    business_id: str,
+    user_id: str,
+    location_id: str | None,
+    room_name: str,
+) -> str | None:
+    """Create an episodic-memory conversation row for a new voice session (Remi or
+    the HR onboarding assistant). Returns the new conversation id, or None if it
+    couldn't be created — callers should treat that as "don't persist this session"
+    rather than failing the call."""
+    if not supabase or not business_id or not user_id:
+        return None
+    try:
+        row = (
+            supabase.table(conversations_table)
+            .insert({
+                "business_id": business_id,
+                "location_id": location_id,
+                "user_id": user_id,
+                "channel": "voice",
+                "room_name": room_name,
+            })
+            .execute()
+        )
+        data = getattr(row, "data", None) or []
+        return data[0]["id"] if data else None
+    except Exception as e:
+        logger.warning("Failed to create %s conversation: %s", conversations_table, e)
+        return None
+
+
+def _finalize_voice_conversation(
+    supabase,
+    *,
+    conversations_table: str,
+    messages_table: str,
+    conversation_id: str | None,
+    business_id: str,
+    messages: list[dict],
+) -> None:
+    """Bulk-insert captured turns and close out the conversation row at session end.
+    Never raises — persistence failures must never affect the live call, they're only
+    logged."""
+    if not supabase or not conversation_id or not messages:
+        return
+    try:
+        rows = [
+            {
+                "conversation_id": conversation_id,
+                "business_id": business_id,
+                "role": m["role"],
+                "content": m["content"],
+                "sequence_order": m["sequence_order"],
+            }
+            for m in messages
+        ]
+        supabase.table(messages_table).insert(rows).execute()
+        now = datetime.now(timezone.utc).isoformat()
+        supabase.table(conversations_table).update({
+            "ended_at": now,
+            "last_message_at": now,
+            "message_count": len(messages),
+        }).eq("id", conversation_id).execute()
+        logger.info(
+            "Persisted %d messages to %s for conversation %s",
+            len(messages), messages_table, conversation_id,
+        )
+    except Exception as e:
+        logger.warning(
+            "Failed to finalize conversation %s in %s: %s",
+            conversation_id, conversations_table, e,
+        )
+
+
 def _is_feature_enabled(supabase, business_id: str, feature_key: str, default: bool = True) -> bool:
     """Check whether a feature flag is enabled for a business. Returns default if not found."""
     if not supabase or not business_id:

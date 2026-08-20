@@ -15,6 +15,10 @@ from app.core.auth import get_user_id, verify_business_access
 from app.core.config import settings
 from app.core.supabase import supabase_admin
 from app.services import livekit_service
+from app.services.remi_conversation_memory_service import (
+    delete_all_conversations,
+    delete_conversation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -106,3 +110,34 @@ async def create_executive_session(
         livekit_url=settings.livekit_url,
         avatar_available=avatar_available,
     )
+
+
+@router.delete("/conversations/{conversation_id}")
+async def delete_remi_conversation(
+    conversation_id: str,
+    business_id: str,
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    try:
+        deleted = delete_conversation(conversation_id=conversation_id, business_id=business_id)
+    except Exception as exc:
+        logger.error("Failed to delete Remi conversation %s: %s", conversation_id, exc)
+        raise HTTPException(status_code=502, detail="Failed to delete conversation.") from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return {"deleted": True}
+
+
+@router.delete("/conversations")
+async def delete_all_remi_conversations(
+    business_id: str,
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    try:
+        count = delete_all_conversations(business_id=business_id)
+    except Exception as exc:
+        logger.error("Failed to clear Remi conversation history for business %s: %s", business_id, exc)
+        raise HTTPException(status_code=502, detail="Failed to clear conversation history.") from exc
+    return {"deleted": count}

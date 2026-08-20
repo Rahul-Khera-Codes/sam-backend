@@ -14,6 +14,10 @@ livekit-api==1.1.0
 
 # OpenAI (>=2.22 + realtime extra for client.realtime.connect WebSocket)
 openai[realtime]>=2.22.0
+
+# Token counting for the HR onboarding chat working-memory window (0.13.0+ ships
+# prebuilt wheels for Python 3.13, no PyO3 build step needed)
+tiktoken>=0.13.0
 langsmith>=0.3.16
 numpy>=1.24.0
 langchain-text-splitters==0.3.11

@@ -29,6 +29,10 @@ from app.schemas.hr import (
 )
 from app.services.hr_drafting_service import generate_hr_draft_assistance
 from app.services.hr_onboarding_chat_service import answer_onboarding_question, stream_onboarding_question
+from app.services.hr_onboarding_conversation_memory_service import (
+    delete_all_conversations as delete_all_hr_onboarding_conversations,
+    delete_conversation as delete_hr_onboarding_conversation,
+)
 from app.services.greenhouse_service import (
     GreenhouseError,
     advance_harvest_application,
@@ -880,6 +884,8 @@ async def chat_with_hr_onboarding_agent(
             question=body.question.strip(),
             document_id=body.document_id,
             category=body.category,
+            user_id=user_id,
+            conversation_id=body.conversation_id,
         )
     except Exception as exc:
         logger.error("HR onboarding chat failed for business %s: %s", body.business_id, exc)
@@ -898,6 +904,8 @@ async def stream_chat_with_hr_onboarding_agent(
             question=body.question.strip(),
             document_id=body.document_id,
             category=body.category,
+            user_id=user_id,
+            conversation_id=body.conversation_id,
         ),
         media_type="text/event-stream",
         headers={
@@ -905,6 +913,37 @@ async def stream_chat_with_hr_onboarding_agent(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.delete("/onboarding/conversations/{conversation_id}")
+async def delete_hr_onboarding_conversation_endpoint(
+    conversation_id: str,
+    business_id: str,
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    try:
+        deleted = delete_hr_onboarding_conversation(conversation_id=conversation_id, business_id=business_id)
+    except Exception as exc:
+        logger.error("Failed to delete HR onboarding conversation %s: %s", conversation_id, exc)
+        raise HTTPException(status_code=502, detail="Failed to delete conversation.") from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return {"deleted": True}
+
+
+@router.delete("/onboarding/conversations")
+async def delete_all_hr_onboarding_conversations_endpoint(
+    business_id: str,
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    try:
+        count = delete_all_hr_onboarding_conversations(business_id=business_id)
+    except Exception as exc:
+        logger.error("Failed to clear HR onboarding conversation history for business %s: %s", business_id, exc)
+        raise HTTPException(status_code=502, detail="Failed to clear conversation history.") from exc
+    return {"deleted": count}
 
 
 @router.post("/onboarding/session", response_model=HrOnboardingVoiceSessionResponse)

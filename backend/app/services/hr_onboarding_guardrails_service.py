@@ -125,9 +125,34 @@ _WORKPLACE_POLICY_CONTEXT_PATTERN = re.compile(
     re.I,
 )
 _SAFE_HR_POLICY_QUESTION_PATTERN = re.compile(
-    r"\b(policy|policies|benefits?|enroll(?:ment)?|onboarding|handbook|workplace|conduct|leave|pto|holiday|"
-    r"medical|dental|insurance|payroll|training|compliance|probation|attendance|reimbursement|"
-    r"contact|contacts|email|phone|company|hr\s+contact|support|new\s+hires?|complete|first|important)\b",
+    r"\b("
+    # Core policy / handbook
+    r"policy|policies|handbook|conduct|workplace|"
+    # Time off
+    r"leave|pto|holiday|vacation|sick(?:\s+days?)?|bereavement|"
+    r"maternity|paternity|parental\s+leave|fmla|"
+    # Benefits
+    r"benefits?|enroll(?:ment)?|medical|dental|insurance|hsa|fsa|ppo|hdhp|hmo|"
+    r"401\(?k\)?|retirement|pension|stock|equity|rsu|"
+    # Pay / payroll
+    r"payroll|salary|wages?|pay(?:check|day)?|direct\s+deposit|"
+    r"overtime|bonus|raise|reimbursement|expenses?|w-?2|w-?4|i-?9|taxes?|"
+    # Onboarding / employment lifecycle
+    r"onboarding|orientation|new\s+hires?|start\s+date|probation|"
+    r"resign(?:ation)?|terminat(?:e|ion)|laid\s+off|layoff|severance|exit\s+interview|"
+    r"promotion|performance\s+review|background\s+check|drug\s+test|"
+    # Schedule / logistics
+    r"schedule|shift|attendance|remote|hybrid|work\s+from\s+home|wfh|dress\s+code|"
+    r"parking|badge|id\s+card|access\s+card|"
+    # Compliance / conduct
+    r"compliance|training|harassment|discrimination|grievance|ethics|"
+    r"confidential(?:ity)?|whistleblow(?:er|ing)|nda|non-disclosure|non-compete|"
+    r"workers\s+comp(?:ensation)?|disability|safety|incident|"
+    # IT / equipment
+    r"laptop|password|vpn|equipment|it\s+setup|help\s*desk|"
+    # Contacts / meta
+    r"contact|contacts|email|phone|company|hr\s+contact|support|complete|first|important"
+    r")\b",
     re.I,
 )
 _SUSPICIOUS_INPUT_PATTERN = re.compile(

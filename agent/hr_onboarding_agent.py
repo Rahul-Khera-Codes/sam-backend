@@ -29,7 +29,12 @@ from hr_onboarding_guardrails import (
     validate_onboarding_assistant_output,
     validate_onboarding_user_input,
 )
-from supabase_helpers import _fetch_business, _get_supabase
+from supabase_helpers import (
+    _fetch_business,
+    _get_supabase,
+    _create_voice_conversation,
+    _finalize_voice_conversation,
+)
 
 load_dotenv(".env.local")
 logger = logging.getLogger("hr-onboarding-agent")
@@ -435,6 +440,57 @@ async def hr_onboarding_agent(ctx: agents.JobContext):
         llm=openai.realtime.RealtimeModel(voice="cedar", temperature=0.3),
         preemptive_generation=True,
     )
+
+    # ── Conversation persistence (episodic memory) ───────────────────────────
+    # John has no location scoping today (see metadata parsing above), so
+    # location_id is always None here. Same capture/finalize shape as Remi's.
+    conversation_id = _create_voice_conversation(
+        supabase,
+        conversations_table="hr_onboarding_conversations",
+        business_id=business_id,
+        user_id=user_id or "",
+        location_id=None,
+        room_name=ctx.room.name,
+    )
+    message_log: list[dict] = []
+    _msg_seq = 0
+
+    @session.on("conversation_item_added")
+    def _on_conversation_item_added_persist(ev) -> None:
+        nonlocal _msg_seq
+        try:
+            item = getattr(ev, "item", ev)
+            role = getattr(item, "role", None)
+            if role not in ("user", "assistant"):
+                return
+            text = ""
+            if hasattr(item, "text_content"):
+                text = item.text_content or ""
+            elif hasattr(item, "content"):
+                for block in item.content:
+                    if hasattr(block, "text") and block.text:
+                        text += block.text
+            text = text.strip()
+            if not text:
+                return
+            message_log.append({"role": role, "content": text, "sequence_order": _msg_seq})
+            _msg_seq += 1
+        except Exception as e:
+            logger.warning("Error capturing John conversation turn: %s", e)
+
+    async def _finalize_john_conversation() -> None:
+        _finalize_voice_conversation(
+            supabase,
+            conversations_table="hr_onboarding_conversations",
+            messages_table="hr_onboarding_messages",
+            conversation_id=conversation_id,
+            business_id=business_id,
+            messages=message_log,
+        )
+
+    @ctx.room.on("participant_disconnected")
+    def _on_new_hire_disconnected(_p) -> None:
+        asyncio.ensure_future(_finalize_john_conversation())
 
     avatar: liveavatar.AvatarSession | None = None
     avatar_start_failure_reason: str | None = None
