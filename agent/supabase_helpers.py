@@ -2,11 +2,16 @@
 Supabase fetch helpers and slot computation for the voice agent.
 """
 
+import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("voice-agent")
+
+# Skip semantic-memory summarization for trivial sessions (e.g. just a
+# greeting) — nothing durable was likely said in fewer than 2 full turns.
+MIN_MESSAGES_FOR_SEMANTIC_SUMMARY = 4
 
 
 def _get_supabase():
@@ -96,6 +101,135 @@ def _finalize_voice_conversation(
             "Failed to finalize conversation %s in %s: %s",
             conversation_id, conversations_table, e,
         )
+
+
+async def _summarize_conversation_to_facts(messages: list[dict], *, business_name: str) -> list[str]:
+    """Extract durable, reusable facts from a voice session's transcript via
+    a cheap model — never raises, returns [] on any failure (missing key,
+    rate limit, malformed response) so a summarization problem never affects
+    anything else. Skips trivial sessions before even calling out."""
+    if len(messages) < MIN_MESSAGES_FOR_SEMANTIC_SUMMARY:
+        return []
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if not openai_key:
+        logger.warning("OPENAI_API_KEY not set — skipping semantic memory summarization")
+        return []
+    try:
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=openai_key)
+        transcript_text = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in messages)
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            temperature=0,
+            response_format={"type": "json_object"},
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        f"You extract durable facts worth remembering from a conversation with {business_name}. "
+                        "Only extract genuinely reusable preferences, decisions, or repeatedly-relevant "
+                        "information (a stated preference, a policy detail, a contact, a recurring need). "
+                        "Do not extract one-off questions, small talk, or anything unlikely to matter again. "
+                        "Each fact must be a short, standalone sentence understandable without the transcript. "
+                        "Return JSON: {\"facts\": [\"...\", ...]} — empty array if nothing durable."
+                    ),
+                },
+                {"role": "user", "content": transcript_text},
+            ],
+        )
+        result = json.loads(response.choices[0].message.content or "{}")
+        facts = result.get("facts") or []
+        return [str(f).strip() for f in facts if str(f).strip()]
+    except Exception as e:
+        logger.warning("Semantic memory summarization failed: %s", e)
+        return []
+
+
+def _fetch_recent_semantic_facts(
+    supabase,
+    *,
+    facts_table: str,
+    business_id: str,
+    limit: int = 12,
+) -> list[str]:
+    """Most recently remembered facts for this business — a plain recency
+    fetch, no embeddings/similarity search. Empty on any failure."""
+    if not supabase or not business_id:
+        return []
+    try:
+        rows = (
+            supabase.table(facts_table)
+            .select("fact_text")
+            .eq("business_id", business_id)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        data = getattr(rows, "data", None) or []
+        return [r["fact_text"] for r in data if r.get("fact_text")]
+    except Exception as e:
+        logger.warning("Failed to fetch semantic facts from %s: %s", facts_table, e)
+        return []
+
+
+def _format_semantic_context(facts: list[str]) -> str:
+    """Render recalled facts as the block that fills a procedural-memory
+    {context} slot. Empty string (self-omitting) when there's nothing to
+    recall — matches prompt_builder.py's block-concatenation convention."""
+    if not facts:
+        return ""
+    bullets = "\n".join(f"- {f}" for f in facts)
+    return f"What you remember from past conversations with this business:\n{bullets}"
+
+
+def _store_semantic_facts(
+    supabase,
+    *,
+    facts_table: str,
+    business_id: str,
+    location_id: str | None,
+    source_conversation_id: str | None,
+    created_by_user_id: str | None,
+    facts: list[str],
+) -> None:
+    """Persist newly extracted facts, skipping any that duplicate an existing
+    fact for this business verbatim (case/whitespace-insensitive) — a simple
+    safeguard against the model re-stating the same fact across sessions.
+    Never raises."""
+    if not supabase or not business_id or not facts:
+        return
+    try:
+        existing_rows = (
+            supabase.table(facts_table)
+            .select("fact_text")
+            .eq("business_id", business_id)
+            .order("created_at", desc=True)
+            .limit(50)
+            .execute()
+        )
+        existing = {
+            (r.get("fact_text") or "").strip().lower()
+            for r in (getattr(existing_rows, "data", None) or [])
+        }
+        new_rows = [
+            {
+                "business_id": business_id,
+                "location_id": location_id,
+                "source_conversation_id": source_conversation_id,
+                "created_by_user_id": created_by_user_id,
+                "fact_text": fact,
+            }
+            for fact in facts
+            if fact.strip().lower() not in existing
+        ]
+        if new_rows:
+            supabase.table(facts_table).insert(new_rows).execute()
+            logger.info(
+                "Stored %d new semantic fact(s) in %s for business %s",
+                len(new_rows), facts_table, business_id,
+            )
+    except Exception as e:
+        logger.warning("Failed to store semantic facts in %s: %s", facts_table, e)
 
 
 def _is_feature_enabled(supabase, business_id: str, feature_key: str, default: bool = True) -> bool:

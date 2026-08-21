@@ -34,6 +34,10 @@ from supabase_helpers import (
     _get_supabase,
     _create_voice_conversation,
     _finalize_voice_conversation,
+    _fetch_recent_semantic_facts,
+    _format_semantic_context,
+    _store_semantic_facts,
+    _summarize_conversation_to_facts,
 )
 
 load_dotenv(".env.local")
@@ -376,6 +380,7 @@ You are John, the HR onboarding assistant for {business_name}.
 - Do not answer candidate, recruiting, interview, or hiring-decision questions in this onboarding mode.
 
 Today is {today}.
+{context}
 """
 
 
@@ -424,10 +429,16 @@ async def hr_onboarding_agent(ctx: agents.JobContext):
             business_name = business.get("name") or business_name
 
     today = datetime.now().strftime("%A, %B %-d, %Y")
+    # Semantic memory: recall facts learned from past John conversations
+    # (voice + text) with this business — same recency-based fetch as Remi.
+    remembered_facts = _fetch_recent_semantic_facts(
+        supabase, facts_table="hr_onboarding_semantic_facts", business_id=business_id
+    )
     assistant = HrOnboardingAssistant(
         instructions=JOHN_INSTRUCTIONS.format(
             business_name=business_name,
             today=today,
+            context=_format_semantic_context(remembered_facts),
         ),
         supabase=supabase,
         business_id=business_id,
@@ -486,6 +497,18 @@ async def hr_onboarding_agent(ctx: agents.JobContext):
             conversation_id=conversation_id,
             business_id=business_id,
             messages=message_log,
+        )
+        # Semantic memory: distill durable facts from this session once it's
+        # over. Async and after persistence — never adds latency to the call.
+        facts = await _summarize_conversation_to_facts(message_log, business_name=business_name)
+        _store_semantic_facts(
+            supabase,
+            facts_table="hr_onboarding_semantic_facts",
+            business_id=business_id,
+            location_id=None,
+            source_conversation_id=conversation_id,
+            created_by_user_id=user_id or None,
+            facts=facts,
         )
 
     @ctx.room.on("participant_disconnected")
