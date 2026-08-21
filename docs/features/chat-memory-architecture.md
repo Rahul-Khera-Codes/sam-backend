@@ -256,20 +256,121 @@ OpenAI Realtime and has no equivalent text guardrails pipeline):**
      needed there; this was already "skip validation for a query that's
      already been validated" for the exact-repeat case.
 
-## Phase 2 backlog (not built yet)
+## Phase 2 — semantic memory (implemented, both bots)
 
-- Semantic "user facts" memory: a new table distinct from document-chunk RAG,
-  populated by an async, post-session summarization job (cheap model,
-  e.g. `gpt-4o-mini`) reading from the episodic tables above.
+Scoped down from the full backlog by user decision: build semantic memory +
+summarization + injection only; defer the token-budget governor, the
+procedural-memory module refactor, and resumable-conversation UX (see
+trimmed backlog below).
+
+### Data model
+New migration `20260821000000_chat_memory_semantic_facts.sql`:
+`remi_semantic_facts` / `hr_onboarding_semantic_facts` — separate per bot,
+same convention as episodic memory. Columns: `business_id`, `location_id`
+(nullable), `source_conversation_id` (nullable, `ON DELETE SET NULL` — a fact
+survives even if its source conversation is later deleted via the history
+delete feature), `created_by_user_id`, `fact_text`, `created_at`. **No
+embedding column** — per product decision, retrieval is a plain recency
+query, not vector similarity search, since fact counts per business are
+expected to stay small. Also added `hr_onboarding_conversations.facts_summarized_through`
+(integer watermark, default 0) — text-only; voice conversations don't use it.
+RLS mirrors the episodic tables (members read, service role full access) for
+consistency, though nothing reads these from the frontend in this phase — no
+UI was built for facts.
+
+### Voice (Remi + John) — `agent/supabase_helpers.py`
+Four new shared functions, parameterized by facts table name (same pattern as
+`_create_voice_conversation`/`_finalize_voice_conversation`):
+- `_summarize_conversation_to_facts(messages, business_name)` — mirrors
+  `agent/agent.py`'s existing `_generate_summary` pattern exactly (lazy
+  `AsyncOpenAI` import, `gpt-4o-mini`, JSON response format). Skips sessions
+  under `MIN_MESSAGES_FOR_SEMANTIC_SUMMARY` (4) before even calling out.
+- `_fetch_recent_semantic_facts` — plain recency `SELECT`, no embeddings.
+- `_format_semantic_context(facts)` — renders facts as a bulleted block,
+  self-omitting (empty string) when there's nothing recalled, matching
+  `prompt_builder.py`'s block-concatenation convention.
+- `_store_semantic_facts` — dedupes against the business's most recent 50
+  facts (case/whitespace-insensitive exact match) before inserting.
+
+Wiring: `EXECUTIVE_INSTRUCTIONS` already had a real, unused `{context}`
+placeholder at the end of its template (`agent/executive_agent.py:223`,
+previously always called with `context=""`) — this was clearly meant for
+exactly this. `JOHN_INSTRUCTIONS` had no equivalent slot; added one. Both
+agents now fetch recent facts synchronously at session start (same cost as
+the existing `_fetch_business` call right next to it — no embedding call, so
+negligible added latency) and fill `{context}` with them. Both agents'
+finalize functions (`_finalize_remi_conversation` / `_finalize_john_conversation`)
+now also distill and store facts *after* persisting the transcript — async,
+fire-and-forget, only after the session has already ended, so **zero added
+latency on the live call**, matching the cost/latency constraint from Phase 1.
+
+### Text (John only) — `backend/app/services/hr_onboarding_semantic_memory_service.py`
+The text widget has no "session end" signal (stateless request/response), so
+it can't reuse the voice bots' end-of-session trigger. Instead it summarizes
+*incrementally*: `maybe_summarize_conversation` runs (fire-and-forget, via
+`asyncio.ensure_future` inside the existing `_persist` closure — so every
+call site that already persists a turn automatically gets this check for
+free) after every turn, and actually does work only when the conversation's
+total message count crosses a multiple of `SUMMARIZE_EVERY_N_MESSAGES` (6,
+i.e. every 3 exchanges) — this is the literal "after a certain number of
+turns, condense into semantic memory" behavior from the original spec. It
+reads only the *new* messages since `facts_summarized_through`, extracts
+facts via the same `gpt-4o-mini` prompt as the voice path, stores them, and
+advances the watermark — verified idempotent (re-running at the same
+watermark doesn't reprocess or duplicate).
+
+Recalled facts are fetched fresh on every request (same as `history`) and
+injected as an extra system message — `_facts_message(facts_context)` —
+placed right after the existing system prompt and before working-memory
+history in both `_json_answer_messages` and `_stream_answer_messages`. The
+original system prompt text is unchanged.
+
+### Verification
+All of the above was tested directly against the real (not mocked) Supabase
+project and OpenAI API inside the running containers, with cleanup after:
+- Fact store → fetch → format round-trip, plus dedupe (storing the same fact
+  twice produced one row, not two).
+- Full incremental-summarization run against a real conversation + messages:
+  correct fact extracted, watermark advanced to the right value, and a
+  second call at the same watermark did not reprocess or duplicate.
+- The agent-side `_summarize_conversation_to_facts` correctly extracted a
+  stated preference from a synthetic transcript and correctly ignored an
+  unrelated one-off question in the same transcript.
+- Both voice agent workers (`sam-executive-agent`, `sam-hr-onboarding-agent`)
+  and the backend registered/started cleanly with the new code (no
+  import/syntax errors); existing test suite still passes.
+
+## Phase 2 backlog (trimmed — still not built)
+
 - Cross-component token-budget governor: today's budget only covers John's
   text-widget history window; a real governor would also account for the
-  system prompt, RAG context, and retrieved semantic facts against the active
-  model's context window.
-- Procedural-memory refactor: pull `EXECUTIVE_INSTRUCTIONS`/`JOHN_INSTRUCTIONS`
+  system prompt, RAG context, and now the recalled semantic facts against the
+  active model's context window.
+- Procedural-memory module refactor: pull `EXECUTIVE_INSTRUCTIONS`/`JOHN_INSTRUCTIONS`
   into a shared, explicitly-named "procedural memory" module rather than
-  inline constants.
-- "Continue this conversation" UX for John's text widget, once semantic memory
-  makes resuming an old thread actually useful rather than just replaying it.
-- Voice session rehydration — priming a new voice session with prior-session
-  context (deferred until semantic memory exists, so it doesn't mean replaying
-  raw transcripts).
+  inline constants. (Separately noted: John's voice handles casual chit-chat
+  via an LLM-instruction section in its prompt, not a deterministic fast path
+  like the text widget's `_answer_casual_message` — a behavioral asymmetry
+  worth fixing if this refactor happens.)
+- "Continue this conversation" UX for John's text widget — now more useful
+  than before since semantic memory carries context across conversations
+  automatically, but still not built.
+- Voice session rehydration beyond what's already shipped — today's
+  `{context}` injection *is* a form of rehydration (recalled facts at session
+  start); anything beyond that (e.g. resuming mid-transcript) is still
+  unbuilt.
+
+## Known pre-existing infra fragility (discovered, not fixed — out of scope)
+
+Two unrelated startup-reliability issues surfaced while rebuilding
+`sam-backend` during this work, neither caused by any change in this feature:
+- `guardrails-ai`'s import chain triggers a runtime NLTK download (`punkt`)
+  with no apparent timeout — a stalled connection can hang the entire API
+  server indefinitely at "Waiting for application startup." Worked around
+  once by manually seeding `/root/nltk_data`, but that fix doesn't survive a
+  full image rebuild. Should be baked into the Docker image at build time.
+- On a later restart, two Guardrails Hub validators (`ProfanityFree`,
+  `UnusualPrompt`) failed to load ("validators missing from runtime"),
+  leaving only `DetectPII`/`LlamaGuard7B` active for John — looks like the
+  same class of network-dependent initialization issue. Not investigated
+  further; worth a look if guardrails coverage seems reduced after a restart.

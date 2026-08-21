@@ -46,6 +46,11 @@ from app.services.hr_onboarding_conversation_memory_service import (
     fetch_conversation_history,
     get_or_create_conversation,
 )
+from app.services.hr_onboarding_semantic_memory_service import (
+    fetch_recent_facts,
+    format_semantic_context,
+    maybe_summarize_conversation,
+)
 from app.services.token_budget_service import ConversationTurn, window_to_budget
 
 logger = logging.getLogger(__name__)
@@ -705,8 +710,21 @@ def _history_messages(history: list[ConversationTurn] | None) -> list[dict[str, 
     return [{"role": t["role"], "content": t["content"]} for t in history]
 
 
+def _facts_message(facts_context: str | None) -> list[dict[str, str]]:
+    """Semantic memory: recalled business facts, placed right after the
+    system prompt and before working-memory history — background context,
+    not a conversation turn. Self-omitting when there's nothing recalled."""
+    if not facts_context:
+        return []
+    return [{"role": "system", "content": facts_context}]
+
+
 def _json_answer_messages(
-    *, question: str, source_payload: list[dict[str, str]], history: list[ConversationTurn] | None = None
+    *,
+    question: str,
+    source_payload: list[dict[str, str]],
+    history: list[ConversationTurn] | None = None,
+    facts_context: str | None = None,
 ) -> list[dict[str, str]]:
     return [
         {
@@ -723,6 +741,7 @@ def _json_answer_messages(
                 "Keep answers concise, practical, and friendly. Return valid JSON only with an 'answer' string."
             ),
         },
+        *_facts_message(facts_context),
         *_history_messages(history),
         {
             "role": "user",
@@ -737,7 +756,11 @@ def _json_answer_messages(
 
 
 def _stream_answer_messages(
-    *, question: str, source_payload: list[dict[str, str]], history: list[ConversationTurn] | None = None
+    *,
+    question: str,
+    source_payload: list[dict[str, str]],
+    history: list[ConversationTurn] | None = None,
+    facts_context: str | None = None,
 ) -> list[dict[str, str]]:
     return [
         {
@@ -754,6 +777,7 @@ def _stream_answer_messages(
                 "Keep answers concise, practical, and friendly. Return only the answer text."
             ),
         },
+        *_facts_message(facts_context),
         *_history_messages(history),
         {
             "role": "user",
@@ -776,13 +800,19 @@ def _stream_answer_messages(
     process_outputs=_process_llm_outputs,
 )
 async def _generate_json_answer(
-    *, question: str, source_payload: list[dict[str, str]], history: list[ConversationTurn] | None = None
+    *,
+    question: str,
+    source_payload: list[dict[str, str]],
+    history: list[ConversationTurn] | None = None,
+    facts_context: str | None = None,
 ) -> str:
     response = await _openai_client().chat.completions.create(
         model=ONBOARDING_CHAT_MODEL,
         temperature=0,
         response_format={"type": "json_object"},
-        messages=_json_answer_messages(question=question, source_payload=source_payload, history=history),
+        messages=_json_answer_messages(
+            question=question, source_payload=source_payload, history=history, facts_context=facts_context
+        ),
     )
     return response.choices[0].message.content or "{}"
 
@@ -796,13 +826,19 @@ async def _generate_json_answer(
     reduce_fn=_reduce_token_outputs,
 )
 async def _stream_answer_tokens(
-    *, question: str, source_payload: list[dict[str, str]], history: list[ConversationTurn] | None = None
+    *,
+    question: str,
+    source_payload: list[dict[str, str]],
+    history: list[ConversationTurn] | None = None,
+    facts_context: str | None = None,
 ) -> AsyncIterator[str]:
     stream = await _openai_client().chat.completions.create(
         model=ONBOARDING_CHAT_MODEL,
         temperature=0,
         stream=True,
-        messages=_stream_answer_messages(question=question, source_payload=source_payload, history=history),
+        messages=_stream_answer_messages(
+            question=question, source_payload=source_payload, history=history, facts_context=facts_context
+        ),
     )
     async for chunk in stream:
         token = chunk.choices[0].delta.content or ""
@@ -872,6 +908,10 @@ async def answer_onboarding_question(
 
     history = fetch_conversation_history(conversation_id=conversation_id, business_id=business_id) if conversation_id else []
     windowed_history = window_to_budget(history, HISTORY_TOKEN_BUDGET)
+    # Semantic memory: facts distilled from past conversations with this
+    # business (see hr_onboarding_semantic_memory_service.py) — a plain
+    # recency fetch, no embeddings.
+    facts_context = format_semantic_context(fetch_recent_facts(business_id=business_id))
     # Only skip the cache when THIS question actually leans on prior context —
     # an exact repeat of a self-contained question ("What is the PTO policy?"
     # asked twice in the same chat) is always safe to serve from cache, even
@@ -884,12 +924,22 @@ async def answer_onboarding_question(
         # blocked/rate-limited responses too — so history shows exactly what
         # the user actually saw, not just LLM-generated answers.
         if conversation_id:
+            new_total = len(history) + 2
             append_turn(
                 conversation_id=conversation_id,
                 business_id=business_id,
                 prior_turn_count=len(history),
                 question=question,
                 answer=answer_text,
+            )
+            # Fire-and-forget: incrementally distill new turns into semantic
+            # memory every few exchanges. Never blocks the response.
+            asyncio.ensure_future(
+                maybe_summarize_conversation(
+                    conversation_id=conversation_id,
+                    business_id=business_id,
+                    new_total_message_count=new_total,
+                )
             )
 
     casual_answer = _answer_casual_message(question)
@@ -988,7 +1038,9 @@ async def answer_onboarding_question(
     source_payload = _build_source_payload(matches)
 
     try:
-        raw = await _generate_json_answer(question=question, source_payload=source_payload, history=windowed_history)
+        raw = await _generate_json_answer(
+            question=question, source_payload=source_payload, history=windowed_history, facts_context=facts_context
+        )
     except Exception as exc:
         if _is_rate_limit_exception(exc):
             logger.warning("HR onboarding chat rate limited during generation: %s", exc)
@@ -1070,6 +1122,10 @@ async def stream_onboarding_question(
 
     history = fetch_conversation_history(conversation_id=conversation_id, business_id=business_id) if conversation_id else []
     windowed_history = window_to_budget(history, HISTORY_TOKEN_BUDGET)
+    # Semantic memory: facts distilled from past conversations with this
+    # business (see hr_onboarding_semantic_memory_service.py) — a plain
+    # recency fetch, no embeddings.
+    facts_context = format_semantic_context(fetch_recent_facts(business_id=business_id))
     # Only skip the cache when THIS question actually leans on prior context —
     # an exact repeat of a self-contained question ("What is the PTO policy?"
     # asked twice in the same chat) is always safe to serve from cache, even
@@ -1082,12 +1138,22 @@ async def stream_onboarding_question(
         # blocked/rate-limited responses too — so history shows exactly what
         # the user actually saw, not just LLM-generated answers.
         if conversation_id:
+            new_total = len(history) + 2
             append_turn(
                 conversation_id=conversation_id,
                 business_id=business_id,
                 prior_turn_count=len(history),
                 question=question,
                 answer=answer_text,
+            )
+            # Fire-and-forget: incrementally distill new turns into semantic
+            # memory every few exchanges. Never blocks the response.
+            asyncio.ensure_future(
+                maybe_summarize_conversation(
+                    conversation_id=conversation_id,
+                    business_id=business_id,
+                    new_total_message_count=new_total,
+                )
             )
 
     casual_answer = _answer_casual_message(question)
@@ -1211,7 +1277,7 @@ async def stream_onboarding_question(
         answer_parts: list[str] = []
         try:
             async for token in _stream_answer_tokens(
-                question=question, source_payload=source_payload, history=windowed_history
+                question=question, source_payload=source_payload, history=windowed_history, facts_context=facts_context
             ):
                 answer_parts.append(token)
                 yield _sse_event("token", {"text": token})

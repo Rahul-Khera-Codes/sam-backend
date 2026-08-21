@@ -32,6 +32,10 @@ from supabase_helpers import (
     _fetch_documents_for_location,
     _create_voice_conversation,
     _finalize_voice_conversation,
+    _fetch_recent_semantic_facts,
+    _format_semantic_context,
+    _store_semantic_facts,
+    _summarize_conversation_to_facts,
 )
 
 load_dotenv(".env.local")
@@ -1258,10 +1262,17 @@ async def executive_agent(ctx: agents.JobContext):
             business_timezone = biz.get("timezone", "") or business_timezone
 
     today = datetime.now().strftime("%A, %B %-d, %Y")
+    # Semantic memory: recall facts learned from past Remi conversations with
+    # this business and fill the procedural-memory {context} slot with them.
+    # A plain recency fetch (no embeddings) — cheap enough to run inline here,
+    # same as the _fetch_business call just above.
+    remembered_facts = _fetch_recent_semantic_facts(
+        supabase, facts_table="remi_semantic_facts", business_id=business_id
+    )
     instructions = EXECUTIVE_INSTRUCTIONS.format(
         business_name=business_name,
         today=today,
-        context="",
+        context=_format_semantic_context(remembered_facts),
     )
 
     session = AgentSession(
@@ -1342,6 +1353,18 @@ async def executive_agent(ctx: agents.JobContext):
             conversation_id=conversation_id,
             business_id=business_id,
             messages=message_log,
+        )
+        # Semantic memory: distill durable facts from this session once it's
+        # over. Async and after persistence — never adds latency to the call.
+        facts = await _summarize_conversation_to_facts(message_log, business_name=business_name)
+        _store_semantic_facts(
+            supabase,
+            facts_table="remi_semantic_facts",
+            business_id=business_id,
+            location_id=location_id,
+            source_conversation_id=conversation_id,
+            created_by_user_id=user_id or None,
+            facts=facts,
         )
 
     @ctx.room.on("participant_disconnected")
