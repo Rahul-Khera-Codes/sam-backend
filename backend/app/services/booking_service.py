@@ -515,8 +515,18 @@ async def update_appointment(
     new_time = updates.get("appointment_time") or appt["appointment_time"]
     assigned_uid = updates.get("assigned_user_id") or appt["assigned_user_id"]
 
-    if "appointment_date" in updates or "appointment_time" in updates:
+    date_changed = "appointment_date" in updates and updates["appointment_date"] != appt["appointment_date"]
+    time_changed = (
+        "appointment_time" in updates
+        and updates["appointment_time"][:5] != (appt["appointment_time"] or "")[:5]
+    )
+    assignee_changed = "assigned_user_id" in updates and updates["assigned_user_id"] != appt["assigned_user_id"]
+    date_or_time_changed = date_changed or time_changed
+
+    if date_or_time_changed:
         _validate_booking(req.business_id, appt.get("location_id"), new_date, new_time)
+
+    if date_or_time_changed or assignee_changed:
         if _check_double_booking(assigned_uid, new_date, new_time, exclude_id=appointment_id):
             raise HTTPException(
                 status_code=409,
@@ -571,7 +581,7 @@ async def update_appointment(
                 pass
 
     client_email = appt.get("client_email") or ""
-    if client_email and ("appointment_date" in updates or "appointment_time" in updates):
+    if client_email and date_or_time_changed:
         try:
             await send_reschedule_confirmation(
                 supabase=supabase_admin,
@@ -595,7 +605,7 @@ async def update_appointment(
             pass
 
     staff_email_addr = _get_staff_email(assigned_uid)
-    if staff_email_addr and ("appointment_date" in updates or "appointment_time" in updates):
+    if staff_email_addr and date_or_time_changed:
         try:
             await send_staff_reschedule_notification(
                 supabase=supabase_admin,
