@@ -16,8 +16,25 @@ today and the remaining balance on a later visit.
 - **`appointment_payment_entries`** (new) — one row per individual payment recorded against an
   appointment_payments row: `payment_type`, `amount`, optional `note`, `paid_at`. Many rows per
   appointment now possible. Editable/deletable (not an append-only ledger).
+  `payment_type` is a `TEXT CHECK` (no native Postgres enum), currently:
+  `cash`, `credit_card`, `debit_card`, `e_transfer`, `other`, `coupon`, `gift_card`, `paypal`,
+  `cheque` (last 4 added for AIE-26, migration
+  `20260824000000_add_payment_types_coupon_giftcard_paypal_cheque.sql`). The CHECK constraint,
+  the backend `PaymentType` Literal (`schemas/appointments.py`), the frontend `PaymentType`
+  union (`lib/voiceAgentApi.ts`), the dropdown labels (`PAYMENT_TYPE_LABELS` in
+  `hooks/useAppointmentPayments.ts`), and the entry icon map (`PAYMENT_TYPE_ICONS` in
+  `PaymentDetailsDialog.tsx`) must all be updated together whenever a payment type is
+  added/removed — there's no single source of truth. Refund is invoice-level
+  (`appointment_payments.refunded_at`), so it doesn't special-case any payment type; no
+  reporting/analytics code sums `appointment_payment_entries` today, so type additions have no
+  other blast radius.
 - **`refunded_at`** (new, on `appointment_payments`) — the one manual override. Everything else
   is computed.
+- **`collected_by_user_id`** (new, on `appointment_payment_entries`) — added for AIE-28. Separate
+  from `created_by` (who was logged in): when a business turns on
+  `businesses.require_payment_employee_code`, staff must enter their own 4-digit code to record
+  a payment, and this column stores the employee the code identified. See
+  `docs/features/employee-checkin-codes.md`.
 
 **Status is always computed, never stored**, at read time in
 `backend/app/routers/appointments.py::_build_full_payment_response`:
