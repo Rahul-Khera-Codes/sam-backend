@@ -37,3 +37,29 @@ class UserPermissionsResponse(BaseModel):
 
 class UpdatePermissionsRequest(BaseModel):
     permissions: list[PagePermission]
+
+
+class CheckInCodeStatus(BaseModel):
+    user_id: str
+    has_code: bool
+
+
+class SetCheckInCodeRequest(BaseModel):
+    business_id: str
+    code: Optional[str] = None  # omit to auto-generate
+
+
+class CheckInCodeResponse(BaseModel):
+    user_id: str
+    code: str  # returned once, never retrievable again after this response
+
+
+class BulkGenerateCheckInCodesRequest(BaseModel):
+    business_id: str
+
+
+class MyCheckInCodeResponse(BaseModel):
+    """The caller's own code. Distinct from CheckInCodeResponse: no one else's code is ever
+    retrievable, but an employee can always view their own current code."""
+    has_code: bool
+    code: Optional[str] = None

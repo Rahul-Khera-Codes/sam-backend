@@ -49,6 +49,7 @@ VALID_APPOINTMENT_STATUSES = {"confirmed", "checked_in", "no_show", "cancelled"}
 class UpdateAppointmentStatusRequest(BaseModel):
     business_id: str
     status: str
+    employee_code: Optional[str] = None
 
 
 class AppointmentResponse(BaseModel):
@@ -74,6 +75,9 @@ class AppointmentResponse(BaseModel):
     status: Optional[str] = None
     confirmation_ref: Optional[str] = None
     created_at: Optional[str] = None
+    checked_in_by_user_id: Optional[str] = None
+    checked_in_by_code: Optional[str] = None
+    checked_in_at: Optional[str] = None
 
 
 class CancelAppointmentResponse(BaseModel):
@@ -85,7 +89,10 @@ class CancelAppointmentResponse(BaseModel):
 # "unpaid"/"partially_paid"/"paid" are always computed from entries vs grand_total — never
 # stored directly. "refunded" is the one manual override, tracked via refunded_at.
 PaymentStatus = Literal["unpaid", "partially_paid", "paid", "refunded"]
-PaymentType = Literal["cash", "credit_card", "debit_card", "e_transfer", "other"]
+PaymentType = Literal[
+    "cash", "credit_card", "debit_card", "e_transfer", "other",
+    "coupon", "gift_card", "paypal", "cheque",
+]
 
 
 class AppointmentPaymentLineItem(BaseModel):
@@ -114,6 +121,8 @@ class AppointmentPaymentEntry(BaseModel):
     updated_by: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    collected_by_user_id: Optional[str] = None
+    collected_by_code: Optional[str] = None
 
 
 class CreatePaymentEntryRequest(BaseModel):
@@ -122,6 +131,7 @@ class CreatePaymentEntryRequest(BaseModel):
     amount: float
     note: Optional[str] = None
     paid_at: Optional[str] = None
+    employee_code: Optional[str] = None
 
 
 class UpdatePaymentEntryRequest(BaseModel):

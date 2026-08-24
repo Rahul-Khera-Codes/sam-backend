@@ -44,6 +44,35 @@ def _get_appointment_for_business(appointment_id: str, business_id: str) -> dict
     return result.data[0]
 
 
+def _get_business_code_flags(business_id: str) -> dict:
+    result = (
+        supabase_admin.table("businesses")
+        .select("require_checkin_employee_code, require_payment_employee_code")
+        .eq("id", business_id)
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
+        return {"require_checkin_employee_code": False, "require_payment_employee_code": False}
+    return result.data[0]
+
+
+def _resolve_employee_code(business_id: str, code: str | None) -> str:
+    if not code:
+        raise HTTPException(status_code=422, detail="Employee code required")
+    result = (
+        supabase_admin.table("user_roles")
+        .select("user_id")
+        .eq("business_id", business_id)
+        .eq("check_in_code", code)
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=422, detail="Invalid employee code")
+    return result.data[0]["user_id"]
+
+
 def _unique_ids(ids: list[str]) -> list[str]:
     seen: set[str] = set()
     unique: list[str] = []
@@ -214,9 +243,19 @@ async def update_appointment_status(
             status_code=422,
             detail=f"Invalid status. Must be one of: {', '.join(sorted(VALID_APPOINTMENT_STATUSES))}",
         )
+
+    update_row: dict = {"status": body.status}
+    if body.status == "checked_in" and _get_business_code_flags(body.business_id)["require_checkin_employee_code"]:
+        employee_id = _resolve_employee_code(body.business_id, body.employee_code)
+        update_row["checked_in_by_user_id"] = employee_id
+        # Immutable snapshot of the code actually entered — distinct from user_roles.check_in_code,
+        # which may be reset later. This one never changes after the fact.
+        update_row["checked_in_by_code"] = body.employee_code
+        update_row["checked_in_at"] = datetime.now(timezone.utc).isoformat()
+
     result = (
         supabase_admin.table("appointments")
-        .update({"status": body.status})
+        .update(update_row)
         .eq("id", appointment_id)
         .eq("business_id", body.business_id)
         .execute()
@@ -334,6 +373,10 @@ async def add_payment_entry(
         "created_by": user_id,
         "updated_by": user_id,
     }
+    if _get_business_code_flags(body.business_id)["require_payment_employee_code"]:
+        entry_row["collected_by_user_id"] = _resolve_employee_code(body.business_id, body.employee_code)
+        # Immutable snapshot of the code actually entered — see checked_in_by_code for rationale.
+        entry_row["collected_by_code"] = body.employee_code
     if body.paid_at:
         entry_row["paid_at"] = body.paid_at
 
