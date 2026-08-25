@@ -15,10 +15,6 @@ from app.core.config import settings
 from app.core.supabase import supabase_admin
 from app.schemas.documents import OnboardingChatRequest, OnboardingChatResponse
 from app.schemas.hr import (
-    HrCandidateActionRequest,
-    HrCandidateActionResponse,
-    HrCandidateJobResponse,
-    HrCandidateResponse,
     HrCandidatesResponse,
     HrDashboardPostingResponse,
     HrDraftAssistRequest,
@@ -32,16 +28,6 @@ from app.services.hr_onboarding_chat_service import answer_onboarding_question, 
 from app.services.hr_onboarding_conversation_memory_service import (
     delete_all_conversations as delete_all_hr_onboarding_conversations,
     delete_conversation as delete_hr_onboarding_conversation,
-)
-from app.services.greenhouse_service import (
-    GreenhouseError,
-    advance_harvest_application,
-    fetch_harvest_applications_for_job,
-    fetch_harvest_candidate,
-    fetch_jobs,
-    normalize_greenhouse_candidate,
-    normalize_greenhouse_job,
-    reject_harvest_application,
 )
 from app.services import livekit_service
 
@@ -496,21 +482,6 @@ async def get_hr_mock_workspace(
     }
 
 
-def _get_greenhouse_connection(business_id: str) -> dict | None:
-    result = (
-        supabase_admin.table("greenhouse_connections")
-        .select(
-            "id,business_id,board_token,board_url,board_name,is_connected,"
-            "last_sync_at,last_sync_status,last_sync_error,last_job_count,"
-            "greenhouse_harvest_api_key"
-        )
-        .eq("business_id", business_id)
-        .limit(1)
-        .execute()
-    )
-    return result.data[0] if result.data else None
-
-
 def _status_label(status: str) -> str:
     return {
         "draft": "Draft",
@@ -556,19 +527,15 @@ def _native_job_to_response(row: dict) -> dict:
         "applicant_bar_class_name": "bg-blue-500" if status == "Active" else "bg-slate-300",
         "publish_in_linkedin": bool(row.get("publish_in_linkedin")),
         "publish_in_indeed": bool(row.get("publish_in_indeed")),
-        "greenhouse_managed_distribution": bool(row.get("greenhouse_managed_distribution")),
         "linkedin_status": "Pending" if row.get("publish_in_linkedin") else "Off",
         "indeed_status": "Pending" if row.get("publish_in_indeed") else "Off",
         "ai_status": "Drafting" if status == "Draft" else "Ready",
-        "greenhouse_job_id": row.get("greenhouse_job_id"),
-        "greenhouse_internal_job_id": row.get("greenhouse_internal_job_id"),
-        "greenhouse_board_token_snapshot": row.get("greenhouse_board_token_snapshot"),
         "metadata": None,
         "source_payload": row.get("source_payload") or {},
     }
 
 
-def _workspace_view_from_jobs(jobs: list[dict], *, greenhouse_connected: bool) -> HrWorkspaceJobPayload:
+def _workspace_view_from_jobs(jobs: list[dict]) -> HrWorkspaceJobPayload:
     active_count = sum(1 for job in jobs if job["status"] == "Active")
     draft_count = sum(1 for job in jobs if job["status"] == "Draft")
     closed_count = sum(1 for job in jobs if job["status"] == "Closed")
@@ -578,8 +545,8 @@ def _workspace_view_from_jobs(jobs: list[dict], *, greenhouse_connected: bool) -
             role=job["title"],
             team=job["department"] or "Unassigned",
             applicants=job.get("applicants", 0),
-            linkedin=job["linkedin_status"] if greenhouse_connected and job["source"] == "greenhouse" else ("Active" if job.get("publish_in_linkedin") else "Off"),
-            indeed=job["indeed_status"] if greenhouse_connected and job["source"] == "greenhouse" else ("Active" if job.get("publish_in_indeed") else "Off"),
+            linkedin="Active" if job.get("publish_in_linkedin") else "Off",
+            indeed="Active" if job.get("publish_in_indeed") else "Off",
             aiStatus=job.get("ai_status") or "Ready",
         ).model_dump()
         for job in jobs
@@ -617,14 +584,6 @@ def _workspace_view_from_jobs(jobs: list[dict], *, greenhouse_connected: bool) -
     )
 
 
-async def _load_greenhouse_jobs(connection: dict) -> list[dict]:
-    payload = await fetch_jobs(connection["board_token"], content=True)
-    return [
-        normalize_greenhouse_job(job, board_token=connection["board_token"])
-        for job in payload.get("jobs", [])
-    ]
-
-
 def _load_native_jobs(business_id: str) -> list[dict]:
     rows = (
         supabase_admin.table("hr_job_postings")
@@ -638,103 +597,12 @@ def _load_native_jobs(business_id: str) -> list[dict]:
 
 
 async def _get_hr_jobs_payload(business_id: str) -> HrJobsResponse:
-    connection = _get_greenhouse_connection(business_id)
     native_jobs = _load_native_jobs(business_id)
     native_draft_count = sum(1 for job in native_jobs if job["status"] == "Draft")
-
-    if not connection or not connection.get("is_connected"):
-        return HrJobsResponse(
-            source_of_truth="native",
-            greenhouse_connected=False,
-            jobs=[HrJobPostingResponse.model_validate(job) for job in native_jobs],
-            native_draft_count=native_draft_count,
-        )
-
-    try:
-        greenhouse_jobs = await _load_greenhouse_jobs(connection)
-        combined_jobs = greenhouse_jobs + [job for job in native_jobs if job["status"] == "Draft"]
-        greenhouse_status = {
-            "connected": True,
-            "board_url": connection.get("board_url"),
-            "board_name": connection.get("board_name"),
-            "last_sync_at": connection.get("last_sync_at"),
-            "last_sync_status": connection.get("last_sync_status"),
-            "last_sync_error": connection.get("last_sync_error"),
-            "last_job_count": connection.get("last_job_count") or len(greenhouse_jobs),
-        }
-    except GreenhouseError as exc:
-        combined_jobs = [job for job in native_jobs if job["status"] == "Draft"]
-        greenhouse_status = {
-            "connected": True,
-            "board_url": connection.get("board_url"),
-            "board_name": connection.get("board_name"),
-            "last_sync_at": connection.get("last_sync_at"),
-            "last_sync_status": "error",
-            "last_sync_error": str(exc),
-            "last_job_count": connection.get("last_job_count") or 0,
-        }
-
     return HrJobsResponse(
-        source_of_truth="greenhouse",
-        greenhouse_connected=True,
-        greenhouse_status=greenhouse_status,
-        jobs=[HrJobPostingResponse.model_validate(job) for job in combined_jobs],
+        jobs=[HrJobPostingResponse.model_validate(job) for job in native_jobs],
         native_draft_count=native_draft_count,
     )
-
-
-def _load_greenhouse_job_row(
-    business_id: str,
-    *,
-    job_posting_id: str | None = None,
-) -> dict | None:
-    query = (
-        supabase_admin.table("hr_job_postings")
-        .select("*")
-        .eq("business_id", business_id)
-        .eq("source", "greenhouse")
-    )
-    if job_posting_id:
-        query = query.eq("id", job_posting_id)
-    result = query.order("posted_at", desc=True).order("updated_at", desc=True).limit(1).execute()
-    return result.data[0] if result.data else None
-
-
-def _candidate_job_response(row: dict) -> HrCandidateJobResponse:
-    return HrCandidateJobResponse(
-        id=row["id"],
-        title=row.get("title") or "",
-        greenhouse_job_id=row.get("greenhouse_job_id"),
-        greenhouse_internal_job_id=row.get("greenhouse_internal_job_id"),
-        absolute_url=row.get("greenhouse_absolute_url") or "",
-    )
-
-
-async def _load_greenhouse_candidates(
-    connection: dict,
-    job_row: dict,
-) -> list[HrCandidateResponse]:
-    internal_job_id = job_row.get("greenhouse_internal_job_id")
-    if not internal_job_id:
-        return []
-
-    harvest_key = connection.get("greenhouse_harvest_api_key") or ""
-    applications = await fetch_harvest_applications_for_job(harvest_key, str(internal_job_id))
-    rows: list[HrCandidateResponse] = []
-    for application in applications:
-        candidate_payload = application.get("candidate") if isinstance(application.get("candidate"), dict) else None
-        candidate_id = application.get("candidate_id") or (candidate_payload or {}).get("id")
-        if not candidate_payload and candidate_id:
-            try:
-                candidate_payload = await fetch_harvest_candidate(harvest_key, str(candidate_id))
-            except GreenhouseError:
-                candidate_payload = {}
-        rows.append(
-            HrCandidateResponse.model_validate(
-                normalize_greenhouse_candidate(application, candidate_payload)
-            )
-        )
-    return rows
 
 
 @router.get("/jobs")
@@ -752,11 +620,8 @@ async def get_hr_jobs_workspace(
 ):
     payload = await _get_hr_jobs_payload(business_id)
     jobs = [job.model_dump() for job in payload.jobs]
-    workspace_jobs = _workspace_view_from_jobs(jobs, greenhouse_connected=payload.greenhouse_connected)
+    workspace_jobs = _workspace_view_from_jobs(jobs)
     return {
-        "source_of_truth": payload.source_of_truth,
-        "greenhouse_connected": payload.greenhouse_connected,
-        "greenhouse_status": payload.greenhouse_status.model_dump() if payload.greenhouse_status else None,
         "native_draft_count": payload.native_draft_count,
         **workspace_jobs.model_dump(),
     }
@@ -765,92 +630,12 @@ async def get_hr_jobs_workspace(
 @router.get("/candidates")
 async def list_hr_candidates(
     business_id: str,
-    job_posting_id: str | None = None,
     _: str = Depends(require_business_access()),
 ) -> HrCandidatesResponse:
-    connection = _get_greenhouse_connection(business_id)
-    if not connection or not connection.get("is_connected"):
-        return HrCandidatesResponse(
-            greenhouse_connected=False,
-            harvest_connected=False,
-            needs_greenhouse_connection=True,
-            message="Connect Greenhouse in Integrations to view real candidates.",
-        )
-
-    job_row = _load_greenhouse_job_row(business_id, job_posting_id=job_posting_id)
-    selected_job = _candidate_job_response(job_row) if job_row else None
-    if not connection.get("greenhouse_harvest_api_key"):
-        return HrCandidatesResponse(
-            greenhouse_connected=True,
-            harvest_connected=False,
-            needs_harvest_api_key=True,
-            selected_job=selected_job,
-            message="Add a Greenhouse Harvest API key in Integrations to sync candidates.",
-        )
-
-    if not job_row:
-        return HrCandidatesResponse(
-            greenhouse_connected=True,
-            harvest_connected=True,
-            selected_job=None,
-            candidates=[],
-            total=0,
-            message="No synced Greenhouse job is available for candidate lookup.",
-        )
-
-    try:
-        candidates = await _load_greenhouse_candidates(connection, job_row)
-    except GreenhouseError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
     return HrCandidatesResponse(
-        greenhouse_connected=True,
-        harvest_connected=True,
-        selected_job=selected_job,
-        candidates=candidates,
-        total=len(candidates),
-        message="",
+        available=False,
+        message="Candidate sourcing isn't available right now.",
     )
-
-
-@router.post("/candidates/{application_id}/reject")
-async def reject_hr_candidate(
-    application_id: str,
-    body: HrCandidateActionRequest,
-    user_id: str = Depends(get_user_id),
-) -> HrCandidateActionResponse:
-    verify_business_access(user_id, body.business_id)
-    connection = _get_greenhouse_connection(body.business_id)
-    if not connection or not connection.get("is_connected"):
-        raise HTTPException(status_code=404, detail="Greenhouse is not connected for this business.")
-    harvest_key = connection.get("greenhouse_harvest_api_key")
-    if not harvest_key:
-        raise HTTPException(status_code=400, detail="Greenhouse Harvest API key is not configured.")
-    try:
-        await reject_harvest_application(harvest_key, application_id)
-    except GreenhouseError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return HrCandidateActionResponse(ok=True, message="Candidate rejected in Greenhouse.")
-
-
-@router.post("/candidates/{application_id}/invite")
-async def invite_hr_candidate_to_interview(
-    application_id: str,
-    body: HrCandidateActionRequest,
-    user_id: str = Depends(get_user_id),
-) -> HrCandidateActionResponse:
-    verify_business_access(user_id, body.business_id)
-    connection = _get_greenhouse_connection(body.business_id)
-    if not connection or not connection.get("is_connected"):
-        raise HTTPException(status_code=404, detail="Greenhouse is not connected for this business.")
-    harvest_key = connection.get("greenhouse_harvest_api_key")
-    if not harvest_key:
-        raise HTTPException(status_code=400, detail="Greenhouse Harvest API key is not configured.")
-    try:
-        await advance_harvest_application(harvest_key, application_id)
-    except GreenhouseError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return HrCandidateActionResponse(ok=True, message="Candidate advanced in Greenhouse.")
 
 
 @router.post("/jobs/ai-assist")
@@ -1022,14 +807,8 @@ async def create_hr_job(
     user_id: str = Depends(get_user_id),
 ) -> HrJobPostingResponse:
     verify_business_access(user_id, body.business_id)
-    connection = _get_greenhouse_connection(body.business_id)
-    is_greenhouse_connected = bool(connection and connection.get("is_connected"))
-
     status = body.status
     sync_state = "native_only"
-    if is_greenhouse_connected:
-        status = "draft"
-        sync_state = "pending_greenhouse_sync"
 
     row = {
         "business_id": body.business_id,
@@ -1058,7 +837,6 @@ async def create_hr_job(
         "seniority": body.seniority,
         "publish_in_linkedin": body.publish_in_linkedin,
         "publish_in_indeed": body.publish_in_indeed,
-        "greenhouse_managed_distribution": False,
         "posted_at": datetime.now(timezone.utc).isoformat() if status == "active" else None,
     }
     created = (
@@ -1092,16 +870,8 @@ async def update_hr_job(
     if not existing.data:
         raise HTTPException(status_code=404, detail="Native HR job posting not found.")
 
-    connection = _get_greenhouse_connection(body.business_id)
-    is_greenhouse_connected = bool(connection and connection.get("is_connected"))
-
     status = body.status
-    sync_state = existing.data[0].get("sync_state") or "native_only"
-    if is_greenhouse_connected:
-        status = "draft"
-        sync_state = "pending_greenhouse_sync"
-    elif status == "active":
-        sync_state = "native_only"
+    sync_state = "native_only"
 
     updates = {
         "status": status,

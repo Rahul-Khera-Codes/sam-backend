@@ -5,6 +5,17 @@
 - It should preserve product decisions, implementation status, section-by-section plans, technical notes, verification history, and remaining work.
 - Future sessions should read this file first before continuing HR Employee work.
 
+## Status Update — 2026-08-25: Greenhouse ATS connector removed (AIE-33)
+- The Greenhouse Job Board connector (Section 1) has been fully removed from both repos, per Linear ticket AIE-33.
+- Native `hr_job_postings` is now the sole source of truth for all businesses — every business gets full native draft + publish, including businesses that were previously "Greenhouse-connected." There is no more source-of-truth branching.
+- Removed:
+  - Backend: `backend/app/routers/greenhouse_integrations.py`, `backend/app/services/greenhouse_service.py` (deleted), Greenhouse schemas/fields in `backend/app/schemas/hr.py`, all Greenhouse helper functions and branching in `backend/app/routers/hr.py`
+  - Frontend: the "HR & ATS" Greenhouse card/dialog in `IntegrationsTab.tsx`, Greenhouse state/banners/refresh in `HrJobPostings.tsx`, Greenhouse API functions/types in `voiceAgentApi.ts`, the Greenhouse mention in `Legal.tsx`
+  - Candidates: `HrCandidates.tsx` had no native fallback (it only ever worked via Greenhouse Harvest), so it was rewritten to a static "candidate sourcing is unavailable" state. The `reject`/`invite` candidate endpoints and their frontend callers were removed entirely since they had no other purpose. `GET /hr/candidates` remains and always returns `available: false`.
+  - Database: migration `20260825120000_remove_greenhouse_integration.sql` drops `greenhouse_connections` and the `greenhouse_*` columns on `hr_job_postings`. Verified via `supabase db query --linked` that `greenhouse_connections` had 0 rows in production before dropping — no real customer credentials were destroyed.
+- **Untouched, by explicit scope decision:** the AI Interviewer / interview runtime (`hr_interviews.py`, `hr_interview_runtime_service.py`, `hr_interviewer_agent.py`, `hr_interview_greenhouse_sync_events` table) keeps its informational `greenhouse_sync_status`/`greenhouse_import` fields — these were always just labels with no FK to `greenhouse_connections`, and are out of scope for AIE-33.
+- Everything below this point describing Greenhouse (Section 1 details, Candidates Harvest-ready notes, etc.) is now **historical** — kept for record of what was built and why, not as a description of current behavior.
+
 ## Repos In Scope
 - Backend: `sam-backend`
 - Frontend: `ai-employees-app`
