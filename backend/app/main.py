@@ -16,7 +16,6 @@ from app.routers import (
     hr,
     hr_interviews,
     integrations,
-    greenhouse_integrations,
     gmail_integrations,
     phone_numbers,
     support,
@@ -77,7 +76,6 @@ app.include_router(analytics.router)
 app.include_router(hr.router)
 app.include_router(hr_interviews.router)
 app.include_router(integrations.router)
-app.include_router(greenhouse_integrations.router)
 app.include_router(gmail_integrations.router)
 app.include_router(phone_numbers.router)
 app.include_router(support.router)
