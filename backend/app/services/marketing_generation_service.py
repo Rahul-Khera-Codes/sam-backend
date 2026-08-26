@@ -786,6 +786,9 @@ def create_scheduled_post(
     asset = _get_single("marketing_assets", body.asset_id, business_id)
     _get_single("marketing_campaigns", body.campaign_id, business_id)
     asset_ids = body.asset_ids or [body.asset_id]
+    metadata: dict[str, Any] = {"publishing_deferred": True, "asset_ids": asset_ids}
+    if body.tiktok_options:
+        metadata["tiktok_options"] = body.tiktok_options.model_dump()
     row = {
         "business_id": business_id,
         "campaign_id": body.campaign_id,
@@ -795,7 +798,7 @@ def create_scheduled_post(
         "platforms": body.platforms,
         "status": "scheduled",
         "scheduled_for": body.scheduled_for or _next_calendar_slot(business_id),
-        "metadata": {"publishing_deferred": True, "asset_ids": asset_ids},
+        "metadata": metadata,
     }
     result = supabase_admin.table("marketing_scheduled_posts").insert(row).execute()
     if not result.data:

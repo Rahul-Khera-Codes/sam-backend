@@ -36,6 +36,7 @@ from app.routers import (
     business_branding as business_branding_router,
     mission_control as mission_control_router,
     command_center_mock as command_center_mock_router,
+    reports as reports_router,
 )
 from app.services.scheduler_service import start_scheduler, stop_scheduler
 from app.services.hr_onboarding_guardrails_service import warm_hr_onboarding_guardrails
@@ -96,6 +97,7 @@ app.include_router(report_scheduler_router.router)
 app.include_router(business_branding_router.router)
 app.include_router(mission_control_router.router)
 app.include_router(command_center_mock_router.router)
+app.include_router(reports_router.router)
 
 
 # ── Health check ──────────────────────────────

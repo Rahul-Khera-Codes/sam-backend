@@ -36,6 +36,26 @@ class Settings(BaseSettings):
     marketing_public_backend_url: str = ""
     marketing_token_encryption_key: str = ""
 
+    # TikTok (Content Posting API) — field names mirror TikTok's own "client key"/"client secret" terms
+    tiktok_client_key: str = ""
+    tiktok_client_secret: str = ""
+    marketing_tiktok_redirect_uri_local: str = "http://localhost:8080/integrations/marketing/tiktok/callback"
+    marketing_tiktok_redirect_uri_production: str = ""
+    # Unaudited TikTok apps are force-restricted to private viewing regardless of what's sent,
+    # so default to the safest privacy_level until the app passes TikTok's Content Posting API audit.
+    marketing_tiktok_privacy_level: str = "SELF_ONLY"
+
+    # LinkedIn — built against LinkedIn's documented OAuth + Posts API, but unverified:
+    # no LinkedIn Developer app exists yet, so exact scope/product names may need adjustment
+    # once one is created. See docs/features/marketing_platform_integrations.md.
+    marketing_linkedin_client_id: str = ""
+    marketing_linkedin_client_secret: str = ""
+    marketing_linkedin_redirect_uri_local: str = "http://localhost:8080/integrations/marketing/linkedin/callback"
+    marketing_linkedin_redirect_uri_production: str = ""
+    # LinkedIn-Version header (YYYYMM) — bump via env once the real app is live and tested
+    # against whatever version is current then; no code change needed.
+    marketing_linkedin_api_version: str = "202502"
+
     # AWS S3 (optional)
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""

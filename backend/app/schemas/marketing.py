@@ -8,6 +8,13 @@ MarketingFormat = Literal["post", "reel", "video"]
 CampaignStatus = Literal["draft", "generating", "ready", "failed", "archived"]
 AssetType = Literal["concept", "image", "video"]
 AssetStatus = Literal["pending", "generating", "ready", "failed", "disabled"]
+
+
+class TikTokPublishOptions(BaseModel):
+    privacy_level: str
+    disable_comment: bool = False
+    disable_duet: bool = False
+    disable_stitch: bool = False
 JobType = Literal["concepts", "image", "video"]
 JobStatus = Literal["pending", "running", "completed", "failed", "disabled"]
 ScheduledPostStatus = Literal["draft", "scheduled", "publishing", "published", "failed", "cancelled"]
@@ -146,6 +153,7 @@ class MarketingScheduledPostCreateRequest(BaseModel):
     caption: str = Field(min_length=1)
     platforms: list[MarketingPlatform] = Field(default_factory=lambda: ["instagram"])
     scheduled_for: str | None = None
+    tiktok_options: TikTokPublishOptions | None = None
 
 
 class MarketingScheduledPostResponse(BaseModel):
@@ -168,7 +176,7 @@ class MarketingScheduledPostResponse(BaseModel):
     updated_at: str
 
 
-MarketingIntegrationProvider = Literal["instagram", "x"]
+MarketingIntegrationProvider = Literal["instagram", "x", "tiktok", "linkedin"]
 
 
 class MarketingIntegrationStatusResponse(BaseModel):
@@ -176,6 +184,7 @@ class MarketingIntegrationStatusResponse(BaseModel):
     connected: bool
     account_id: str | None = None
     account_name: str | None = None
+    account_avatar_url: str | None = None
     scopes: list[str] = Field(default_factory=list)
     last_error: str | None = None
     token_expires_at: str | None = None
@@ -187,6 +196,17 @@ class MarketingIntegrationsStatusResponse(BaseModel):
 
 class MarketingOAuthUrlResponse(BaseModel):
     url: str
+
+
+class TikTokCreatorInfoResponse(BaseModel):
+    creator_username: str | None = None
+    creator_nickname: str | None = None
+    creator_avatar_url: str | None = None
+    privacy_level_options: list[str] = Field(default_factory=list)
+    comment_disabled: bool = False
+    duet_disabled: bool = False
+    stitch_disabled: bool = False
+    max_video_post_duration_sec: int | None = None
 
 
 class MarketingOAuthCallbackRequest(BaseModel):

@@ -245,13 +245,17 @@ async def update_appointment_status(
         )
 
     update_row: dict = {"status": body.status}
-    if body.status == "checked_in" and _get_business_code_flags(body.business_id)["require_checkin_employee_code"]:
+    if (
+        body.status in {"checked_in", "no_show", "cancelled"}
+        and _get_business_code_flags(body.business_id)["require_checkin_employee_code"]
+    ):
         employee_id = _resolve_employee_code(body.business_id, body.employee_code)
-        update_row["checked_in_by_user_id"] = employee_id
-        # Immutable snapshot of the code actually entered — distinct from user_roles.check_in_code,
-        # which may be reset later. This one never changes after the fact.
-        update_row["checked_in_by_code"] = body.employee_code
-        update_row["checked_in_at"] = datetime.now(timezone.utc).isoformat()
+        if body.status == "checked_in":
+            update_row["checked_in_by_user_id"] = employee_id
+            # Immutable snapshot of the code actually entered — distinct from user_roles.check_in_code,
+            # which may be reset later. This one never changes after the fact.
+            update_row["checked_in_by_code"] = body.employee_code
+            update_row["checked_in_at"] = datetime.now(timezone.utc).isoformat()
 
     result = (
         supabase_admin.table("appointments")

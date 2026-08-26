@@ -37,10 +37,11 @@ below) — otherwise there'd be no way for them to actually learn it.
 ## Key files
 **Backend (sam-backend)**
 - `backend/app/routers/appointments.py` — `_resolve_employee_code()` / `_get_business_code_flags()`
-  helpers; `update_appointment_status` (gates on `require_checkin_employee_code`, only for the
-  `checked_in` transition) and `add_payment_entry` (gates on `require_payment_employee_code`) both
-  accept an optional `employee_code` and 422 with "Employee code required"/"Invalid employee code"
-  when the flag is on and the code is missing/wrong.
+  helpers; `update_appointment_status` (gates on `require_checkin_employee_code`, for the
+  `checked_in`, `no_show`, and `cancelled` transitions — attribution columns only written for
+  `checked_in`) and `add_payment_entry` (gates on `require_payment_employee_code`) both accept an
+  optional `employee_code` and 422 with "Employee code required"/"Invalid employee code" when the
+  flag is on and the code is missing/wrong.
 - `backend/app/routers/roles.py` — admin-only endpoints (reuses the existing `_require_admin`
   helper): `GET /roles/check-in-codes` (per-member `has_code` status, never the code itself),
   `PUT /roles/users/{id}/check-in-code` (set/reset one member's code, custom or auto-generated,
@@ -55,9 +56,11 @@ below) — otherwise there'd be no way for them to actually learn it.
   an action; used from both call sites below.
 - `src/components/team/SetEmployeeCodeDialog.tsx` — admin-facing "set/reset a member's code"
   dialog (custom digits or auto-generate), used from Team Management.
-- `src/pages/dashboard/Calendar.tsx` — `handleCheckInClick`/`performStatusUpdate`: opens the PIN
-  dialog before marking an appointment Checked In when `business.require_checkin_employee_code`
-  is true.
+- `src/pages/dashboard/Calendar.tsx` — `handleStatusChangeClick`/`performStatusUpdate`: opens the
+  PIN dialog (via `codeGateAction` state, which carries both the appointment id and target status)
+  before marking an appointment Checked In, No Show, or Cancelled when
+  `business.require_checkin_employee_code` is true. The `EmployeeCodeDialog` title/description are
+  worded per target status.
 - `src/components/appointments/PaymentDetailsDialog.tsx` — `submitEntry`: same gate on "Add
   Payment" for `business.require_payment_employee_code`.
 - `src/pages/dashboard/TeamManagement.tsx` — per-member "Set/Reset Employee Code" menu item, a
@@ -81,8 +84,12 @@ now surfaced directly on the two existing screens rather than a separate report 
 - `src/pages/dashboard/Calendar.tsx` — the read-only "Appointment Details" dialog (`detailsOpen`)
   shows a **Checked In By** field alongside Client/Service/Assigned To/etc., resolved via the
   existing `getMemberName(userId)` helper; shows "—" when no code was captured (toggle was off,
-  or the appointment predates this feature). When `checked_in_by_code` is present it's appended
-  as `"Jane · Code 4821"` — the snapshot code, not a live lookup of the employee's current code.
+  or the appointment predates this feature). When `checked_in_at` is present it's appended as
+  `"Jane · Aug 25, 2026 at 3:42 PM"`. **Note:** this originally displayed the raw
+  `checked_in_by_code` snapshot instead (`"Jane · Code 4821"`) — QA flagged that as a plaintext
+  leak of the employee's secret code (AIE-28, comment 2026-08-25), fixed to show the check-in
+  timestamp instead. `checked_in_by_code` is still captured and stored for the audit trail (see
+  below) — it's just no longer rendered in this dialog.
 - `src/components/appointments/PaymentDetailsDialog.tsx` — each payment entry shows a
   **Collected by** line under its timestamp, same "—" fallback when unset and same
   `"Jane · Code 4821"` format via `collected_by_code`. The dialog takes a new optional
@@ -137,5 +144,10 @@ now surfaced directly on the two existing screens rather than a separate report 
 - **No hard rollout risk** — both flags default off; the UI actively blocks turning a flag on
   while any member is missing a code, and bulk-generate exists specifically to clear that
   blocker in one action for businesses (the common case today) where no one has a code yet.
-- **Code required only for the `checked_in` transition**, not `no_show`/`cancelled`/`confirmed`
-  — matches the ticket's literal scope ("checking in a customer").
+- **Code required for `checked_in`, `no_show`, and `cancelled`** (not `confirmed`). Originally
+  scoped to `checked_in` only, matching the ticket's literal wording — widened 2026-08-26 after a
+  QA comment on AIE-28 asked for the same requirement on No Show/Cancelled. Only `checked_in`
+  writes attribution (`checked_in_by_user_id`/`checked_in_by_code`/`checked_in_at`) — No
+  Show/Cancelled validate the code (422 if missing/invalid when the flag is on) but don't record
+  who performed the action; this was a deliberate scope choice (gate-only, no new columns/migration)
+  rather than adding a `status_changed_by_*` audit trail for every gated transition.
