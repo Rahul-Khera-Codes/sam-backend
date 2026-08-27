@@ -89,7 +89,7 @@ def _fetch_active_custom_schedule(
                 if start <= today_str <= end:
                     candidates.append(s)
             elif stype == "recurring":
-                if s.get("day_of_week") == dow:
+                if dow in (s.get("days_of_week") or []):
                     candidates.append(s)
         if not candidates:
             return None

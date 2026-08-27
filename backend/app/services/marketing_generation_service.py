@@ -18,6 +18,9 @@ from app.schemas.marketing import (
     MarketingDraftResponse,
     MarketingDraftUpsertRequest,
     MarketingGenerationJobResponse,
+    MarketingLayerUploadResponse,
+    MarketingProductPostRequest,
+    MarketingProductResponse,
     MarketingPromptTemplateCreateRequest,
     MarketingPromptTemplateResponse,
     MarketingScheduledPostCreateRequest,
@@ -27,6 +30,7 @@ from app.schemas.marketing import (
 logger = logging.getLogger(__name__)
 
 MARKETING_ASSETS_BUCKET = "marketing-assets"
+MARKETING_PRODUCTS_BUCKET = "marketing-products"
 SIGNED_URL_TTL_SECONDS = 60 * 60
 
 _CALENDAR_SLOTS = [
@@ -66,6 +70,12 @@ def _asset_response(row: dict[str, Any], signed_url: str | None = None) -> Marke
     payload = _normalize_row(row)
     payload["signed_url"] = signed_url
     return MarketingAssetResponse(**payload)
+
+
+def _product_response(row: dict[str, Any], signed_url: str | None = None) -> MarketingProductResponse:
+    payload = _normalize_row(row)
+    payload["signed_url"] = signed_url
+    return MarketingProductResponse(**payload)
 
 
 def _draft_response(row: dict[str, Any], assets: list[dict[str, Any]] | None = None) -> MarketingDraftResponse:
@@ -227,6 +237,29 @@ def _signed_asset_url(asset: dict[str, Any]) -> str | None:
     except Exception as exc:
         logger.warning("Failed to create signed marketing asset URL: %s", exc)
         return None
+
+
+def _signed_product_url(product: dict[str, Any]) -> str | None:
+    bucket = product.get("storage_bucket") or MARKETING_PRODUCTS_BUCKET
+    path = product.get("storage_path")
+    if not path:
+        return None
+
+    try:
+        signed = supabase_admin.storage.from_(bucket).create_signed_url(path, SIGNED_URL_TTL_SECONDS)
+        return signed.get("signedURL") or signed.get("signed_url") or signed.get("signedUrl")
+    except Exception as exc:
+        logger.warning("Failed to create signed marketing product URL: %s", exc)
+        return None
+
+
+def _download_bytes(bucket: str, path: str) -> bytes:
+    data = supabase_admin.storage.from_(bucket).download(path)
+    if isinstance(data, bytes):
+        return data
+    if hasattr(data, "content"):
+        return data.content
+    raise HTTPException(status_code=500, detail="Failed to download marketing media file")
 
 
 def create_campaign(
@@ -680,6 +713,344 @@ def _image_size_for_aspect_ratio(aspect_ratio: str) -> str:
     if aspect_ratio in {"9:16", "2:3"}:
         return "1024x1536"
     return "1024x1024"
+
+
+def create_product(
+    business_id: str,
+    user_id: str,
+    name: str,
+    description: str | None,
+    content: bytes,
+    content_type: str,
+    extension: str,
+) -> MarketingProductResponse:
+    product_id = str(uuid4())
+    storage_path = f"{business_id}/{product_id}.{extension}"
+    supabase_admin.storage.from_(MARKETING_PRODUCTS_BUCKET).upload(
+        storage_path,
+        content,
+        {"content-type": content_type},
+    )
+    row = {
+        "id": product_id,
+        "business_id": business_id,
+        "created_by": user_id,
+        "name": name.strip(),
+        "description": (description or "").strip() or None,
+        "storage_bucket": MARKETING_PRODUCTS_BUCKET,
+        "storage_path": storage_path,
+        "content_type": content_type,
+    }
+    result = supabase_admin.table("marketing_products").insert(row).execute()
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to save marketing product")
+    saved = result.data[0]
+    return _product_response(saved, _signed_product_url(saved))
+
+
+def list_products(business_id: str) -> list[MarketingProductResponse]:
+    rows = (
+        supabase_admin.table("marketing_products")
+        .select("*")
+        .eq("business_id", business_id)
+        .order("created_at", desc=True)
+        .execute()
+        .data
+        or []
+    )
+    return [_product_response(row, _signed_product_url(row)) for row in rows]
+
+
+def delete_product(business_id: str, product_id: str) -> MarketingProductResponse:
+    product = _get_single("marketing_products", product_id, business_id)
+    try:
+        supabase_admin.storage.from_(product.get("storage_bucket") or MARKETING_PRODUCTS_BUCKET).remove(
+            [product["storage_path"]]
+        )
+    except Exception as exc:
+        logger.warning("Failed to remove marketing product file: %s", exc)
+    result = (
+        supabase_admin.table("marketing_products")
+        .delete()
+        .eq("id", product_id)
+        .eq("business_id", business_id)
+        .execute()
+    )
+    if result.data is None:
+        raise HTTPException(status_code=500, detail="Failed to delete marketing product")
+    return _product_response(product)
+
+
+def get_product_signed_url(business_id: str, product_id: str) -> tuple[str, int]:
+    product = _get_single("marketing_products", product_id, business_id)
+    signed_url = _signed_product_url(product)
+    if not signed_url:
+        raise HTTPException(status_code=404, detail="Product does not have an image file")
+    return signed_url, SIGNED_URL_TTL_SECONDS
+
+
+def upload_layer_image(
+    business_id: str,
+    campaign_id: str,
+    content: bytes,
+    content_type: str,
+    extension: str,
+) -> MarketingLayerUploadResponse:
+    """Stores a one-off overlay image (logo/sticker) used inside the post editor's layer
+    canvas. Not tied to its own DB row — the owning asset's metadata.layers JSON references
+    this storage path directly so a layer stays re-editable if the post is reopened."""
+    upload_id = str(uuid4())
+    storage_path = f"{business_id}/{campaign_id}/layer-uploads/{upload_id}.{extension}"
+    supabase_admin.storage.from_(MARKETING_ASSETS_BUCKET).upload(
+        storage_path,
+        content,
+        {"content-type": content_type},
+    )
+    signed_url = _signed_asset_url({"storage_bucket": MARKETING_ASSETS_BUCKET, "storage_path": storage_path})
+    if not signed_url:
+        raise HTTPException(status_code=500, detail="Failed to sign uploaded layer image")
+    return MarketingLayerUploadResponse(
+        storage_bucket=MARKETING_ASSETS_BUCKET,
+        storage_path=storage_path,
+        signed_url=signed_url,
+    )
+
+
+def save_edited_asset_image(
+    business_id: str,
+    asset_id: str,
+    content: bytes,
+    content_type: str,
+    layers_raw: str,
+) -> MarketingAssetResponse:
+    """Saves a flattened (client-side rasterized) post-editor composite as a new asset,
+    linked back to the original via parent_asset_id — the same lineage pattern concept→image
+    generation already uses. The original asset is left untouched."""
+    try:
+        layers = json.loads(layers_raw)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=422, detail="Invalid layers JSON")
+    if not isinstance(layers, list):
+        raise HTTPException(status_code=422, detail="layers must be a JSON array")
+
+    original = _get_single("marketing_assets", asset_id, business_id)
+    new_id = str(uuid4())
+    storage_path = f"{business_id}/{original['campaign_id']}/{new_id}.png"
+    supabase_admin.storage.from_(MARKETING_ASSETS_BUCKET).upload(
+        storage_path,
+        content,
+        {"content-type": content_type},
+    )
+    row = {
+        "id": new_id,
+        "business_id": business_id,
+        "campaign_id": original["campaign_id"],
+        "parent_asset_id": original["id"],
+        "reference_product_id": original.get("reference_product_id"),
+        "asset_type": "image",
+        "platform": original["platform"],
+        "format": original["format"],
+        "aspect_ratio": original["aspect_ratio"],
+        "title": original["title"],
+        "caption": original.get("caption"),
+        "status": "ready",
+        "provider": "layer_editor",
+        "storage_bucket": MARKETING_ASSETS_BUCKET,
+        "storage_path": storage_path,
+        "content_type": content_type,
+        "metadata": {"layers": layers, "source_asset_id": original["id"]},
+    }
+    result = supabase_admin.table("marketing_assets").insert(row).execute()
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to save edited post image")
+    saved = result.data[0]
+    return _asset_response(saved, _signed_asset_url(saved))
+
+
+def start_product_post_job(
+    business_id: str,
+    campaign_id: str,
+    body: MarketingProductPostRequest,
+) -> MarketingGenerationJobResponse:
+    campaign = _get_single("marketing_campaigns", campaign_id, business_id)
+    product = _get_single("marketing_products", body.product_id, business_id)
+
+    image_asset = supabase_admin.table("marketing_assets").insert(
+        {
+            "business_id": business_id,
+            "campaign_id": campaign["id"],
+            "reference_product_id": product["id"],
+            "asset_type": "image",
+            "platform": body.platforms[0],
+            "format": "post",
+            "aspect_ratio": body.aspect_ratio,
+            "title": product["name"],
+            "status": "generating",
+            "provider": "product_library",
+            "storage_bucket": product["storage_bucket"],
+            "storage_path": product["storage_path"],
+            "content_type": product["content_type"],
+            "metadata": {"source_product_id": product["id"], "platforms": body.platforms},
+        }
+    ).execute()
+    if not image_asset.data:
+        raise HTTPException(status_code=500, detail="Failed to create product post asset")
+
+    job = supabase_admin.table("marketing_generation_jobs").insert(
+        {
+            "business_id": business_id,
+            "campaign_id": campaign["id"],
+            "asset_id": image_asset.data[0]["id"],
+            "job_type": "product_caption",
+            "provider": "openai",
+            "status": "pending",
+            "metadata": {"source_product_id": product["id"]},
+        }
+    ).execute()
+    if not job.data:
+        raise HTTPException(status_code=500, detail="Failed to create product caption job")
+
+    return _job_response(job.data[0], [image_asset.data[0]])
+
+
+async def run_product_caption_job(job_id: str, business_id: str) -> None:
+    job = _get_single("marketing_generation_jobs", job_id, business_id)
+    if not job.get("asset_id"):
+        return
+    image_asset = _get_single("marketing_assets", job["asset_id"], business_id)
+    product = (
+        _get_single("marketing_products", image_asset["reference_product_id"], business_id)
+        if image_asset.get("reference_product_id")
+        else None
+    )
+    campaign = (
+        _get_single("marketing_campaigns", image_asset["campaign_id"], business_id)
+        if image_asset.get("campaign_id")
+        else None
+    )
+
+    try:
+        _update_row(
+            "marketing_generation_jobs",
+            job_id,
+            business_id,
+            {"status": "running", "started_at": _now_iso(), "error_message": None},
+        )
+        caption = await _generate_creative_caption(image_asset, product, campaign)
+        updated_asset = _update_row(
+            "marketing_assets",
+            image_asset["id"],
+            business_id,
+            {"status": "ready", "caption": caption, "error_message": None},
+        )
+        _update_row(
+            "marketing_generation_jobs",
+            job_id,
+            business_id,
+            {"status": "completed", "completed_at": _now_iso(), "result_asset_ids": [updated_asset["id"]]},
+        )
+    except Exception as exc:
+        logger.exception("Marketing product caption job failed")
+        _update_row("marketing_assets", image_asset["id"], business_id, {"status": "failed", "error_message": str(exc)})
+        _update_row(
+            "marketing_generation_jobs",
+            job_id,
+            business_id,
+            {"status": "failed", "completed_at": _now_iso(), "error_message": str(exc)},
+        )
+
+
+async def _generate_creative_caption(
+    asset: dict[str, Any],
+    product: dict[str, Any] | None,
+    campaign: dict[str, Any] | None,
+    avoid_caption: str | None = None,
+) -> str:
+    client = _openai_client(timeout=45.0)
+    image_bytes = _download_bytes(asset["storage_bucket"], asset["storage_path"])
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+    content_type = asset.get("content_type") or "image/jpeg"
+    platforms = (asset.get("metadata") or {}).get("platforms") or [asset["platform"]]
+    subject_name = product["name"] if product else asset.get("title") or "this post"
+    subject_context = (
+        (product.get("description") if product else None)
+        or (campaign.get("prompt") if campaign else None)
+        or "No additional description provided."
+    )
+    variation_key = f"{datetime.now(timezone.utc).isoformat()}-{uuid4()}"
+
+    avoid_block = (
+        "Do not reuse this previous caption's wording, structure, opening line, or hashtags — write something "
+        f"genuinely different:\n\"{avoid_caption}\"\n\n"
+        if avoid_caption
+        else ""
+    )
+
+    # Temperature/penalties tuned above defaults (mirroring randomize_idea's approach elsewhere in this
+    # file) so repeated calls for the same photo don't converge on the same generic phrasing.
+    response = await client.chat.completions.create(
+        model=settings.marketing_text_model,
+        temperature=1.15,
+        presence_penalty=0.6,
+        frequency_penalty=0.5,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are the Marketing Employee caption writer. Look closely at the provided photo and write "
+                    "one ready-to-post social media caption grounded in what is actually visible in the image — "
+                    "specific details, not generic marketing filler. Every caption must feel fresh: vary the "
+                    "opening hook, sentence rhythm, tone, and hashtag choice each time, even for the same photo. "
+                    "Avoid stock phrases like 'elevate your', 'game-changer', 'say goodbye to', or similar "
+                    "templated copy. Return only the caption text (hashtags at the end if relevant) — no markdown, "
+                    "no quotation marks, no explanations."
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Subject: {subject_name}\n"
+                            f"Context: {subject_context}\n"
+                            f"Target platforms: {', '.join(platforms)}\n"
+                            f"{avoid_block}"
+                            f"Variation seed (for freshness only, do not mention it): {variation_key}\n"
+                            "Write the caption now."
+                        ),
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{content_type};base64,{b64}"},
+                    },
+                ],
+            },
+        ],
+        max_tokens=400,
+    )
+    caption = (response.choices[0].message.content or "").strip()
+    if not caption:
+        raise RuntimeError("OpenAI returned an empty caption")
+    return caption[:2200]
+
+
+async def regenerate_asset_caption(business_id: str, asset_id: str, current_caption: str | None) -> str:
+    asset = _get_single("marketing_assets", asset_id, business_id)
+    if not asset.get("storage_bucket") or not asset.get("storage_path"):
+        raise HTTPException(status_code=422, detail="Asset does not have a generated image yet")
+    product = (
+        _get_single("marketing_products", asset["reference_product_id"], business_id)
+        if asset.get("reference_product_id")
+        else None
+    )
+    campaign = _get_single("marketing_campaigns", asset["campaign_id"], business_id) if asset.get("campaign_id") else None
+    return await _generate_creative_caption(
+        asset,
+        product,
+        campaign,
+        avoid_caption=current_caption or asset.get("caption"),
+    )
 
 
 def start_video_job_disabled(business_id: str, asset_id: str, confirm_cost: bool) -> MarketingGenerationJobResponse:
