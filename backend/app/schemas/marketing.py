@@ -15,7 +15,7 @@ class TikTokPublishOptions(BaseModel):
     disable_comment: bool = False
     disable_duet: bool = False
     disable_stitch: bool = False
-JobType = Literal["concepts", "image", "video"]
+JobType = Literal["concepts", "image", "video", "product_caption"]
 JobStatus = Literal["pending", "running", "completed", "failed", "disabled"]
 ScheduledPostStatus = Literal["draft", "scheduled", "publishing", "published", "failed", "cancelled"]
 
@@ -65,10 +65,52 @@ class MarketingAssetResponse(BaseModel):
     storage_path: str | None = None
     content_type: str | None = None
     signed_url: str | None = None
+    reference_product_id: str | None = None
     error_message: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str
     updated_at: str
+
+
+class MarketingProductResponse(BaseModel):
+    id: str
+    business_id: str
+    created_by: str | None = None
+    name: str
+    description: str | None = None
+    storage_bucket: str
+    storage_path: str
+    content_type: str
+    signed_url: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+
+class MarketingProductSignedUrlResponse(BaseModel):
+    product_id: str
+    signed_url: str
+    expires_in: int
+
+
+class MarketingProductPostRequest(BaseModel):
+    product_id: str
+    platforms: list[MarketingPlatform] = Field(default_factory=lambda: ["instagram"])
+    aspect_ratio: AspectRatio = "1:1"
+
+
+class MarketingCaptionRegenerateRequest(BaseModel):
+    current_caption: str | None = None
+
+
+class MarketingCaptionResponse(BaseModel):
+    caption: str
+
+
+class MarketingLayerUploadResponse(BaseModel):
+    storage_bucket: str
+    storage_path: str
+    signed_url: str
 
 
 class MarketingGenerationJobResponse(BaseModel):

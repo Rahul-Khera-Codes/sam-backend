@@ -245,17 +245,32 @@ async def update_appointment_status(
         )
 
     update_row: dict = {"status": body.status}
-    if (
-        body.status in {"checked_in", "no_show", "cancelled"}
-        and _get_business_code_flags(body.business_id)["require_checkin_employee_code"]
-    ):
-        employee_id = _resolve_employee_code(body.business_id, body.employee_code)
-        if body.status == "checked_in":
-            update_row["checked_in_by_user_id"] = employee_id
+    if body.status in {"checked_in", "no_show", "cancelled"}:
+        if _get_business_code_flags(body.business_id)["require_checkin_employee_code"]:
+            # Shared front-desk login case: the code identifies which employee actually performed
+            # the action, since the authenticated session may not be theirs.
+            attributed_user_id = _resolve_employee_code(body.business_id, body.employee_code)
             # Immutable snapshot of the code actually entered — distinct from user_roles.check_in_code,
             # which may be reset later. This one never changes after the fact.
-            update_row["checked_in_by_code"] = body.employee_code
-            update_row["checked_in_at"] = datetime.now(timezone.utc).isoformat()
+            employee_code = body.employee_code
+        else:
+            # No code required for this business — attribute to whoever is actually logged in
+            # rather than leaving the record unattributed.
+            attributed_user_id = user_id
+            employee_code = None
+        now = datetime.now(timezone.utc).isoformat()
+        if body.status == "checked_in":
+            update_row["checked_in_by_user_id"] = attributed_user_id
+            update_row["checked_in_by_code"] = employee_code
+            update_row["checked_in_at"] = now
+        elif body.status == "no_show":
+            update_row["no_show_by_user_id"] = attributed_user_id
+            update_row["no_show_by_code"] = employee_code
+            update_row["no_show_at"] = now
+        elif body.status == "cancelled":
+            update_row["cancelled_by_user_id"] = attributed_user_id
+            update_row["cancelled_by_code"] = employee_code
+            update_row["cancelled_at"] = now
 
     result = (
         supabase_admin.table("appointments")

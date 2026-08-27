@@ -78,6 +78,12 @@ class AppointmentResponse(BaseModel):
     checked_in_by_user_id: Optional[str] = None
     checked_in_by_code: Optional[str] = None
     checked_in_at: Optional[str] = None
+    no_show_by_user_id: Optional[str] = None
+    no_show_by_code: Optional[str] = None
+    no_show_at: Optional[str] = None
+    cancelled_by_user_id: Optional[str] = None
+    cancelled_by_code: Optional[str] = None
+    cancelled_at: Optional[str] = None
 
 
 class CancelAppointmentResponse(BaseModel):

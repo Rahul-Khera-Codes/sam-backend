@@ -1,7 +1,8 @@
 """Marketing Employee router."""
+import os
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
 from app.core.auth import get_user_id, verify_business_access
@@ -9,10 +10,16 @@ from app.schemas.marketing import (
     MarketingAssetResponse,
     MarketingCampaignCreateRequest,
     MarketingCampaignResponse,
+    MarketingCaptionRegenerateRequest,
+    MarketingCaptionResponse,
     MarketingDraftResponse,
     MarketingDraftUpsertRequest,
     MarketingGenerationJobResponse,
     MarketingImageGenerationRequest,
+    MarketingLayerUploadResponse,
+    MarketingProductPostRequest,
+    MarketingProductResponse,
+    MarketingProductSignedUrlResponse,
     MarketingPromptTemplateCreateRequest,
     MarketingPromptTemplateResponse,
     MarketingScheduledPostCreateRequest,
@@ -24,28 +31,39 @@ from app.schemas.marketing import (
 )
 from app.services.marketing_generation_service import (
     create_campaign,
+    create_product,
     create_prompt_template,
     create_scheduled_post,
     delete_draft,
+    delete_product,
     delete_prompt_template,
     delete_scheduled_post,
     get_scheduled_post,
     get_asset_signed_url,
     get_job,
+    get_product_signed_url,
     get_workspace,
+    regenerate_asset_caption,
     list_calendar_posts,
     list_campaign_assets,
     list_drafts,
+    list_products,
     list_prompt_templates,
     randomize_idea,
     run_concepts_job,
     run_image_job,
+    run_product_caption_job,
+    save_edited_asset_image,
     start_concepts_job,
     start_image_job,
+    start_product_post_job,
+    upload_layer_image,
     upsert_draft,
     start_video_job_disabled,
 )
 from app.services.marketing_social_service import get_public_marketing_asset_bytes, publish_scheduled_post
+
+_ALLOWED_PRODUCT_IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp"}
 
 router = APIRouter(prefix="/marketing", tags=["marketing"])
 
@@ -173,6 +191,18 @@ async def generate_marketing_asset_image(
     return job
 
 
+@router.post("/assets/{asset_id}/regenerate-caption", response_model=MarketingCaptionResponse)
+async def regenerate_marketing_asset_caption(
+    asset_id: str,
+    body: MarketingCaptionRegenerateRequest,
+    business_id: str = Query(...),
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    caption = await regenerate_asset_caption(business_id, asset_id, body.current_caption)
+    return MarketingCaptionResponse(caption=caption)
+
+
 @router.post("/assets/{asset_id}/video", response_model=MarketingGenerationJobResponse)
 async def generate_marketing_asset_video(
     asset_id: str,
@@ -248,6 +278,105 @@ async def delete_marketing_scheduled_post(
 ):
     verify_business_access(user_id, business_id)
     return delete_scheduled_post(business_id, scheduled_post_id)
+
+
+@router.get("/products", response_model=list[MarketingProductResponse])
+async def list_marketing_products(
+    business_id: str = Query(...),
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    return list_products(business_id)
+
+
+@router.post("/products", response_model=MarketingProductResponse)
+async def upload_marketing_product(
+    name: str = Form(...),
+    description: str | None = Form(None),
+    file: UploadFile = File(...),
+    business_id: str = Query(...),
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    content_type = file.content_type or "image/jpeg"
+    if content_type not in _ALLOWED_PRODUCT_IMAGE_TYPES:
+        raise HTTPException(status_code=422, detail="Product image must be PNG, JPEG, or WEBP")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=422, detail="Uploaded product image is empty")
+    extension = (os.path.splitext(file.filename or "")[1].lstrip(".") or content_type.split("/")[-1]).lower()
+    return create_product(business_id, user_id, name, description, content, content_type, extension)
+
+
+@router.delete("/products/{product_id}", response_model=MarketingProductResponse)
+async def delete_marketing_product(
+    product_id: str,
+    business_id: str = Query(...),
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    return delete_product(business_id, product_id)
+
+
+@router.get("/products/{product_id}/signed-url", response_model=MarketingProductSignedUrlResponse)
+async def get_marketing_product_signed_url(
+    product_id: str,
+    business_id: str = Query(...),
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    signed_url, expires_in = get_product_signed_url(business_id, product_id)
+    return MarketingProductSignedUrlResponse(product_id=product_id, signed_url=signed_url, expires_in=expires_in)
+
+
+@router.post("/campaigns/{campaign_id}/product-post", response_model=MarketingGenerationJobResponse)
+async def create_marketing_product_post(
+    campaign_id: str,
+    body: MarketingProductPostRequest,
+    background_tasks: BackgroundTasks,
+    business_id: str = Query(...),
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    job = start_product_post_job(business_id, campaign_id, body)
+    background_tasks.add_task(run_product_caption_job, job.id, business_id)
+    return job
+
+
+@router.post("/campaigns/{campaign_id}/layer-uploads", response_model=MarketingLayerUploadResponse)
+async def upload_marketing_layer_image(
+    campaign_id: str,
+    file: UploadFile = File(...),
+    business_id: str = Query(...),
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    content_type = file.content_type or "image/png"
+    if content_type not in _ALLOWED_PRODUCT_IMAGE_TYPES:
+        raise HTTPException(status_code=422, detail="Layer image must be PNG, JPEG, or WEBP")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=422, detail="Uploaded layer image is empty")
+    extension = (os.path.splitext(file.filename or "")[1].lstrip(".") or content_type.split("/")[-1]).lower()
+    return upload_layer_image(business_id, campaign_id, content, content_type, extension)
+
+
+@router.post("/assets/{asset_id}/edited-image", response_model=MarketingAssetResponse)
+async def save_marketing_edited_image(
+    asset_id: str,
+    file: UploadFile = File(...),
+    layers: str = Form(...),
+    business_id: str = Query(...),
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    content_type = file.content_type or "image/png"
+    if content_type not in _ALLOWED_PRODUCT_IMAGE_TYPES:
+        raise HTTPException(status_code=422, detail="Edited image must be PNG, JPEG, or WEBP")
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=422, detail="Edited image is empty")
+    return save_edited_asset_image(business_id, asset_id, content, content_type, layers)
 
 
 @router.post("/campaigns/randomize", response_model=RandomIdeaResponse)
