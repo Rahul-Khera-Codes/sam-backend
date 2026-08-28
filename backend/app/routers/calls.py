@@ -4,7 +4,8 @@ import subprocess
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from livekit.api import TokenVerifier, WebhookReceiver
 from app.core.auth import get_current_user, get_user_id, require_business_access, verify_business_access
 from app.core.config import settings
 from app.core.supabase import supabase, supabase_admin
@@ -474,3 +475,70 @@ async def update_call_status(
     supabase_admin.table("calls").update(update_data).eq("id", call_id).execute()
 
     return {"call_id": call_id, "status": new_status}
+
+
+# ── POST /calls/webhook ────────────────────────
+# LiveKit Cloud webhook backstop. Not the primary finalize path — agent.py's
+# own participant_disconnected handler (`caller_left.wait()`) finalizes calls
+# immediately in the normal case. This exists to force-finalize a call whose
+# room closed (e.g. after the empty_timeout) without that handler ever firing
+# — e.g. agent crash, network partition, or a client that never disconnects
+# cleanly (see AIE-38). No auth dependency: LiveKit signs the request itself,
+# verified below via the same LiveKit API key/secret used everywhere else.
+
+_webhook_receiver = WebhookReceiver(
+    TokenVerifier(settings.livekit_api_key, settings.livekit_api_secret)
+)
+
+_TERMINAL_CALL_STATUSES = {"completed", "forwarded", "failed", "missed"}
+
+
+@router.post("/webhook")
+async def livekit_webhook(request: Request):
+    raw_body = await request.body()
+    auth_header = request.headers.get("Authorization", "")
+
+    try:
+        event = _webhook_receiver.receive(raw_body.decode("utf-8"), auth_header)
+    except Exception as e:
+        logger.warning("Rejected LiveKit webhook: invalid signature (%s)", e)
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+
+    if event.event == "room_finished":
+        room_name = event.room.name
+        result = (
+            supabase_admin.table("calls")
+            .select("id, direction, status, started_at")
+            .eq("livekit_room_id", room_name)
+            .limit(1)
+            .execute()
+        )
+        if result.data:
+            call = result.data[0]
+            if call["status"] not in _TERMINAL_CALL_STATUSES:
+                call_id = call["id"]
+                transcripts = (
+                    supabase_admin.table("transcripts")
+                    .select("id")
+                    .eq("call_id", call_id)
+                    .limit(1)
+                    .execute()
+                )
+                is_missed = call["direction"] == "inbound" and not transcripts.data
+                started_at = datetime.fromisoformat(call["started_at"].replace("Z", "+00:00"))
+                duration_s = max(
+                    int((datetime.now(timezone.utc) - started_at).total_seconds()), 0
+                )
+
+                supabase_admin.table("calls").update({
+                    "status": "missed" if is_missed else "completed",
+                    "ended_at": datetime.now(timezone.utc).isoformat(),
+                    "duration_seconds": duration_s,
+                }).eq("id", call_id).execute()
+
+                logger.warning(
+                    "Webhook backstop finalized orphaned call %s (room=%s) status=%s",
+                    call_id, room_name, "missed" if is_missed else "completed",
+                )
+
+    return {"received": True}
