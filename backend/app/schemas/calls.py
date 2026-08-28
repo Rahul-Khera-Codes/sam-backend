@@ -31,7 +31,7 @@ class InitiateCallRequest(BaseModel):
     location_id: Optional[str] = None
     caller_phone: Optional[str] = None
     caller_name: Optional[str] = None
-    direction: CallDirection = CallDirection.outbound
+    direction: CallDirection = CallDirection.inbound
 
 
 class OutboundCallRequest(BaseModel):
