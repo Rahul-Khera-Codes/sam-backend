@@ -4,7 +4,7 @@ Mirrors the voice agent's book_appointment / update_appointment / cancel_appoint
 All side effects (GCal, email, SMS) are fire-and-forget — never raise to the caller.
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import HTTPException
@@ -100,9 +100,10 @@ def _fetch_active_custom_schedule(
 
 
 def _validate_booking(
-    business_id: str, location_id: Optional[str], date: str, time: str
+    business_id: str, location_id: Optional[str], date: str, time: str, duration_minutes: int = 60
 ) -> None:
-    """Raises HTTPException(400) if date/time is invalid or outside business hours."""
+    """Raises HTTPException(400) if date/time is invalid, or if [time, time+duration) falls
+    outside business hours."""
     try:
         appt_date = datetime.strptime(date, "%Y-%m-%d").date()
     except ValueError:
@@ -113,9 +114,11 @@ def _validate_booking(
         raise HTTPException(status_code=400, detail="Cannot book appointments in the past.")
 
     try:
-        appt_time = datetime.strptime(time[:5], "%H:%M").time()
+        appt_start_dt = datetime.strptime(time[:5], "%H:%M")
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid time format '{time}'. Use HH:MM.")
+    appt_time = appt_start_dt.time()
+    appt_end_time = (appt_start_dt + timedelta(minutes=duration_minutes)).time()
 
     day_name = DAY_NAMES[appt_date.weekday()]
     appt_dt = datetime(appt_date.year, appt_date.month, appt_date.day, tzinfo=timezone.utc)
@@ -132,10 +135,10 @@ def _validate_booking(
         if open_t and close_t:
             open_time = datetime.strptime(open_t, "%H:%M").time()
             close_time = datetime.strptime(close_t, "%H:%M").time()
-            if appt_time < open_time or appt_time >= close_time:
+            if appt_time < open_time or appt_end_time > close_time:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"{_fmt_time_12h(time)} is outside special schedule hours ({_fmt_time_12h(open_t)}–{_fmt_time_12h(close_t)}).",
+                    detail=f"{_fmt_time_12h(time)} is outside special schedule hours ({_fmt_time_12h(open_t)}–{_fmt_time_12h(close_t)}), or the {duration_minutes}-minute appointment would run past closing.",
                 )
         return  # custom schedule valid, skip regular hours
 
@@ -152,10 +155,10 @@ def _validate_booking(
         if open_t and close_t:
             open_time = datetime.strptime(open_t, "%H:%M").time()
             close_time = datetime.strptime(close_t, "%H:%M").time()
-            if appt_time < open_time or appt_time >= close_time:
+            if appt_time < open_time or appt_end_time > close_time:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"{_fmt_time_12h(time)} is outside business hours ({_fmt_time_12h(open_t)}–{_fmt_time_12h(close_t)}).",
+                    detail=f"{_fmt_time_12h(time)} is outside business hours ({_fmt_time_12h(open_t)}–{_fmt_time_12h(close_t)}), or the {duration_minutes}-minute appointment would run past closing.",
                 )
 
 
@@ -180,6 +183,148 @@ def _check_double_booking(
     except Exception as e:
         logger.warning("Double-booking check failed, treating as taken: %s", e)
         return True
+
+
+def _fetch_user_availability(user_id: str) -> list[dict]:
+    try:
+        r = (
+            supabase_admin.table("user_availability")
+            .select("day_of_week, start_time, end_time, is_available")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        return r.data or []
+    except Exception as e:
+        logger.warning("Failed to fetch user availability: %s", e)
+        return []
+
+
+def _fetch_user_overrides(user_id: str, date: str) -> list[dict]:
+    try:
+        r = (
+            supabase_admin.table("user_availability_overrides")
+            .select("is_unavailable, start_time, end_time")
+            .eq("user_id", user_id)
+            .eq("override_date", date)
+            .execute()
+        )
+        return r.data or []
+    except Exception as e:
+        logger.warning("Failed to fetch user overrides: %s", e)
+        return []
+
+
+def _fetch_staff_appointments_on_date(user_id: str, date: str) -> list[dict]:
+    try:
+        r = (
+            supabase_admin.table("appointments")
+            .select("id, appointment_time, duration")
+            .eq("assigned_user_id", user_id)
+            .eq("appointment_date", date)
+            .neq("status", "cancelled")
+            .execute()
+        )
+        return r.data or []
+    except Exception as e:
+        logger.warning("Failed to fetch appointments on date: %s", e)
+        return []
+
+
+def _validate_staff_availability(
+    user_id: str,
+    staff_name: str,
+    date: str,
+    time: str,
+    duration_minutes: int = 60,
+    exclude_appointment_id: Optional[str] = None,
+) -> None:
+    """Raises HTTPException(400) if the staff member isn't available for
+    [time, time+duration_minutes) on the given date, per their user_availability,
+    date overrides, and existing booked appointments.
+
+    If the staff member has zero user_availability rows configured at all (never
+    set up individual hours), this is a no-op — booking then relies on
+    business-hours validation only (see _validate_booking)."""
+    availability = _fetch_user_availability(user_id)
+    if not availability:
+        return
+
+    try:
+        d = datetime.strptime(date, "%Y-%m-%d")
+        appt_start = datetime.strptime(time[:5], "%H:%M")
+    except ValueError:
+        return  # malformed input — _validate_booking already caught this
+
+    day_name = DAY_NAMES[d.weekday()]
+    appt_end = appt_start + timedelta(minutes=duration_minutes)
+
+    day_row = next(
+        (a for a in availability if a.get("day_of_week") == day_name and a.get("is_available")),
+        None,
+    )
+    if not day_row or not day_row.get("start_time") or not day_row.get("end_time"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{staff_name} is not scheduled to work on {day_name.capitalize()}s.",
+        )
+
+    work_start = datetime.strptime(day_row["start_time"][:5], "%H:%M")
+    work_end = datetime.strptime(day_row["end_time"][:5], "%H:%M")
+    if appt_start < work_start or appt_end > work_end:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{staff_name} is only available from {_fmt_time_12h(day_row['start_time'][:5])} "
+                f"to {_fmt_time_12h(day_row['end_time'][:5])} on {day_name.capitalize()}s, which "
+                f"doesn't fit a {duration_minutes}-minute appointment starting at "
+                f"{_fmt_time_12h(time[:5])}."
+            ),
+        )
+
+    overrides = _fetch_user_overrides(user_id, date)
+    for ov in overrides:
+        if ov.get("is_unavailable") and not ov.get("start_time"):
+            raise HTTPException(
+                status_code=400, detail=f"{staff_name} is unavailable on {date}.",
+            )
+
+    busy: list[tuple[datetime, datetime]] = []
+    for ov in overrides:
+        if ov.get("is_unavailable") and ov.get("start_time") and ov.get("end_time"):
+            try:
+                busy.append((
+                    datetime.strptime(ov["start_time"][:5], "%H:%M"),
+                    datetime.strptime(ov["end_time"][:5], "%H:%M"),
+                ))
+            except ValueError:
+                pass
+
+    booked = _fetch_staff_appointments_on_date(user_id, date)
+    for appt in booked:
+        if exclude_appointment_id and appt.get("id") == exclude_appointment_id:
+            continue
+        at = appt.get("appointment_time")
+        if not at:
+            continue
+        dur_raw = str(appt.get("duration") or duration_minutes)
+        dur_digits = "".join(c for c in dur_raw.split()[0] if c.isdigit())
+        dur_min = int(dur_digits) if dur_digits else duration_minutes
+        b_start = None
+        for fmt in ("%H:%M", "%I:%M %p", "%I:%M%p"):
+            try:
+                b_start = datetime.strptime(at.strip(), fmt)
+                break
+            except ValueError:
+                pass
+        if b_start:
+            busy.append((b_start, b_start + timedelta(minutes=dur_min)))
+
+    for b_start, b_end in busy:
+        if appt_start < b_end and b_start < appt_end:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{staff_name} is not available at {_fmt_time_12h(time[:5])} on {date}.",
+            )
 
 
 def _validate_onsite_address(values: dict) -> None:
@@ -278,7 +423,16 @@ async def create_appointment(
     req: CreateAppointmentRequest,
     created_by: str,
 ) -> AppointmentResponse:
-    _validate_booking(req.business_id, req.location_id, req.appointment_date, req.appointment_time)
+    duration_minutes = req.duration or 60
+    _validate_booking(
+        req.business_id, req.location_id, req.appointment_date, req.appointment_time,
+        duration_minutes=duration_minutes,
+    )
+    staff_name = _get_staff_name(req.assigned_user_id) or "This staff member"
+    _validate_staff_availability(
+        req.assigned_user_id, staff_name, req.appointment_date, req.appointment_time,
+        duration_minutes=duration_minutes,
+    )
 
     if _check_double_booking(req.assigned_user_id, req.appointment_date, req.appointment_time):
         raise HTTPException(
@@ -523,10 +677,22 @@ async def update_appointment(
     assignee_changed = "assigned_user_id" in updates and updates["assigned_user_id"] != appt["assigned_user_id"]
     date_or_time_changed = date_changed or time_changed
 
-    if date_or_time_changed:
-        _validate_booking(req.business_id, appt.get("location_id"), new_date, new_time)
+    new_duration_minutes = updates.get("duration")
+    if new_duration_minutes is not None:
+        new_duration_minutes = int(new_duration_minutes)
+    else:
+        new_duration_minutes = int(str(appt.get("duration") or "60").split()[0])
 
     if date_or_time_changed or assignee_changed:
+        _validate_booking(
+            req.business_id, appt.get("location_id"), new_date, new_time,
+            duration_minutes=new_duration_minutes,
+        )
+        staff_name = _get_staff_name(assigned_uid) or "This staff member"
+        _validate_staff_availability(
+            assigned_uid, staff_name, new_date, new_time,
+            duration_minutes=new_duration_minutes, exclude_appointment_id=appointment_id,
+        )
         if _check_double_booking(assigned_uid, new_date, new_time, exclude_id=appointment_id):
             raise HTTPException(
                 status_code=409,
