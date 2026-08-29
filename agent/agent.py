@@ -58,6 +58,7 @@ from supabase_helpers import (
     _is_within_available_hours,
     _validate_booking_datetime,
     _validate_booking_date,
+    _validate_staff_availability,
     _find_next_slots,
     _fetch_documents_for_location,
 )
@@ -376,6 +377,7 @@ class Assistant(Agent):
         service_name: str,
         staff_name: str = "",
         from_date: str = "",
+        after_time: str = "",
     ) -> str:
         """
         Find the next available appointment slot, scanning forward from today (or from_date).
@@ -384,6 +386,10 @@ class Assistant(Agent):
         If staff_name is given, searches only that person.
         If staff_name is empty, searches all staff qualified for the service.
         from_date is optional YYYY-MM-DD; defaults to today.
+        after_time is optional HH:MM (24-hour) — if the caller asks for something later than
+        what you already offered, call this again with the same from_date/staff_name and
+        after_time set to the last time you offered, to search for a later slot that same day
+        before moving on to the next day.
         """
         if not self._supabase:
             return "Availability check is unavailable right now."
@@ -428,6 +434,7 @@ class Assistant(Agent):
             slot_minutes=slot_minutes,
             from_date=start,
             max_days=30,
+            after_time=after_time or None,
         )
 
         if not slots:
@@ -525,13 +532,23 @@ class Assistant(Agent):
                     f"{', '.join(missing)} before booking."
                 )
 
+        duration_minutes = int(duration_str) if duration_str.isdigit() else 60
+
         # Guard 1: date/time/business-hours validation
         booking_location_id = (loc["id"] if loc else None) or self._location_id
         date_err = _validate_booking_datetime(
-            self._supabase, self._business_id, booking_location_id, date, time
+            self._supabase, self._business_id, booking_location_id, date, time,
+            duration_minutes=duration_minutes,
         )
         if date_err:
             return date_err
+
+        # Guard 1b: staff member's own working hours (may be stricter than business hours)
+        staff_err = _validate_staff_availability(
+            self._supabase, staff["user_id"], staff["name"], date, time, duration_minutes,
+        )
+        if staff_err:
+            return staff_err
 
         # Guard 2: double-booking — slot already taken for this staff member
         existing = _fetch_appointments_on_date(self._supabase, staff["user_id"], date)
@@ -959,7 +976,29 @@ class Assistant(Agent):
                 check_date = new_date or appt_row.get("appointment_date", "")
                 check_time = new_time or appt_row.get("appointment_time", "")
                 assigned_uid = appt_row.get("assigned_user_id")
+                duration_raw = str(appt_row.get("duration") or "60")
+                duration_digits = "".join(c for c in duration_raw.split()[0] if c.isdigit())
+                check_duration_minutes = int(duration_digits) if duration_digits else 60
+
+                if check_date and check_time:
+                    hours_err = _validate_booking_datetime(
+                        self._supabase, self._business_id,
+                        appt_row.get("location_id") or self._location_id,
+                        check_date, check_time, duration_minutes=check_duration_minutes,
+                    )
+                    if hours_err:
+                        return hours_err
+
                 if assigned_uid and check_date and check_time:
+                    staff_name = self._staff_id_to_name.get(assigned_uid, "The assigned staff member")
+                    staff_err = _validate_staff_availability(
+                        self._supabase, assigned_uid, staff_name,
+                        check_date, check_time, check_duration_minutes,
+                        exclude_appointment_id=full_id,
+                    )
+                    if staff_err:
+                        return staff_err
+
                     booked = _fetch_appointments_on_date(self._supabase, assigned_uid, check_date)
                     booked_excluding_self = [b for b in booked if b.get("id") != full_id]
                     slot_taken = any(b.get("appointment_time") == check_time for b in booked_excluding_self)

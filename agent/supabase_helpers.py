@@ -442,52 +442,52 @@ def _fetch_appointments_on_date(supabase, user_id: str, target_date: str) -> lis
         return []
 
 
-def _compute_available_slots(
+def _resolve_work_hours(
     availability: list[dict],
-    overrides: list[dict],
-    booked: list[dict],
-    target_date: str,
-    slot_minutes: int = 60,
-) -> list[str]:
+    day_name: str,
+) -> tuple[datetime, datetime] | None:
     """
-    Compute free time slots for a given date.
-    Returns list of "HH:MM" strings (24h).
+    Return (work_start, work_end) datetimes for the given weekday name from a
+    staff member's weekly `user_availability` rows.
+    Returns None if they're not marked available that day (or have no matching row).
     """
-    try:
-        d = datetime.strptime(target_date, "%Y-%m-%d")
-    except ValueError:
-        return []
-
-    day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-    day_name = day_names[d.weekday()]
-
-    work_start = work_end = None
     for row in availability:
         if row.get("day_of_week") == day_name and row.get("is_available"):
             st, et = row.get("start_time"), row.get("end_time")
             if st and et:
-                work_start = datetime.strptime(st[:5], "%H:%M")
-                work_end = datetime.strptime(et[:5], "%H:%M")
+                return (
+                    datetime.strptime(st[:5], "%H:%M"),
+                    datetime.strptime(et[:5], "%H:%M"),
+                )
             break
+    return None
 
-    if not work_start or not work_end:
-        return []
 
+def _compute_busy_intervals(
+    overrides: list[dict],
+    booked: list[dict],
+    default_duration_minutes: int = 60,
+) -> list[tuple[datetime, datetime]] | None:
+    """
+    Build busy time intervals for a day from date-specific overrides and booked
+    appointments. Returns None if a full-day "unavailable" override applies
+    (an override with is_unavailable=True and no start/end time set).
+    """
     for ov in overrides:
         if ov.get("is_unavailable") and not ov.get("start_time"):
-            return []
+            return None
 
     busy: list[tuple[datetime, datetime]] = []
 
     for appt in booked:
         at = appt.get("appointment_time")
-        dur_raw = str(appt.get("duration") or slot_minutes)
+        dur_raw = str(appt.get("duration") or default_duration_minutes)
         if at:
             try:
                 dur_digits = "".join(c for c in dur_raw.split()[0] if c.isdigit())
-                dur_min = int(dur_digits) if dur_digits else slot_minutes
+                dur_min = int(dur_digits) if dur_digits else default_duration_minutes
             except (ValueError, AttributeError):
-                dur_min = slot_minutes
+                dur_min = default_duration_minutes
             # Parse both 24h ("16:00") and 12h ("9:00 AM") formats
             appt_dt = None
             for fmt in ("%H:%M", "%I:%M %p", "%I:%M%p"):
@@ -507,6 +507,37 @@ def _compute_available_slots(
                 busy.append((s, e))
             except ValueError:
                 pass
+
+    return busy
+
+
+def _compute_available_slots(
+    availability: list[dict],
+    overrides: list[dict],
+    booked: list[dict],
+    target_date: str,
+    slot_minutes: int = 60,
+) -> list[str]:
+    """
+    Compute free time slots for a given date.
+    Returns list of "HH:MM" strings (24h).
+    """
+    try:
+        d = datetime.strptime(target_date, "%Y-%m-%d")
+    except ValueError:
+        return []
+
+    day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    day_name = day_names[d.weekday()]
+
+    work_hours = _resolve_work_hours(availability, day_name)
+    if work_hours is None:
+        return []
+    work_start, work_end = work_hours
+
+    busy = _compute_busy_intervals(overrides, booked, slot_minutes)
+    if busy is None:
+        return []
 
     # For today, exclude slots that start at or before the current time
     now_cutoff: datetime | None = None
@@ -574,12 +605,13 @@ def _validate_booking_datetime(
     location_id: str | None,
     date: str,
     time: str | None = None,
+    duration_minutes: int = 60,
 ) -> str | None:
     """
     Returns None if the date/time is valid for booking.
     Returns an agent-readable error string if not.
     Checks: date not in past, valid formats, business open on that day,
-    time within open/close hours, custom schedule overrides.
+    time + duration within open/close hours, custom schedule overrides.
     """
     try:
         appt_date = datetime.strptime(date, "%Y-%m-%d").date()
@@ -594,11 +626,14 @@ def _validate_booking_datetime(
         )
 
     appt_time = None
+    appt_end_time = None
     if time is not None:
         try:
-            appt_time = datetime.strptime(time[:5], "%H:%M").time()
+            appt_start_dt = datetime.strptime(time[:5], "%H:%M")
         except ValueError:
             return f"Invalid time format '{time}'. Please use HH:MM (24-hour)."
+        appt_time = appt_start_dt.time()
+        appt_end_time = (appt_start_dt + timedelta(minutes=duration_minutes)).time()
 
         # Reject same-day bookings at or before the current time
         if appt_date == today:
@@ -628,11 +663,12 @@ def _validate_booking_datetime(
             try:
                 open_time = datetime.strptime(open_t, "%H:%M").time()
                 close_time = datetime.strptime(close_t, "%H:%M").time()
-                if appt_time is not None and (appt_time < open_time or appt_time >= close_time):
+                if appt_time is not None and (appt_time < open_time or appt_end_time > close_time):
                     return (
                         f"The time {_fmt_time_12h(time[:5])} is outside the special "
                         f"schedule hours ({_fmt_time_12h(open_t)}–{_fmt_time_12h(close_t)}) "
-                        f"for {date}."
+                        f"for {date}, or the {duration_minutes}-minute appointment would run "
+                        f"past closing."
                     )
             except ValueError:
                 pass
@@ -653,11 +689,12 @@ def _validate_booking_datetime(
             try:
                 open_time = datetime.strptime(open_t, "%H:%M").time()
                 close_time = datetime.strptime(close_t, "%H:%M").time()
-                if appt_time is not None and (appt_time < open_time or appt_time >= close_time):
+                if appt_time is not None and (appt_time < open_time or appt_end_time > close_time):
                     return (
                         f"The time {_fmt_time_12h(time[:5])} is outside business hours "
                         f"({_fmt_time_12h(open_t)}–{_fmt_time_12h(close_t)}) "
-                        f"on {day_name.capitalize()}s."
+                        f"on {day_name.capitalize()}s, or the {duration_minutes}-minute "
+                        f"appointment would run past closing."
                     )
             except ValueError:
                 pass
@@ -680,6 +717,74 @@ def _validate_booking_date(
     return _validate_booking_datetime(supabase, business_id, location_id, date, time=None)
 
 
+def _validate_staff_availability(
+    supabase,
+    user_id: str,
+    staff_name: str,
+    date: str,
+    time: str,
+    duration_minutes: int = 60,
+    exclude_appointment_id: str | None = None,
+) -> str | None:
+    """
+    Returns None if the staff member is available for [time, time+duration_minutes)
+    on the given date, per their user_availability, date overrides, and existing
+    booked appointments.
+    Returns an agent-readable error string if not.
+
+    If the staff member has zero user_availability rows configured at all (they've
+    never set up individual hours), skips this check entirely and returns None —
+    booking then relies on business-hours validation only, since availability
+    setup is optional and shouldn't silently block staff who haven't configured it.
+    """
+    availability = _fetch_user_availability(supabase, user_id)
+    if not availability:
+        return None
+
+    try:
+        d = datetime.strptime(date, "%Y-%m-%d")
+        appt_start = datetime.strptime(time[:5], "%H:%M")
+    except ValueError:
+        return None  # malformed input — _validate_booking_datetime already caught this
+
+    day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    day_name = day_names[d.weekday()]
+
+    work_hours = _resolve_work_hours(availability, day_name)
+    if work_hours is None:
+        return (
+            f"{staff_name} is not scheduled to work on {day_name.capitalize()}s. "
+            f"Please choose a different day or staff member."
+        )
+    work_start, work_end = work_hours
+    appt_end = appt_start + timedelta(minutes=duration_minutes)
+
+    if appt_start < work_start or appt_end > work_end:
+        return (
+            f"{staff_name} is only available from {_fmt_time_12h(work_start.strftime('%H:%M'))} "
+            f"to {_fmt_time_12h(work_end.strftime('%H:%M'))} on {day_name.capitalize()}s, which "
+            f"doesn't fit a {duration_minutes}-minute appointment starting at "
+            f"{_fmt_time_12h(time[:5])}. Please choose an earlier time."
+        )
+
+    overrides = _fetch_user_overrides(supabase, user_id, date)
+    booked = _fetch_appointments_on_date(supabase, user_id, date)
+    if exclude_appointment_id:
+        booked = [b for b in booked if b.get("id") != exclude_appointment_id]
+    busy = _compute_busy_intervals(overrides, booked, duration_minutes)
+    if busy is None:
+        return f"{staff_name} is unavailable on {date}. Please choose a different day."
+
+    for b_start, b_end in busy:
+        if appt_start < b_end and b_start < appt_end:
+            return (
+                f"{staff_name} is not available at {_fmt_time_12h(time[:5])} on {date}. "
+                f"Please choose a different time slot."
+            )
+
+    return None
+
+
 def _find_next_slots(
     supabase,
     business_id: str,
@@ -688,10 +793,14 @@ def _find_next_slots(
     slot_minutes: int,
     from_date: str,
     max_days: int = 30,
+    after_time: str | None = None,
 ) -> list[dict]:
     """
     Scan forward from from_date (YYYY-MM-DD) for the next day that has available slots.
     user_entries: list of {"user_id": str, "name": str}
+    after_time: optional HH:MM (24-hour) — when given, slots on from_date earlier than this
+    time are excluded, so a caller can ask for something later than what was already offered.
+    Only applies to from_date itself; later days in the scan are unaffected.
     Returns list of {"date": str, "time": str, "staff_name": str, "staff_user_id": str}.
     Returns at most 3 slots per staff member for the first available day.
     Returns [] if no availability found within max_days.
@@ -733,6 +842,8 @@ def _find_next_slots(
                 slots = _compute_available_slots(
                     availability, overrides, booked, date_str, slot_minutes
                 )
+                if after_time and i == 0:
+                    slots = [s for s in slots if s >= after_time]
                 for slot in slots[:3]:  # cap at 3 per staff member
                     day_slots.append({
                         "date": date_str,

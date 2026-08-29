@@ -203,6 +203,125 @@ def test_validate_booking_date_does_not_check_time():
         assert fixed is None, f"date-only check should pass for an open day, got: {fixed}"
 
 
+def test_rejects_duration_pushing_past_close():
+    """A start time within hours must still be rejected if start+duration runs past closing."""
+    future = FUTURE_MONDAY
+    with patch("supabase_helpers._fetch_active_custom_schedule", return_value=None), \
+         patch("supabase_helpers._fetch_business_hours_for_location", return_value=[
+             {"day_of_week": FUTURE_DAY_NAME, "is_open": True,
+              "open_time": "09:00:00", "close_time": "17:00:00"}
+         ]):
+        # 16:45 start is within hours, but a 60-minute service ends at 17:45 — past close.
+        result = _validate_booking_datetime(None, "b", "l", future, "16:45", duration_minutes=60)
+    assert result is not None
+    assert "outside" in result.lower() or "hours" in result.lower()
+
+
+def test_accepts_duration_ending_exactly_at_close():
+    future = FUTURE_MONDAY
+    with patch("supabase_helpers._fetch_active_custom_schedule", return_value=None), \
+         patch("supabase_helpers._fetch_business_hours_for_location", return_value=[
+             {"day_of_week": FUTURE_DAY_NAME, "is_open": True,
+              "open_time": "09:00:00", "close_time": "17:00:00"}
+         ]):
+        result = _validate_booking_datetime(None, "b", "l", future, "16:00", duration_minutes=60)
+    assert result is None
+
+
+from supabase_helpers import _validate_staff_availability
+
+
+def test_staff_availability_skips_when_unconfigured():
+    """No user_availability rows at all — skip enforcement, defer to business hours."""
+    with patch("supabase_helpers._fetch_user_availability", return_value=[]):
+        result = _validate_staff_availability(
+            None, "user-1", "Alex", FUTURE_MONDAY, "23:45", duration_minutes=60,
+        )
+    assert result is None
+
+
+def test_staff_availability_rejects_duration_past_employee_end_time():
+    """The exact reported bug: employee ends at 4pm, agent tries to book 4:45pm."""
+    with patch("supabase_helpers._fetch_user_availability", return_value=[
+        {"day_of_week": FUTURE_DAY_NAME, "is_available": True,
+         "start_time": "09:00", "end_time": "16:00"}
+    ]), patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
+         patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
+        result = _validate_staff_availability(
+            None, "user-1", "Alex", FUTURE_MONDAY, "16:45", duration_minutes=30,
+        )
+    assert result is not None
+    assert "Alex" in result
+
+
+def test_staff_availability_accepts_slot_within_employee_hours():
+    with patch("supabase_helpers._fetch_user_availability", return_value=[
+        {"day_of_week": FUTURE_DAY_NAME, "is_available": True,
+         "start_time": "09:00", "end_time": "17:00"}
+    ]), patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
+         patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
+        result = _validate_staff_availability(
+            None, "user-1", "Alex", FUTURE_MONDAY, "16:00", duration_minutes=60,
+        )
+    assert result is None
+
+
+def test_staff_availability_rejects_day_off():
+    with patch("supabase_helpers._fetch_user_availability", return_value=[
+        {"day_of_week": "tuesday", "is_available": True,
+         "start_time": "09:00", "end_time": "17:00"}
+    ]):
+        result = _validate_staff_availability(
+            None, "user-1", "Alex", FUTURE_MONDAY, "10:00", duration_minutes=60,
+        )
+    assert result is not None
+
+
+def test_staff_availability_rejects_full_day_override():
+    with patch("supabase_helpers._fetch_user_availability", return_value=[
+        {"day_of_week": FUTURE_DAY_NAME, "is_available": True,
+         "start_time": "09:00", "end_time": "17:00"}
+    ]), patch("supabase_helpers._fetch_user_overrides", return_value=[
+        {"is_unavailable": True, "start_time": None, "end_time": None}
+    ]), patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
+        result = _validate_staff_availability(
+            None, "user-1", "Alex", FUTURE_MONDAY, "10:00", duration_minutes=60,
+        )
+    assert result is not None
+
+
+def test_staff_availability_rejects_overlap_with_existing_booking():
+    """Overlap detection must work even without an exact start-time match."""
+    with patch("supabase_helpers._fetch_user_availability", return_value=[
+        {"day_of_week": FUTURE_DAY_NAME, "is_available": True,
+         "start_time": "09:00", "end_time": "17:00"}
+    ]), patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
+         patch("supabase_helpers._fetch_appointments_on_date", return_value=[
+             {"id": "existing-1", "appointment_time": "10:00", "duration": "60"}
+         ]):
+        # New request 10:30-11:00 overlaps the existing 10:00-11:00 booking.
+        result = _validate_staff_availability(
+            None, "user-1", "Alex", FUTURE_MONDAY, "10:30", duration_minutes=30,
+        )
+    assert result is not None
+
+
+def test_staff_availability_excludes_self_when_rescheduling():
+    """Rescheduling an appointment to overlap its own prior slot must not self-conflict."""
+    with patch("supabase_helpers._fetch_user_availability", return_value=[
+        {"day_of_week": FUTURE_DAY_NAME, "is_available": True,
+         "start_time": "09:00", "end_time": "17:00"}
+    ]), patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
+         patch("supabase_helpers._fetch_appointments_on_date", return_value=[
+             {"id": "appt-1", "appointment_time": "10:00", "duration": "60"}
+         ]):
+        result = _validate_staff_availability(
+            None, "user-1", "Alex", FUTURE_MONDAY, "10:15", duration_minutes=60,
+            exclude_appointment_id="appt-1",
+        )
+    assert result is None
+
+
 from supabase_helpers import _find_next_slots
 
 
