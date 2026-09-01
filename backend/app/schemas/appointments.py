@@ -101,6 +101,27 @@ PaymentType = Literal[
 ]
 
 
+class AppointmentListItemResponse(BaseModel):
+    """Dashboard/list-view shape -- lighter than AppointmentResponse, with payment
+    status joined in so callers (e.g. the home dashboard) don't need a second
+    round-trip per appointment."""
+    id: str
+    business_id: str
+    location_id: Optional[str] = None
+    client_name: str
+    client_phone: Optional[str] = None
+    service: Optional[str] = None
+    appointment_date: str
+    appointment_time: str
+    duration: Optional[str] = None
+    status: Optional[str] = None
+    assigned_user_id: str
+    assigned_user_name: Optional[str] = None
+    payment_status: Optional[PaymentStatus] = None
+    owing_amount: Optional[float] = None
+    grand_total: Optional[float] = None
+
+
 class AppointmentPaymentLineItem(BaseModel):
     service_id: Optional[str] = None
     service_name: str

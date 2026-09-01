@@ -6,8 +6,25 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 logger = logging.getLogger("voice-agent")
+
+
+def _local_now(business_timezone: str = "UTC") -> datetime:
+    """
+    Current wall-clock time in the business's local timezone, as a naive
+    datetime — matches the naive HH:MM datetimes parsed elsewhere in this
+    module (open/close hours, availability, requested booking times), so
+    "now" comparisons aren't skewed by the business's UTC offset.
+    Falls back to UTC on an unrecognised timezone string.
+    """
+    try:
+        tz = ZoneInfo(business_timezone or "UTC")
+    except ZoneInfoNotFoundError:
+        logger.warning("Unknown business timezone %r, falling back to UTC", business_timezone)
+        tz = ZoneInfo("UTC")
+    return datetime.now(tz).replace(tzinfo=None)
 
 # Skip semantic-memory summarization for trivial sessions (e.g. just a
 # greeting) — nothing durable was likely said in fewer than 2 full turns.
@@ -517,6 +534,7 @@ def _compute_available_slots(
     booked: list[dict],
     target_date: str,
     slot_minutes: int = 60,
+    business_timezone: str = "UTC",
 ) -> list[str]:
     """
     Compute free time slots for a given date.
@@ -539,11 +557,11 @@ def _compute_available_slots(
     if busy is None:
         return []
 
-    # For today, exclude slots that start at or before the current time
+    # For today (in the business's local timezone), exclude slots that
+    # start at or before the current local time.
     now_cutoff: datetime | None = None
-    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    if target_date == today_str:
-        _now = datetime.now(timezone.utc)
+    _now = _local_now(business_timezone)
+    if target_date == _now.strftime("%Y-%m-%d"):
         now_cutoff = datetime(1900, 1, 1, _now.hour, _now.minute)
 
     slots: list[str] = []
@@ -606,19 +624,23 @@ def _validate_booking_datetime(
     date: str,
     time: str | None = None,
     duration_minutes: int = 60,
+    business_timezone: str = "UTC",
 ) -> str | None:
     """
     Returns None if the date/time is valid for booking.
     Returns an agent-readable error string if not.
     Checks: date not in past, valid formats, business open on that day,
     time + duration within open/close hours, custom schedule overrides.
+    "Now"/"today" are evaluated in the business's local timezone, since
+    open/close hours and the requested time are local wall-clock values.
     """
     try:
         appt_date = datetime.strptime(date, "%Y-%m-%d").date()
     except ValueError:
         return f"Invalid date format '{date}'. Please use YYYY-MM-DD."
 
-    today = datetime.now(timezone.utc).date()
+    _now = _local_now(business_timezone)
+    today = _now.date()
     if appt_date < today:
         return (
             f"Cannot book appointments in the past. "
@@ -635,9 +657,9 @@ def _validate_booking_datetime(
         appt_time = appt_start_dt.time()
         appt_end_time = (appt_start_dt + timedelta(minutes=duration_minutes)).time()
 
-        # Reject same-day bookings at or before the current time
+        # Reject same-day bookings at or before the current local time
         if appt_date == today:
-            current_time = datetime.now(timezone.utc).time()
+            current_time = _now.time()
             if appt_time <= current_time:
                 return (
                     f"Cannot book at {_fmt_time_12h(time[:5])} — "
@@ -707,6 +729,7 @@ def _validate_booking_date(
     business_id: str,
     location_id: str | None,
     date: str,
+    business_timezone: str = "UTC",
 ) -> str | None:
     """
     Returns None if the date is valid for booking (not past, business open that day).
@@ -714,7 +737,9 @@ def _validate_booking_date(
     Does NOT check whether a specific time is within hours — pass time=None to _validate_booking_datetime.
     Use this when computing available slots for a full day.
     """
-    return _validate_booking_datetime(supabase, business_id, location_id, date, time=None)
+    return _validate_booking_datetime(
+        supabase, business_id, location_id, date, time=None, business_timezone=business_timezone,
+    )
 
 
 def _validate_staff_availability(
@@ -794,6 +819,7 @@ def _find_next_slots(
     from_date: str,
     max_days: int = 30,
     after_time: str | None = None,
+    business_timezone: str = "UTC",
 ) -> list[dict]:
     """
     Scan forward from from_date (YYYY-MM-DD) for the next day that has available slots.
@@ -810,7 +836,7 @@ def _find_next_slots(
     except ValueError:
         return []
 
-    today = datetime.now(timezone.utc).date()
+    today = _local_now(business_timezone).date()
     if start < today:
         start = today
 
@@ -828,7 +854,7 @@ def _find_next_slots(
         check_date = start + timedelta(days=i)
         date_str = check_date.strftime("%Y-%m-%d")
 
-        if _validate_booking_date(supabase, business_id, location_id, date_str):
+        if _validate_booking_date(supabase, business_id, location_id, date_str, business_timezone):
             continue  # closed day — skip
 
         day_slots: list[dict] = []
@@ -840,7 +866,7 @@ def _find_next_slots(
                 overrides = _fetch_user_overrides(supabase, user_id, date_str)
                 booked = _fetch_appointments_on_date(supabase, user_id, date_str)
                 slots = _compute_available_slots(
-                    availability, overrides, booked, date_str, slot_minutes
+                    availability, overrides, booked, date_str, slot_minutes, business_timezone,
                 )
                 if after_time and i == 0:
                     slots = [s for s in slots if s >= after_time]

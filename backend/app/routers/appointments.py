@@ -1,6 +1,9 @@
 import logging
+from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
+from typing import Optional
+from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException
 from app.core.auth import get_user_id, verify_business_access, require_business_access
 from app.core.supabase import supabase_admin
@@ -10,6 +13,7 @@ from app.schemas.appointments import (
     UpdateAppointmentStatusRequest,
     AppointmentResponse,
     CancelAppointmentResponse,
+    AppointmentListItemResponse,
     VALID_APPOINTMENT_STATUSES,
     AppointmentPaymentResponse,
     SaveAppointmentPaymentRequest,
@@ -181,35 +185,150 @@ def _get_payment_row_or_404(appointment_id: str, business_id: str) -> dict:
 
 def _build_full_payment_response(payment_row: dict) -> dict:
     entries = _fetch_payment_entries(payment_row["id"])
-    grand_total = _money(payment_row.get("grand_total"))
-
-    paid_amount = Decimal("0.00")
-    fully_paid_at: str | None = None
-    for entry in entries:
-        paid_amount += _money(entry.get("amount"))
-        if fully_paid_at is None and paid_amount >= grand_total and grand_total > 0:
-            fully_paid_at = entry.get("paid_at")
-
-    owing_amount = (grand_total - paid_amount).quantize(MONEY_QUANT, rounding=ROUND_HALF_UP)
-
-    refunded_at = payment_row.get("refunded_at")
-    if refunded_at:
-        status = "refunded"
-    elif paid_amount <= 0:
-        status = "unpaid"
-    elif paid_amount < grand_total:
-        status = "partially_paid"
-    else:
-        status = "paid"
-
+    derived = booking_service.compute_invoice_status(
+        payment_row.get("grand_total"), entries, payment_row.get("refunded_at")
+    )
     return {
         **payment_row,
         "entries": entries,
-        "paid_amount": float(paid_amount),
-        "owing_amount": float(owing_amount),
-        "status": status,
-        "paid_at": fully_paid_at,
+        **derived,
     }
+
+
+def _fetch_profile_names(user_ids: list[str]) -> dict[str, str]:
+    ids = _unique_ids(user_ids)
+    if not ids:
+        return {}
+    result = (
+        supabase_admin.table("profiles")
+        .select("id, first_name, last_name")
+        .in_("id", ids)
+        .execute()
+    )
+    names: dict[str, str] = {}
+    for row in result.data or []:
+        name = f"{row.get('first_name') or ''} {row.get('last_name') or ''}".strip()
+        names[row["id"]] = name or None
+    return names
+
+
+def _business_timezone(business_id: str) -> ZoneInfo:
+    biz = booking_service._get_business(business_id)
+    tz_name = biz.get("timezone") or "America/Toronto"
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:
+        return ZoneInfo("America/Toronto")
+
+
+@router.get("", response_model=list[AppointmentListItemResponse])
+async def list_appointments(
+    business_id: str,
+    location_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    status: Optional[str] = None,
+    _: str = Depends(require_business_access()),
+):
+    """List appointments in a date range, default today (business timezone).
+
+    Built for the dashboard's "today's appointments" widget, but reusable for any
+    list view -- `date_from`/`date_to` default to today so the no-args call is the
+    "today" case. Excludes cancelled appointments and joins in payment status so the
+    caller doesn't need a second round-trip per appointment.
+    """
+    if not date_from:
+        tz = _business_timezone(business_id)
+        date_from = datetime.now(tz).date().isoformat()
+    if not date_to:
+        date_to = date_from
+
+    query = (
+        supabase_admin.table("appointments")
+        .select(
+            "id, business_id, location_id, client_name, client_phone, service, "
+            "appointment_date, appointment_time, duration, status, assigned_user_id"
+        )
+        .eq("business_id", business_id)
+        .gte("appointment_date", date_from)
+        .lte("appointment_date", date_to)
+        .neq("status", "cancelled")
+        .order("appointment_date")
+        .order("appointment_time")
+    )
+    if location_id:
+        query = query.eq("location_id", location_id)
+    if status:
+        query = query.eq("status", status)
+    rows = query.execute().data or []
+    if not rows:
+        return []
+
+    appointment_ids = [row["id"] for row in rows]
+    names = _fetch_profile_names([row.get("assigned_user_id") for row in rows])
+
+    payments = (
+        supabase_admin.table("appointment_payments")
+        .select("id, appointment_id, grand_total, refunded_at")
+        .eq("business_id", business_id)
+        .in_("appointment_id", appointment_ids)
+        .execute()
+        .data
+        or []
+    )
+    payments_by_appointment = {p["appointment_id"]: p for p in payments}
+
+    entries_by_payment: dict[str, list[dict]] = defaultdict(list)
+    payment_ids = [p["id"] for p in payments]
+    if payment_ids:
+        entries = (
+            supabase_admin.table("appointment_payment_entries")
+            .select("appointment_payment_id, amount, paid_at")
+            .in_("appointment_payment_id", payment_ids)
+            .execute()
+            .data
+            or []
+        )
+        for entry in entries:
+            entries_by_payment[entry["appointment_payment_id"]].append(entry)
+
+    items: list[AppointmentListItemResponse] = []
+    for row in rows:
+        payment = payments_by_appointment.get(row["id"])
+        payment_status = None
+        owing_amount = None
+        grand_total = None
+        if payment:
+            grand_total = float(_money(payment.get("grand_total")))
+            derived = booking_service.compute_invoice_status(
+                payment.get("grand_total"),
+                entries_by_payment.get(payment["id"], []),
+                payment.get("refunded_at"),
+            )
+            payment_status = derived["status"]
+            owing_amount = derived["owing_amount"]
+
+        items.append(
+            AppointmentListItemResponse(
+                id=row["id"],
+                business_id=row["business_id"],
+                location_id=row.get("location_id"),
+                client_name=row.get("client_name") or "",
+                client_phone=row.get("client_phone"),
+                service=row.get("service"),
+                appointment_date=row["appointment_date"],
+                appointment_time=row["appointment_time"],
+                duration=row.get("duration"),
+                status=row.get("status"),
+                assigned_user_id=row["assigned_user_id"],
+                assigned_user_name=names.get(row["assigned_user_id"]),
+                payment_status=payment_status,
+                owing_amount=owing_amount,
+                grand_total=grand_total,
+            )
+        )
+
+    return items
 
 
 @router.post("", response_model=AppointmentResponse)

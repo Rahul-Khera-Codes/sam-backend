@@ -111,6 +111,37 @@ class HrCandidatesResponse(BaseModel):
     message: str = ""
 
 
+class HrJobPublicResponse(BaseModel):
+    id: str
+    title: str
+    is_accepting_applications: bool = False
+    department: str = ""
+    location: str = ""
+    location_type: str = ""
+    employment_type: str = ""
+    summary: str = ""
+    responsibilities: str = ""
+    qualifications: str = ""
+    benefits: str = ""
+    pay_min: str = ""
+    pay_max: str = ""
+    pay_period: str = ""
+    business_name: str = ""
+    business_logo_url: Optional[str] = None
+
+
+class HrParsedResumeResponse(BaseModel):
+    name: str = ""
+    email: str = ""
+    phone: str = ""
+    location: str = ""
+
+
+class HrJobApplicationSubmitResponse(BaseModel):
+    id: str
+    submitted_at: str
+
+
 class HrDashboardPostingResponse(BaseModel):
     role: str
     team: str
