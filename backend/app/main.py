@@ -14,6 +14,7 @@ from app.routers import (
     forwarding,
     analytics,
     hr,
+    hr_careers,
     hr_interviews,
     integrations,
     gmail_integrations,
@@ -37,6 +38,7 @@ from app.routers import (
     mission_control as mission_control_router,
     command_center_mock as command_center_mock_router,
     reports as reports_router,
+    dashboard as dashboard_router,
 )
 from app.services.scheduler_service import start_scheduler, stop_scheduler
 from app.services.hr_onboarding_guardrails_service import warm_hr_onboarding_guardrails
@@ -75,6 +77,7 @@ app.include_router(settings_router.router)
 app.include_router(forwarding.router)
 app.include_router(analytics.router)
 app.include_router(hr.router)
+app.include_router(hr_careers.router)
 app.include_router(hr_interviews.router)
 app.include_router(integrations.router)
 app.include_router(gmail_integrations.router)
@@ -98,6 +101,7 @@ app.include_router(business_branding_router.router)
 app.include_router(mission_control_router.router)
 app.include_router(command_center_mock_router.router)
 app.include_router(reports_router.router)
+app.include_router(dashboard_router.router)
 
 
 # ── Health check ──────────────────────────────

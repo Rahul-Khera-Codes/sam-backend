@@ -5,6 +5,7 @@ All side effects (GCal, email, SMS) are fire-and-forget — never raise to the c
 """
 import logging
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
 from fastapi import HTTPException
@@ -31,6 +32,49 @@ from app.services.email_service import (
 logger = logging.getLogger(__name__)
 
 DAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+MONEY_QUANT = Decimal("0.01")
+
+
+def _money(value) -> Decimal:
+    return Decimal(str(value or 0)).quantize(MONEY_QUANT, rounding=ROUND_HALF_UP)
+
+
+def compute_invoice_status(
+    grand_total,
+    entries: list[dict],
+    refunded_at: Optional[str] = None,
+) -> dict:
+    """Derives paid_amount/owing_amount/status/paid_at from an invoice's grand_total
+    and its payment entries. Never stored directly -- always computed at read time,
+    since partial/split payments can be added or edited independently of the invoice
+    row. Shared by appointments.py's payment endpoints, the dashboard appointments
+    list, and the dashboard revenue-summary's outstanding-balance calculation."""
+    grand_total_dec = _money(grand_total)
+    paid_amount = Decimal("0.00")
+    fully_paid_at: Optional[str] = None
+    for entry in entries:
+        paid_amount += _money(entry.get("amount"))
+        if fully_paid_at is None and paid_amount >= grand_total_dec and grand_total_dec > 0:
+            fully_paid_at = entry.get("paid_at")
+
+    owing_amount = (grand_total_dec - paid_amount).quantize(MONEY_QUANT, rounding=ROUND_HALF_UP)
+
+    if refunded_at:
+        status = "refunded"
+    elif paid_amount <= 0:
+        status = "unpaid"
+    elif paid_amount < grand_total_dec:
+        status = "partially_paid"
+    else:
+        status = "paid"
+
+    return {
+        "paid_amount": float(paid_amount),
+        "owing_amount": float(owing_amount),
+        "status": status,
+        "paid_at": fully_paid_at,
+    }
 
 
 def _fmt_time_12h(t: str) -> str:

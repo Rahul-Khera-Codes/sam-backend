@@ -160,6 +160,49 @@ Root cause, two layers deep:
   suddenly unbookable.
 - `Calendar.tsx`'s hint now surfaces the assigned staff member's hours alongside business hours.
 
+## Bug fixed 2026-09-01 (AIE-43 regression) — agent still reluctant, even for a named date
+The 2026-08-29 fix above only patched the `find_next_available_slot` path. QA reported the agent
+was *still* reluctant to offer a later time even when the caller named a specific day, suspecting
+the search window was effectively ~14 hours.
+
+Root cause, two separate bugs:
+1. **UTC vs. business-local time.** `_validate_booking_datetime`, `_compute_available_slots`, and
+   `_find_next_slots` (`agent/supabase_helpers.py`), plus the day-boundary calc in
+   `find_next_available_slot` (`agent/agent.py`), all computed "now"/"today" via
+   `datetime.now(timezone.utc)` — but compared it against **business-local wall-clock values**
+   (open/close hours, staff availability, the caller's requested time, all stored/spoken as local
+   HH:MM). `self._business_timezone` (e.g. `America/Toronto`) was already loaded on the agent but
+   was only ever passed to the Google Calendar event-creation helpers, never into any availability
+   or validation function. For a business behind UTC, this rejected genuinely-future local times
+   as "already passed," and could roll the "today" date boundary over at the wrong local moment —
+   this is the effective "~14 hour window" QA observed, not a literal constant anywhere.
+2. **No retry path for a named date.** `get_available_slots` (used once the caller names a
+   specific date, per booking step 6) had no `after_time` parameter at all, and instruction 6a only
+   told the agent to retry via `find_next_available_slot`. So "something later" had literally no
+   mechanism when a specific date was already in play.
+
+**Fix:**
+- New `_local_now(business_timezone)` helper in `agent/supabase_helpers.py` (stdlib `zoneinfo`,
+  falls back to UTC on an unrecognised timezone string) — returns a naive local datetime so it
+  compares directly against the naive HH:MM datetimes already used everywhere else in this module.
+- `business_timezone` threaded through `_compute_available_slots`, `_validate_booking_datetime`,
+  `_validate_booking_date`, and `_find_next_slots` (all default to `"UTC"`, so any caller that
+  doesn't pass one keeps the old — now-correct-for-UTC — behavior).
+- `agent/agent.py` passes `self._business_timezone` at every call site: `get_available_slots`,
+  `find_next_available_slot`, `book_appointment`, and `update_appointment`'s reschedule-hours check.
+- `get_available_slots` gained an `after_time` parameter mirroring `find_next_available_slot`, so
+  the named-date path can also be asked for something later on the same day.
+- `agent/prompt_builder.py` step 6a now covers both tools: retry whichever one made the last offer
+  with `after_time` set to the last time offered.
+- Added regression tests in `agent/tests/test_booking_validation.py` (`_local_now` real-offset
+  check, `_validate_booking_datetime`/`_compute_available_slots` with a mocked local "now" in a
+  non-UTC timezone) and fixed two pre-existing test issues surfaced while touching this file: a
+  wall-clock-dependent flaky test (`test_accepts_today`) and a mock signature that didn't accept
+  the new `business_timezone` positional arg.
+- **Not fixed in this pass:** `backend/app/services/booking_service.py` (the dashboard's manual
+  booking API) has the identical UTC-vs-local pattern — out of scope for AIE-43 since the voice
+  agent doesn't use it, flagged for a future ticket.
+
 ## Decisions / tradeoffs
 - **Frontend hint mirrors backend logic rather than calling an API.** No new backend endpoint was
   added to compute "effective hours for a date" — the frontend already has `business_hours` and

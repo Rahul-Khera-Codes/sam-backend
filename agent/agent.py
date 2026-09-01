@@ -41,6 +41,7 @@ from gmail_helpers import (
 )
 from supabase_helpers import (
     _get_supabase,
+    _local_now,
     _fetch_business,
     _fetch_locations,
     _fetch_services_for_location,
@@ -330,11 +331,15 @@ class Assistant(Agent):
         staff_name: str,
         date: str,
         service_name: str = "",
+        after_time: str = "",
     ) -> str:
         """
         Get available appointment slots for a staff member on a specific date.
         date must be in YYYY-MM-DD format (e.g. 2026-03-20).
         service_name is optional — if provided the slot size matches the service duration.
+        after_time is optional HH:MM (24-hour) — if the caller asks for something later than
+        what you already offered for this date, call this again with the same staff_name/date
+        and after_time set to the last time you offered, to search for a later opening that day.
         """
         if not self._supabase:
             return "Availability check is unavailable right now."
@@ -345,7 +350,7 @@ class Assistant(Agent):
 
         # Reject past dates and closed days before computing slots (no time check needed)
         date_err = _validate_booking_date(
-            self._supabase, self._business_id, self._location_id, date
+            self._supabase, self._business_id, self._location_id, date, self._business_timezone
         )
         if date_err:
             return date_err
@@ -361,7 +366,11 @@ class Assistant(Agent):
         overrides = _fetch_user_overrides(self._supabase, user_id, date)
         booked = _fetch_appointments_on_date(self._supabase, user_id, date)
 
-        slots = _compute_available_slots(availability, overrides, booked, date, slot_minutes)
+        slots = _compute_available_slots(
+            availability, overrides, booked, date, slot_minutes, self._business_timezone
+        )
+        if after_time:
+            slots = [s for s in slots if s >= after_time]
 
         if not slots:
             return f"{staff['name']} has no available slots on {date}."
@@ -424,7 +433,7 @@ class Assistant(Agent):
                 return f"No staff at this location offer {service_label}."
             user_entries = candidates
 
-        start = from_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        start = from_date or _local_now(self._business_timezone).strftime("%Y-%m-%d")
 
         slots = _find_next_slots(
             supabase=self._supabase,
@@ -435,6 +444,7 @@ class Assistant(Agent):
             from_date=start,
             max_days=30,
             after_time=after_time or None,
+            business_timezone=self._business_timezone,
         )
 
         if not slots:
@@ -538,7 +548,7 @@ class Assistant(Agent):
         booking_location_id = (loc["id"] if loc else None) or self._location_id
         date_err = _validate_booking_datetime(
             self._supabase, self._business_id, booking_location_id, date, time,
-            duration_minutes=duration_minutes,
+            duration_minutes=duration_minutes, business_timezone=self._business_timezone,
         )
         if date_err:
             return date_err
@@ -985,6 +995,7 @@ class Assistant(Agent):
                         self._supabase, self._business_id,
                         appt_row.get("location_id") or self._location_id,
                         check_date, check_time, duration_minutes=check_duration_minutes,
+                        business_timezone=self._business_timezone,
                     )
                     if hours_err:
                         return hours_err

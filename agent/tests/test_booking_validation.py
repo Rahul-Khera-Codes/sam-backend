@@ -2,7 +2,7 @@ from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
 import pytest
 
-from supabase_helpers import _validate_booking_datetime
+from supabase_helpers import _validate_booking_datetime, _local_now, _compute_available_slots
 
 
 def _future_date(weekday: int) -> str:
@@ -26,10 +26,14 @@ def test_rejects_past_date():
 
 
 def test_accepts_today():
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    with patch("supabase_helpers._fetch_active_custom_schedule", return_value=None), \
+    # Fixed "now" (rather than the real wall clock) so this doesn't flake
+    # depending on what time of day the suite happens to run.
+    fixed_now = datetime(2099, 1, 1, 8, 0)
+    today = fixed_now.strftime("%Y-%m-%d")
+    with patch("supabase_helpers._local_now", return_value=fixed_now), \
+         patch("supabase_helpers._fetch_active_custom_schedule", return_value=None), \
          patch("supabase_helpers._fetch_business_hours_for_location", return_value=[
-             {"day_of_week": datetime.now(timezone.utc).strftime("%A").lower(),
+             {"day_of_week": fixed_now.strftime("%A").lower(),
               "is_open": True, "open_time": "00:00:00", "close_time": "23:59:00"}
          ]):
         result = _validate_booking_datetime(None, "biz", "loc", today, "10:00")
@@ -346,7 +350,7 @@ def test_find_next_slots_skips_closed_days_and_finds_open():
     monday = _future_date(0)
     tuesday = (datetime.strptime(monday, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
 
-    def date_validator(supabase, business_id, location_id, date):
+    def date_validator(supabase, business_id, location_id, date, business_timezone="UTC"):
         return "closed" if date == monday else None
 
     with patch("supabase_helpers._validate_booking_date", side_effect=date_validator), \
@@ -394,3 +398,74 @@ def test_find_next_slots_returns_max_3_per_staff():
 
     rahul_slots = [r for r in result if r["staff_name"] == "Rahul"]
     assert 1 <= len(rahul_slots) <= 3
+
+
+# ── AIE-43 regression: "now"/"today" must be evaluated in the business's ──
+# ── local timezone, not raw UTC, or same-day local times get wrongly ──────
+# ── rejected as "already passed".                                    ──────
+
+
+def test_local_now_matches_real_timezone_offset():
+    utc_now = _local_now("UTC")
+    toronto_now = _local_now("America/Toronto")
+    delta_hours = (utc_now - toronto_now).total_seconds() / 3600
+    assert 3.9 <= delta_hours <= 5.1  # Toronto is UTC-4 (EDT) or UTC-5 (EST)
+
+
+def test_local_now_falls_back_to_utc_on_unknown_timezone():
+    result = _local_now("Not/A/Real/Zone")
+    utc_now = _local_now("UTC")
+    assert abs((result - utc_now).total_seconds()) < 5
+
+
+def test_validate_booking_datetime_accepts_future_local_time():
+    """
+    The exact reported bug: a caller asks for a same-day time that is still
+    hours away in the business's local time. Must be accepted even though
+    business_timezone differs from UTC.
+    """
+    fixed_local_now = datetime(2099, 1, 1, 9, 0)  # 9:00 AM local
+    today = fixed_local_now.strftime("%Y-%m-%d")
+    with patch("supabase_helpers._local_now", return_value=fixed_local_now) as mock_local_now, \
+         patch("supabase_helpers._fetch_active_custom_schedule", return_value=None), \
+         patch("supabase_helpers._fetch_business_hours_for_location", return_value=[
+             {"day_of_week": fixed_local_now.strftime("%A").lower(),
+              "is_open": True, "open_time": "00:00:00", "close_time": "23:59:00"}
+         ]):
+        result = _validate_booking_datetime(
+            None, "biz", "loc", today, "14:00", business_timezone="America/Toronto",
+        )
+        mock_local_now.assert_called_with("America/Toronto")
+    assert result is None
+
+
+def test_validate_booking_datetime_rejects_local_past_time():
+    fixed_local_now = datetime(2099, 1, 1, 15, 0)  # 3:00 PM local
+    today = fixed_local_now.strftime("%Y-%m-%d")
+    with patch("supabase_helpers._local_now", return_value=fixed_local_now), \
+         patch("supabase_helpers._fetch_active_custom_schedule", return_value=None), \
+         patch("supabase_helpers._fetch_business_hours_for_location", return_value=[
+             {"day_of_week": fixed_local_now.strftime("%A").lower(),
+              "is_open": True, "open_time": "00:00:00", "close_time": "23:59:00"}
+         ]):
+        result = _validate_booking_datetime(
+            None, "biz", "loc", today, "14:00", business_timezone="America/Toronto",
+        )
+    assert result is not None
+    assert "already passed" in result.lower()
+
+
+def test_compute_available_slots_excludes_before_local_now():
+    fixed_local_now = datetime(2099, 1, 1, 10, 30)  # 10:30 AM local
+    today = fixed_local_now.strftime("%Y-%m-%d")
+    availability = [{
+        "day_of_week": fixed_local_now.strftime("%A").lower(),
+        "is_available": True, "start_time": "09:00", "end_time": "17:00",
+    }]
+    with patch("supabase_helpers._local_now", return_value=fixed_local_now):
+        slots = _compute_available_slots(
+            availability, [], [], today, slot_minutes=60, business_timezone="America/Toronto",
+        )
+    assert "09:00" not in slots
+    assert "10:00" not in slots
+    assert "11:00" in slots

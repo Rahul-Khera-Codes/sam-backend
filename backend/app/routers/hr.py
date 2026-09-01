@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.core.supabase import supabase_admin
 from app.schemas.documents import OnboardingChatRequest, OnboardingChatResponse
 from app.schemas.hr import (
+    HrCandidateResponse,
     HrCandidatesResponse,
     HrDashboardPostingResponse,
     HrDraftAssistRequest,
@@ -632,9 +633,54 @@ async def list_hr_candidates(
     business_id: str,
     _: str = Depends(require_business_access()),
 ) -> HrCandidatesResponse:
+    applications = (
+        supabase_admin.table("hr_job_applications")
+        .select("*")
+        .eq("business_id", business_id)
+        .order("submitted_at", desc=True)
+        .execute()
+    ).data or []
+
+    if not applications:
+        return HrCandidatesResponse(
+            available=False,
+            message="No candidates have applied yet.",
+        )
+
+    job_ids = {row["job_posting_id"] for row in applications}
+    jobs_by_id: dict[str, dict] = {}
+    if job_ids:
+        job_rows = (
+            supabase_admin.table("hr_job_postings")
+            .select("id,title")
+            .in_("id", list(job_ids))
+            .execute()
+        ).data or []
+        jobs_by_id = {job["id"]: job for job in job_rows}
+
+    candidates = [
+        HrCandidateResponse(
+            id=row["id"],
+            application_id=row["id"],
+            candidate_id=row["id"],
+            name=row.get("candidate_name") or "",
+            title=jobs_by_id.get(row["job_posting_id"], {}).get("title", ""),
+            location=row.get("candidate_location") or "",
+            email=row.get("candidate_email") or None,
+            phone=row.get("candidate_phone") or None,
+            status=row.get("status") or "new",
+            stage="Applied",
+            applied_at=row.get("submitted_at"),
+            source="native",
+            prospect=False,
+        )
+        for row in applications
+    ]
+
     return HrCandidatesResponse(
-        available=False,
-        message="Candidate sourcing isn't available right now.",
+        available=True,
+        candidates=candidates,
+        total=len(candidates),
     )
 
 
