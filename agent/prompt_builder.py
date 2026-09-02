@@ -8,6 +8,7 @@ import logging
 
 from supabase_helpers import (
     _get_supabase,
+    _local_now,
     _fetch_business,
     _fetch_location,
     _fetch_locations,
@@ -408,6 +409,14 @@ def build_instructions(
     business = _fetch_business(supabase, business_id) if business_id else None
     if business and business.get("name"):
         company_name = business["name"]
+    business_timezone = (business.get("timezone") if business else None) or "America/Toronto"
+
+    today_block = (
+        f"Current date: today is {_local_now(business_timezone).strftime('%A, %B %-d, %Y')} "
+        f"({business_timezone}). Use this to resolve any relative day the caller mentions "
+        "(e.g. \"this Tuesday\", \"tomorrow\", \"next week\") into the correct calendar date "
+        "before calling a booking tool.\n\n"
+    )
 
     global_block   = _format_global_settings(business)   if business else ""
     details_block  = _format_business_details(business)  if business else ""
@@ -431,8 +440,7 @@ def build_instructions(
             )
         else:
             # Override today's row in biz_hours with the custom times
-            from datetime import datetime as _dt
-            today_dow = _dt.now().strftime("%A").lower()
+            today_dow = _local_now(business_timezone).strftime("%A").lower()
             new_hours = []
             found = False
             for row in biz_hours:
@@ -546,6 +554,7 @@ def build_instructions(
 
     return (
         welcome
+        + today_block
         + global_block
         + active_location_block
         + details_block

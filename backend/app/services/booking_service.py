@@ -58,6 +58,12 @@ def compute_invoice_status(
         if fully_paid_at is None and paid_amount >= grand_total_dec and grand_total_dec > 0:
             fully_paid_at = entry.get("paid_at")
 
+    if refunded_at:
+        # The money was returned to the client, so none of it counts toward
+        # paid_amount anymore -- the invoice reverts to fully owing even though
+        # the original entries stay on record for history.
+        paid_amount = Decimal("0.00")
+
     owing_amount = (grand_total_dec - paid_amount).quantize(MONEY_QUANT, rounding=ROUND_HALF_UP)
 
     if refunded_at:

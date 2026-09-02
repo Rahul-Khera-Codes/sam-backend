@@ -29,7 +29,17 @@ today and the remaining balance on a later visit.
   reporting/analytics code sums `appointment_payment_entries` today, so type additions have no
   other blast radius.
 - **`refunded_at`** (new, on `appointment_payments`) — the one manual override. Everything else
-  is computed.
+  is computed. Setting it does **not** delete or alter the underlying `appointment_payment_entries`
+  rows (they stay on record for history) — instead `compute_invoice_status` treats a refunded
+  invoice's `paid_amount` as `0` regardless of its entries, so `owing_amount` reverts to the full
+  `grand_total`. This was a deliberate fix (AIE-50): before it, refunding only flipped the status
+  label and `owing_amount` stayed frozen at its pre-refund value (usually `$0`), so the only way
+  staff could make the number move was deleting the payment entry outright. The
+  `GET /revenue-summary` endpoint's outstanding-balance total (`backend/app/routers/reports.py`)
+  shares this same `compute_invoice_status` call and was updated to stop excluding refunded
+  invoices from that query, so a refunded-and-owing invoice now surfaces there too — kept
+  deliberately distinct from `/payment-summary`'s "money collected" query, which still excludes
+  refunds (a refund isn't money made, see `docs/features/payment-summary-report.md`).
 - **`collected_by_user_id`** (new, on `appointment_payment_entries`) — added for AIE-28. Separate
   from `created_by` (who was logged in): when a business turns on
   `businesses.require_payment_employee_code`, staff must enter their own 4-digit code to record
@@ -37,8 +47,10 @@ today and the remaining balance on a later visit.
   `docs/features/employee-checkin-codes.md`.
 
 **Status is always computed, never stored**, at read time in
-`backend/app/routers/appointments.py::_build_full_payment_response`:
-- `refunded_at is not null` → `refunded`
+`backend/app/services/booking_service.py::compute_invoice_status` (called from
+`appointments.py::_build_full_payment_response` and from `reports.py`'s outstanding-balance calc):
+- `refunded_at is not null` → `refunded`, and `paid_amount` is forced to `0` for this computation
+  (see above) so `owing_amount` becomes the full `grand_total`
 - `paid_amount <= 0` → `unpaid`
 - `paid_amount < grand_total` → `partially_paid`
 - `paid_amount >= grand_total` → `paid` (overpayment is allowed — `owing_amount` goes negative,

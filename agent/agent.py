@@ -734,7 +734,7 @@ class Assistant(Agent):
         if not self._supabase or not self._business_id:
             return "Appointment lookup is unavailable right now."
         try:
-            today = datetime.now().strftime("%Y-%m-%d")
+            today = _local_now(self._business_timezone).strftime("%Y-%m-%d")
             query = (
                 self._supabase.table("appointments")
                 .select("id, client_name, service, appointment_date, appointment_time, location_id, assigned_user_id")
@@ -960,7 +960,7 @@ class Assistant(Agent):
                 self._supabase.table("appointments")
                 .select("id, client_name, client_email, client_phone, service, appointment_date, appointment_time, duration, assigned_user_id, location_id, google_event_id, google_event_id_admin")
                 .eq("business_id", self._business_id)
-                .gte("appointment_date", datetime.now().strftime("%Y-%m-%d"))
+                .gte("appointment_date", _local_now(self._business_timezone).strftime("%Y-%m-%d"))
                 .neq("status", "cancelled")
             )
             q = self._apply_location_scope(q, search_other_locations=search_other_locations)
@@ -1220,7 +1220,7 @@ class Assistant(Agent):
                 self._supabase.table("appointments")
                 .select("id, client_name, client_email, client_phone, service, appointment_date, appointment_time, duration, assigned_user_id, location_id, google_event_id, google_event_id_admin")
                 .eq("business_id", self._business_id)
-                .gte("appointment_date", datetime.now().strftime("%Y-%m-%d"))
+                .gte("appointment_date", _local_now(self._business_timezone).strftime("%Y-%m-%d"))
                 .neq("status", "cancelled")
             )
             q = self._apply_location_scope(q, search_other_locations=search_other_locations)
