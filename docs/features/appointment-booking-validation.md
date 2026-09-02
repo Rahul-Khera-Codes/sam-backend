@@ -203,6 +203,44 @@ Root cause, two separate bugs:
   booking API) has the identical UTC-vs-local pattern — out of scope for AIE-43 since the voice
   agent doesn't use it, flagged for a future ticket.
 
+## Bug fixed 2026-09-02 (AIE-43 regression #2) — LLM misresolved "Tuesday afternoon" to the wrong date
+QA reported the agent couldn't book an afternoon slot on a Tuesday even after the 2026-09-01 fix
+(call id `fa3c7eab-a118-4493-a2e7-c450375e2ebb`).
+
+Root cause: the 2026-09-01 fix made every *validation/slot-computation* function timezone-correct,
+but none of them are what maps a caller's spoken relative day ("this Tuesday", "tomorrow") to a
+concrete `YYYY-MM-DD` — that conversion is done entirely by the LLM (OpenAI Realtime model) before
+it calls `get_available_slots`/`find_next_available_slot`. `agent/prompt_builder.py`'s
+`build_instructions` (the CSE agent's system prompt) never told the LLM what today's date or
+day-of-week is at all — unlike `executive_agent.py`/`hr_onboarding_agent.py`, which both inject a
+"Today is {date}." line. With no anchor, the LLM could resolve "Tuesday" to the wrong calendar date
+(e.g. last week's or next week's Tuesday), which then correctly had no afternoon slots per the
+now-accurate validation — read back to the caller as "no availability."
+
+Also found in the same file: the active-custom-schedule hours override (`build_instructions`) keyed
+its "today" row off naive `datetime.now().strftime("%A")` (container/UTC clock) instead of the
+business's local day — same bug class as 2026-09-01, missed in that pass since it lives in
+`prompt_builder.py` rather than `supabase_helpers.py`.
+
+**Fix:**
+- `build_instructions` now derives `business_timezone` from the fetched `business` row (falls back
+  to `"America/Toronto"`, matching `agent.py`'s existing default) and prepends a grounding line —
+  `"Current date: today is {weekday}, {Month Day, Year} ({timezone}). Use this to resolve any
+  relative day the caller mentions..."` — computed via the existing `_local_now(business_timezone)`
+  helper, right after the welcome block.
+- The custom-schedule override's `today_dow` now also uses `_local_now(business_timezone)` instead
+  of naive `datetime.now()`.
+- `agent/agent.py`'s `find_appointments`, `update_appointment`, and `cancel_appointment` had three
+  more naive `datetime.now()` "today" filters (`.gte("appointment_date", ...)`, unrelated to new
+  bookings but same bug class, flagged by Rahul on 2026-09-01 as still open) — switched to
+  `_local_now(self._business_timezone)` in the same pass.
+- Added regression tests in `agent/tests/test_prompt_builder.py`: the grounding line is present and
+  uses the business's own timezone (not just the default), and the custom-schedule override calls
+  `_local_now` with the business timezone rather than the server clock.
+- **Not fixed in this pass:** `executive_agent.py`/`hr_onboarding_agent.py` also compute their
+  "Today is ..." line via naive `datetime.now()` — out of scope for AIE-43 (CSE booking agent only),
+  flagged here for a future ticket since it's the same underlying pattern.
+
 ## Decisions / tradeoffs
 - **Frontend hint mirrors backend logic rather than calling an API.** No new backend endpoint was
   added to compute "effective hours for a date" — the frontend already has `business_hours` and

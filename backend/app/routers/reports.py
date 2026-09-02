@@ -332,12 +332,13 @@ async def get_revenue_summary(
                 last_week_collected += amount
 
     # Outstanding balance is all-time (not week-scoped) -- a separate query over
-    # every unrefunded invoice for the business/location.
+    # every invoice for the business/location. Refunded invoices are included:
+    # compute_invoice_status treats a refund as reverting the invoice to fully
+    # owing, so they can still surface here if that owing amount is > 0.
     outstanding_query = (
         supabase_admin.table("appointment_payments")
         .select("id, appointment_id, grand_total, refunded_at")
         .eq("business_id", business_id)
-        .is_("refunded_at", "null")
     )
     if location_id:
         outstanding_query = outstanding_query.eq("location_id", location_id)
