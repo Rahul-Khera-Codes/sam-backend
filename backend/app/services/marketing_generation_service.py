@@ -537,7 +537,7 @@ async def _generate_caption_concepts(campaign: dict[str, Any]) -> list[dict[str,
 
 def _normalize_concept(item: dict[str, Any], campaign: dict[str, Any], index: int) -> dict[str, str]:
     fallback = _fallback_concept(campaign, index)
-    platform = item.get("platform") if item.get("platform") in {"instagram", "x", "linkedin", "tiktok"} else fallback["platform"]
+    platform = item.get("platform") if item.get("platform") in {"instagram", "x", "linkedin"} else fallback["platform"]
     format_ = item.get("format") if item.get("format") in {"post", "reel", "video"} else fallback["format"]
     return {
         "title": str(item.get("title") or fallback["title"])[:80],
@@ -552,7 +552,7 @@ def _normalize_concept(item: dict[str, Any], campaign: dict[str, Any], index: in
 def _fallback_concept(campaign: dict[str, Any], index: int) -> dict[str, str]:
     platforms = campaign.get("platforms") or ["instagram"]
     platform = platforms[index % len(platforms)]
-    format_ = "video" if platform == "tiktok" else "reel" if campaign.get("aspect_ratio") == "9:16" else "post"
+    format_ = "reel" if campaign.get("aspect_ratio") == "9:16" else "post"
     title = ["Routine Refresh", "Healthy Starts", "Community First", "Launch Moment", "Creator Demo"][index % 5]
     caption = f"{title}: {campaign['prompt']}"
     return {
@@ -573,7 +573,7 @@ def _aspect_ratio_for_concept(campaign: dict[str, Any], platform: str, format_: 
         return campaign["aspect_ratio"]
     if platform in {"x", "linkedin"}:
         return "16:9"
-    if platform == "tiktok" or format_ in {"reel", "video"}:
+    if format_ in {"reel", "video"}:
         return "9:16"
     return "1:1"
 
@@ -1158,8 +1158,6 @@ def create_scheduled_post(
     _get_single("marketing_campaigns", body.campaign_id, business_id)
     asset_ids = body.asset_ids or [body.asset_id]
     metadata: dict[str, Any] = {"publishing_deferred": True, "asset_ids": asset_ids}
-    if body.tiktok_options:
-        metadata["tiktok_options"] = body.tiktok_options.model_dump()
     row = {
         "business_id": business_id,
         "campaign_id": body.campaign_id,

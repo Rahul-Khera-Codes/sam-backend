@@ -52,6 +52,7 @@ from supabase_helpers import (
     _fetch_appointments_on_date,
     _compute_available_slots,
     _fmt_time_12h,
+    _format_slots_for_speech,
     _is_feature_enabled_for_location,
     _get_feature_config_value,
     _fetch_active_custom_schedule,
@@ -372,12 +373,7 @@ class Assistant(Agent):
         if after_time:
             slots = [s for s in slots if s >= after_time]
 
-        if not slots:
-            return f"{staff['name']} has no available slots on {date}."
-
-        formatted = ", ".join(_fmt_time_12h(s) for s in slots[:8])
-        more = f" (and {len(slots) - 8} more)" if len(slots) > 8 else ""
-        return f"{staff['name']} is available on {date} at: {formatted}{more}."
+        return _format_slots_for_speech(staff["name"], date, slots)
 
     @function_tool()
     async def find_next_available_slot(
@@ -458,9 +454,11 @@ class Assistant(Agent):
 
         # Group by staff name for a natural spoken response
         by_staff: dict[str, list[str]] = {}
+        last_by_staff: dict[str, str | None] = {}
         date_str = slots[0]["date"]
         for s in slots:
             by_staff.setdefault(s["staff_name"], []).append(_fmt_time_12h(s["time"]))
+            last_by_staff[s["staff_name"]] = s.get("last_time")
 
         # Format date as "Wednesday May 21"
         try:
@@ -472,7 +470,14 @@ class Assistant(Agent):
         parts = []
         for name, times in by_staff.items():
             time_list = ", ".join(times)
-            parts.append(f"{name} is available at {time_list}")
+            last_time = last_by_staff.get(name)
+            if last_time:
+                parts.append(
+                    f"{name} is available at {time_list} (more openings that day, "
+                    f"up to {_fmt_time_12h(last_time)} — the actual last available time)"
+                )
+            else:
+                parts.append(f"{name} is available at {time_list}")
 
         result = f"The next available is {date_label}. {'. '.join(parts)}."
         logger.info("find_next_available_slot: → %s", result)

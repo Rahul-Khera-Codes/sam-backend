@@ -469,3 +469,129 @@ def test_compute_available_slots_excludes_before_local_now():
     assert "09:00" not in slots
     assert "10:00" not in slots
     assert "11:00" in slots
+
+
+# ── AIE-43 (round 4) regression: silently truncating the slot list left the ──
+# ── agent unable to know the real last available time, so it kept reporting ──
+# ── the last item of whatever partial batch it saw as "the last available   ──
+# ── time" — reproduced verbatim by a real call transcript (Heather AIE,     ──
+# ── Tuesday Sept 8: agent said "no later than 3:45", then found more when   ──
+# ── asked for afternoon, then again when asked for "3 or 4").               ──
+
+
+from supabase_helpers import _format_slots_for_speech
+
+
+def test_format_slots_for_speech_shows_all_when_under_cap():
+    result = _format_slots_for_speech("Heather", "2026-09-08", ["09:00", "09:15", "09:30"], cap=8)
+    assert result == "Heather is available on 2026-09-08 at: 9:00 AM, 9:15 AM, 9:30 AM."
+    assert "more" not in result
+
+
+def test_format_slots_for_speech_states_true_last_time_when_truncated():
+    """
+    The core AIE-43 bug: when there are more slots than the spoken sample can
+    include, the response must explicitly say what the actual last slot is —
+    never leave the model to assume the last *shown* time is the last *available*
+    one, since that's exactly how it kept mis-answering "what's the last available
+    time" with an early, truncated value.
+    """
+    # 09:00-17:00 in 15-minute increments = 32 total slots, ending at 16:45.
+    slots = []
+    h, m = 9, 0
+    while (h, m) < (17, 0):
+        slots.append(f"{h:02d}:{m:02d}")
+        m += 15
+        if m == 60:
+            m = 0
+            h += 1
+
+    result = _format_slots_for_speech("Heather", "2026-09-08", slots, cap=8)
+
+    assert len(slots) == 32
+    assert "4:45 PM" in result  # the true last slot (16:45), not the 8th shown one
+    assert "the actual last available time that day" in result
+    assert "(and 24 more" in result
+
+
+def test_format_slots_for_speech_reproduces_reported_call():
+    """
+    Direct reproduction of the reported call: Heather's Tuesday hours are
+    02:00-16:00 with a 15-minute consultation slot and no prior bookings, so
+    the raw slot list runs 02:00 through 15:45 (56 slots). The old code capped
+    display at 8 and said nothing about the rest — which is exactly why the
+    agent told the caller "no later than 3:45" (the 8th item) when 3:00-3:45 PM
+    slots existed the whole time.
+    """
+    slots = []
+    h, m = 2, 0
+    while (h, m) < (16, 0):
+        slots.append(f"{h:02d}:{m:02d}")
+        m += 15
+        if m == 60:
+            m = 0
+            h += 1
+
+    result = _format_slots_for_speech("Heather AIE", "2026-09-08", slots, cap=8)
+
+    assert len(slots) == 56
+    assert "3:45 PM" in result  # true last slot — must never be reported as "3:45 AM"
+    assert "the actual last available time that day" in result
+
+
+def test_format_slots_for_speech_no_slots():
+    assert _format_slots_for_speech("Heather", "2026-09-08", []) == "Heather has no available slots on 2026-09-08."
+
+
+def test_find_next_slots_reports_true_last_time_when_more_than_3():
+    """AIE-43: find_next_available_slot must know the day's true last slot too,
+    not just the 3 it speaks out loud, for the same reason as get_available_slots."""
+    future_monday = _future_date(0)
+
+    with patch("supabase_helpers._validate_booking_date", return_value=None), \
+         patch("supabase_helpers._fetch_user_availability", return_value=[
+             {"day_of_week": "monday", "is_available": True,
+              "start_time": "09:00", "end_time": "17:00"}
+         ]), \
+         patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
+         patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
+        result = _find_next_slots(
+            supabase=None,
+            business_id="biz",
+            location_id="loc",
+            user_entries=[{"user_id": "u1", "name": "Rahul"}],
+            slot_minutes=15,  # 32 total slots that day — well over the 3 shown
+            from_date=future_monday,
+            max_days=5,
+        )
+
+    rahul_slots = [r for r in result if r["staff_name"] == "Rahul"]
+    assert len(rahul_slots) == 3
+    assert all(r["last_time"] == "16:45" for r in rahul_slots)
+
+
+def test_find_next_slots_last_time_none_when_not_truncated():
+    """When there are 3 or fewer slots total, there's nothing hidden — last_time
+    should be None rather than a misleading repeat of the last shown slot."""
+    future_monday = _future_date(0)
+
+    with patch("supabase_helpers._validate_booking_date", return_value=None), \
+         patch("supabase_helpers._fetch_user_availability", return_value=[
+             {"day_of_week": "monday", "is_available": True,
+              "start_time": "09:00", "end_time": "10:00"}
+         ]), \
+         patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
+         patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
+        result = _find_next_slots(
+            supabase=None,
+            business_id="biz",
+            location_id="loc",
+            user_entries=[{"user_id": "u1", "name": "Rahul"}],
+            slot_minutes=60,  # exactly 1 slot that day (09:00-10:00)
+            from_date=future_monday,
+            max_days=5,
+        )
+
+    rahul_slots = [r for r in result if r["staff_name"] == "Rahul"]
+    assert len(rahul_slots) == 1
+    assert all(r["last_time"] is None for r in rahul_slots)

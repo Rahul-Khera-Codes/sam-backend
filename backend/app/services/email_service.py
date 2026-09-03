@@ -36,8 +36,10 @@ GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.send https://www.googleapis
 
 # ── OAuth URL ─────────────────────────────────────────────────────────────────
 
-def build_gmail_auth_url(client_id: str, redirect_uri: str, state: str) -> str:
-    params = urlencode({
+def build_gmail_auth_url(
+    client_id: str, redirect_uri: str, state: str, login_hint: Optional[str] = None
+) -> str:
+    param_dict = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
@@ -45,7 +47,14 @@ def build_gmail_auth_url(client_id: str, redirect_uri: str, state: str) -> str:
         "access_type": "offline",
         "prompt": "consent",
         "state": state,
-    })
+    }
+    if login_hint:
+        # Pre-fills / narrows Google's account chooser to the caller's own account
+        # email. This is a UX hint only, not enforcement — Google still lets the
+        # user pick "Use another account", so the callback re-checks the actual
+        # granted email against the account email before saving.
+        param_dict["login_hint"] = login_hint
+    params = urlencode(param_dict)
     return f"{GOOGLE_AUTH_BASE}?{params}"
 
 

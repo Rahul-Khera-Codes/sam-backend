@@ -18,6 +18,7 @@ from app.routers import (
     hr_interviews,
     integrations,
     gmail_integrations,
+    outlook_integrations,
     phone_numbers,
     support,
     locations,
@@ -81,6 +82,7 @@ app.include_router(hr_careers.router)
 app.include_router(hr_interviews.router)
 app.include_router(integrations.router)
 app.include_router(gmail_integrations.router)
+app.include_router(outlook_integrations.router)
 app.include_router(phone_numbers.router)
 app.include_router(support.router)
 app.include_router(locations.router)

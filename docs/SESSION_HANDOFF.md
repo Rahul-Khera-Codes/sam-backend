@@ -203,6 +203,8 @@ Key env files:
 - [x] ~~`POST /phone-numbers/sync-dispatch`~~ — verified session 62 via direct LiveKit API check: every dispatch rule belonging to a currently-existing business already carries `location_id`. Nothing left to sync.
 - [ ] **Delete Sam's old test accounts** — waiting on Sam's email list
 - [ ] **IntegrationsTab loading state** — show spinner during initial Gmail status fetch instead of "Connect" flash
+- [x] ~~`outlook_tokens` migration~~ — pushed 2026-09-03, `supabase gen types` confirmed types match.
+- [ ] **Outlook integration (2026-09-03) — 2 steps left before it works end-to-end:** (1) fix the Azure app's registered redirect URI — client's screenshot showed `https://portal.aiemployeesinc.com//integrations/outlook/callback` with a double slash, confirmed as a typo, must be single-slash to match `OUTLOOK_REDIRECT_URI`; (2) paste the real `MICROSOFT_CLIENT_SECRET` value into `backend/.env` — only a truncated preview was visible in the client's screenshot. See `docs/features/outlook-integration.md` for full spec — this is connect-flow only, Outlook is NOT wired up as an actual email sender yet (Gmail still handles all transactional email).
 - [ ] **Marketing vs HR build-order decision** (session 64) — `docs/next-employee-build-recommendation.md` sent to Sam via Google Doc (2026-07-15), not yet reviewed by him. Recommendation: build HR's 3 unblocked modules first (Doc Library+Onboarding, Candidates & Scoring, AI Interviewer), defer HR's LinkedIn/Indeed sourcing piece (not self-serve-available at Sam's current scale), tackle Marketing's platform integrations as a separate project after. Open question raised by Rahul (unresolved as of session 64 end): whether to instead recommend Marketing over HR — no technical justification found for that yet; would need a business reason (deadline, client priority) to override the doc's recommendation.
 - [ ] **Greenhouse Partner Program application status unknown** (session 65) — before any HR build work started, Sam independently applied to become a Greenhouse Partner (to route LinkedIn/Indeed job distribution through Greenhouse instead of AI Employees needing its own direct platform partnerships) and listed Rahul as technical contact. Greenhouse's own partner page requires "at least one mutual customer" to even submit an application — unknown whether that was satisfied or what Greenhouse has said back. Rahul should check email (incl. spam) for Greenhouse partnerships correspondence; approval would also resolve Greenhouse's sandbox-access gate (normally a paying-Pro-tier-customer-only benefit, not self-serve for a vendor).
 - [ ] **Harvest API v1/v2 deprecates 2026-08-31** (session 65) — any HR Employee Greenhouse integration work must target Harvest v3 (OAuth 2.0, "custom"/"unlisted vendor" client-credentials grant) from day one, not the older static-API-key style. The separate Job Board API (listing jobs, submitting applications) is unaffected and confirmed self-serve.
@@ -227,11 +229,22 @@ Key env files:
 - `20260716000000` — `market_analysis_cards.custom_analyst_id` + `prompt_used` + backfill ✅ (session 63, applied + confirmed live)
 - `20260717000000` — `business_branding.communication_strategy` field, drops `use_emojis` ✅ (session 64, applied + confirmed live)
 - `20260717000001` — drops `business_branding.emerging_trends` ✅ (session 64, applied + confirmed live; `target_niche` deliberately kept, not dropped)
+- `20260903000000` — `outlook_tokens` table + RLS ✅ (applied 2026-09-03, `supabase gen types` confirmed the hand-written TS types match exactly)
 
 ## Pending Migrations (not yet applied)
 - None currently outstanding.
 
 ---
+
+## What Was Done This Session (2026-09-03 — Outlook Integration)
+
+**Built the Outlook OAuth connect flow end-to-end on `feature/hr-agent` (both repos), replacing the "coming soon" stub (tracked as Linear AIE-34) with a real integration, after the client provided a live Azure AD app registration.**
+
+Mirrored the existing Gmail OAuth integration shape exactly. Backend: `microsoft_client_id`/`microsoft_client_secret`/`outlook_redirect_uri` settings, `outlook_email_service.py` (auth URL, token exchange/refresh, scope check), `outlook_integrations.py` router (`auth-url`/`callback`/`status`/`disconnect`), registered in `main.py`. Frontend: `outlook_tokens` migration (business+location scoped, RLS enabled, no policies — service-role only, same as `gmail_tokens`), Supabase types added by hand, `voiceAgentApi.ts` client functions, `IntegrationsTab.tsx` wired to real connect/disconnect state, `/integrations/outlook/callback` route added to `App.tsx`. Full detail in `docs/features/outlook-integration.md`.
+
+Scoped deliberately to **connect-flow only** after confirming with the user — Outlook is not wired into any of the actual transactional email call sites (`send_appointment_confirmation`, `send_staff_notification`, `send_reschedule_confirmation`, `send_cancellation_confirmation`, `report_scheduler.py`'s sales digest); those all still use Gmail. Also confirmed 3 open questions with the user before implementing: the Azure redirect URI's double-slash is a typo (single slash is correct), account type maps to the `common` OAuth endpoint (personal + work/school), and scope is send-only for now (matches what's actually granted in Azure — no Mail.Read/Calendars.ReadWrite).
+
+TypeScript (`npx tsc --noEmit`) clean, Python syntax-checked. **Not yet done:** Docker rebuild (backend + frontend), `supabase db push` for the new migration (holding for explicit confirmation), filling in the real `MICROSOFT_CLIENT_SECRET` value in `backend/.env` (only a truncated preview was visible in the client's screenshot), and fixing the double-slash in the actual Azure app's redirect URI config. See "Pending Manual Steps" above.
 
 ## What Was Done This Session (Session 65, 2026-07-19)
 

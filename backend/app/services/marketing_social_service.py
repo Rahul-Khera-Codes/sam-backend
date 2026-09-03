@@ -20,7 +20,6 @@ from app.core.supabase import supabase_admin
 from app.schemas.marketing import (
     MarketingIntegrationStatusResponse,
     MarketingIntegrationsStatusResponse,
-    TikTokCreatorInfoResponse,
 )
 
 X_SCOPES = ["tweet.read", "tweet.write", "users.read", "offline.access", "media.write"]
@@ -28,12 +27,10 @@ INSTAGRAM_SCOPES = [
     "instagram_business_basic",
     "instagram_business_content_publish",
 ]
-TIKTOK_SCOPES = ["user.info.basic", "video.publish"]
 LINKEDIN_SCOPES = ["openid", "profile", "email", "w_member_social"]
 MARKETING_ASSETS_BUCKET = "marketing-assets"
 SIGNED_URL_TTL_SECONDS = 60 * 60 * 6
 INSTAGRAM_API_VERSION = "v25.0"
-TIKTOK_API_BASE = "https://open.tiktokapis.com/v2"
 
 
 def _now_iso() -> str:
@@ -69,9 +66,6 @@ def _redirect_uri_for_provider(provider: str, origin: str | None) -> str:
     if provider == "x":
         local_uri = settings.marketing_x_redirect_uri_local or settings.marketing_x_redirect_uri
         production_uri = settings.marketing_x_redirect_uri_production or settings.marketing_x_redirect_uri
-    elif provider == "tiktok":
-        local_uri = settings.marketing_tiktok_redirect_uri_local
-        production_uri = settings.marketing_tiktok_redirect_uri_production or settings.marketing_tiktok_redirect_uri_local
     elif provider == "linkedin":
         local_uri = settings.marketing_linkedin_redirect_uri_local
         production_uri = settings.marketing_linkedin_redirect_uri_production or settings.marketing_linkedin_redirect_uri_local
@@ -238,7 +232,6 @@ def get_marketing_integrations_status(business_id: str) -> MarketingIntegrations
         integrations=[
             _integration_row_to_status("instagram", by_provider.get("instagram")),
             _integration_row_to_status("x", by_provider.get("x")),
-            _integration_row_to_status("tiktok", by_provider.get("tiktok")),
             _integration_row_to_status("linkedin", by_provider.get("linkedin")),
         ]
     )
@@ -450,34 +443,6 @@ async def complete_instagram_oauth(code: str, state: str, business_id: str) -> M
     )
 
 
-def build_tiktok_auth_url(business_id: str, user_id: str, return_to: str, origin: str | None = None) -> str:
-    if not settings.tiktok_client_key:
-        raise HTTPException(status_code=501, detail="TikTok integration is not configured.")
-    code_verifier = secrets.token_urlsafe(64)
-    code_challenge = base64.urlsafe_b64encode(hashlib.sha256(code_verifier.encode()).digest()).decode().rstrip("=")
-    redirect_uri = _redirect_uri_for_provider("tiktok", origin)
-    state = _encode_oauth_state(
-        {
-            "provider": "tiktok",
-            "business_id": business_id,
-            "user_id": user_id,
-            "return_to": return_to,
-            "code_verifier": code_verifier,
-            "redirect_uri": redirect_uri,
-        }
-    )
-    params = {
-        "client_key": settings.tiktok_client_key,
-        "response_type": "code",
-        "scope": ",".join(TIKTOK_SCOPES),
-        "redirect_uri": redirect_uri,
-        "state": state,
-        "code_challenge": code_challenge,
-        "code_challenge_method": "S256",
-    }
-    return f"https://www.tiktok.com/v2/auth/authorize/?{urlencode(params)}"
-
-
 def build_linkedin_auth_url(business_id: str, user_id: str, return_to: str, origin: str | None = None) -> str:
     if not settings.marketing_linkedin_client_id:
         raise HTTPException(status_code=501, detail="LinkedIn integration is not configured.")
@@ -499,57 +464,6 @@ def build_linkedin_auth_url(business_id: str, user_id: str, return_to: str, orig
         "state": state,
     }
     return f"https://www.linkedin.com/oauth/v2/authorization?{urlencode(params)}"
-
-
-async def complete_tiktok_oauth(code: str, state: str, business_id: str) -> MarketingIntegrationStatusResponse:
-    parsed = _decode_oauth_state(state)
-    if parsed.get("provider") != "tiktok" or parsed.get("business_id") != business_id:
-        raise HTTPException(status_code=400, detail="Invalid TikTok OAuth state.")
-    if not settings.tiktok_client_key or not settings.tiktok_client_secret:
-        raise HTTPException(status_code=501, detail="TikTok integration is not configured.")
-    async with httpx.AsyncClient(timeout=30) as client:
-        token_response = await client.post(
-            f"{TIKTOK_API_BASE}/oauth/token/",
-            data={
-                "client_key": settings.tiktok_client_key,
-                "client_secret": settings.tiktok_client_secret,
-                "code": code,
-                "grant_type": "authorization_code",
-                "redirect_uri": parsed.get("redirect_uri") or settings.marketing_tiktok_redirect_uri_local,
-                "code_verifier": parsed["code_verifier"],
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        if token_response.status_code >= 400:
-            raise HTTPException(status_code=400, detail=f"TikTok token exchange failed: {token_response.text}")
-        token_data = token_response.json()
-        if token_data.get("error"):
-            raise HTTPException(status_code=400, detail=f"TikTok token exchange failed: {token_data}")
-        access_token = token_data["access_token"]
-        # Only request fields covered by the user.info.basic scope we ask for above.
-        user_response = await client.get(
-            f"{TIKTOK_API_BASE}/user/info/",
-            params={"fields": "open_id,display_name,avatar_url"},
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        user_data = (user_response.json().get("data") or {}).get("user") or {} if user_response.status_code < 400 else {}
-    expires_at = None
-    if token_data.get("expires_in"):
-        expires_at = (datetime.now(timezone.utc) + timedelta(seconds=int(token_data["expires_in"]))).isoformat()
-    scopes = str(token_data.get("scope") or ",".join(TIKTOK_SCOPES)).split(",")
-    return _upsert_integration(
-        business_id=business_id,
-        user_id=parsed["user_id"],
-        provider="tiktok",
-        account_id=token_data.get("open_id"),
-        account_name=user_data.get("display_name"),
-        access_token=access_token,
-        refresh_token=token_data.get("refresh_token"),
-        expires_at=expires_at,
-        scopes=scopes,
-        metadata={"raw_user": user_data},
-        avatar_url=user_data.get("avatar_url"),
-    )
 
 
 async def complete_linkedin_oauth(code: str, state: str, business_id: str) -> MarketingIntegrationStatusResponse:
@@ -599,32 +513,7 @@ async def complete_linkedin_oauth(code: str, state: str, business_id: str) -> Ma
     )
 
 
-async def _revoke_tiktok_token(row: dict[str, Any]) -> None:
-    access_token = _decrypt_token(row.get("encrypted_access_token"))
-    if not access_token:
-        return
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            await client.post(
-                f"{TIKTOK_API_BASE}/oauth/revoke/",
-                data={
-                    "client_key": settings.tiktok_client_key,
-                    "client_secret": settings.tiktok_client_secret,
-                    "token": access_token,
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-            )
-    except Exception:
-        # Best-effort — the local row is deleted regardless so the integration
-        # always shows disconnected even if TikTok's revoke call itself fails.
-        pass
-
-
 async def disconnect_marketing_integration(business_id: str, provider: str) -> dict[str, bool]:
-    if provider == "tiktok":
-        row = _get_integration_row(business_id, provider)
-        if row:
-            await _revoke_tiktok_token(row)
     supabase_admin.table("marketing_platform_integrations").delete().eq("business_id", business_id).eq("provider", provider).execute()
     return {"disconnected": True}
 
@@ -686,40 +575,6 @@ async def _refresh_instagram_access_token(business_id: str, row: dict[str, Any])
     return token_data.get("access_token", access_token)
 
 
-async def _refresh_tiktok_access_token(business_id: str, row: dict[str, Any]) -> str:
-    refresh_token = _decrypt_token(row.get("encrypted_refresh_token"))
-    if not refresh_token:
-        raise RuntimeError("TikTok refresh token is missing. Reconnect TikTok.")
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
-            f"{TIKTOK_API_BASE}/oauth/token/",
-            data={
-                "client_key": settings.tiktok_client_key,
-                "client_secret": settings.tiktok_client_secret,
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-    if response.status_code >= 400:
-        raise RuntimeError(f"TikTok token refresh failed: {response.text}")
-    token_data = response.json()
-    if token_data.get("error"):
-        raise RuntimeError(f"TikTok token refresh failed: {token_data}")
-    expires_at = None
-    if token_data.get("expires_in"):
-        expires_at = (datetime.now(timezone.utc) + timedelta(seconds=int(token_data["expires_in"]))).isoformat()
-    supabase_admin.table("marketing_platform_integrations").update(
-        {
-            "encrypted_access_token": _encrypt_token(token_data["access_token"]),
-            "encrypted_refresh_token": _encrypt_token(token_data.get("refresh_token", refresh_token)),
-            "token_expires_at": expires_at,
-            "last_error": None,
-        }
-    ).eq("id", row["id"]).eq("business_id", business_id).execute()
-    return token_data["access_token"]
-
-
 async def _refresh_linkedin_access_token(business_id: str, row: dict[str, Any]) -> str:
     refresh_token = _decrypt_token(row.get("encrypted_refresh_token"))
     if not refresh_token:
@@ -768,11 +623,6 @@ async def _access_token_for_provider(business_id: str, provider: str) -> tuple[d
         expires_at = datetime.fromisoformat(str(row["token_expires_at"]).replace("Z", "+00:00"))
         if expires_at <= datetime.now(timezone.utc) + timedelta(days=3):
             token = await _refresh_instagram_access_token(business_id, row)
-            row = _get_integration_row(business_id, provider) or row
-    if provider == "tiktok" and row.get("token_expires_at"):
-        expires_at = datetime.fromisoformat(str(row["token_expires_at"]).replace("Z", "+00:00"))
-        if expires_at <= datetime.now(timezone.utc) + timedelta(minutes=2):
-            token = await _refresh_tiktok_access_token(business_id, row)
             row = _get_integration_row(business_id, provider) or row
     if provider == "linkedin" and row.get("token_expires_at"):
         expires_at = datetime.fromisoformat(str(row["token_expires_at"]).replace("Z", "+00:00"))
@@ -1031,198 +881,6 @@ async def _publish_to_instagram(
         return await _publish_instagram_container(client, ig_user_id=ig_user_id, access_token=access_token, creation_id=creation_id)
 
 
-PUBLIC_ASSET_TOKEN_TTL_SECONDS = 60 * 60 * 2
-
-
-def build_public_asset_url(asset: dict[str, Any]) -> str:
-    base = (settings.marketing_public_backend_url or "").rstrip("/")
-    if not base:
-        raise RuntimeError(
-            "TikTok photo posting requires MARKETING_PUBLIC_BACKEND_URL to be set to this "
-            "backend's publicly reachable, TikTok-verified URL."
-        )
-    token = _token_fernet().encrypt(str(asset["id"]).encode()).decode()
-    return f"{base}/marketing/public/assets/{token}"
-
-
-def resolve_public_asset_token(token: str) -> str:
-    try:
-        return _token_fernet().decrypt(token.encode(), ttl=PUBLIC_ASSET_TOKEN_TTL_SECONDS).decode()
-    except InvalidToken as exc:
-        raise HTTPException(status_code=404, detail="This link has expired or is invalid.") from exc
-
-
-def get_public_marketing_asset_bytes(token: str) -> tuple[bytes, str]:
-    """Serves a generated asset's raw bytes, unauthenticated — used so TikTok's
-    servers can PULL_FROM_URL a photo we host, since that endpoint requires the
-    URL's domain to be publicly fetchable (and TikTok-verified), not a signed
-    Supabase storage link. Access is gated by the short-lived Fernet token itself,
-    not a business_id check.
-    """
-    asset_id = resolve_public_asset_token(token)
-    result = supabase_admin.table("marketing_assets").select("*").eq("id", asset_id).limit(1).execute()
-    if not result.data:
-        raise HTTPException(status_code=404, detail="Asset not found.")
-    asset = result.data[0]
-    content = _download_asset_bytes(asset)
-    content_type = asset.get("content_type") or "application/octet-stream"
-    return content, content_type
-
-
-async def _query_tiktok_creator_info(access_token: str) -> dict[str, Any]:
-    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json; charset=UTF-8"}
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(f"{TIKTOK_API_BASE}/post/publish/creator_info/query/", headers=headers)
-    if response.status_code >= 400:
-        raise RuntimeError(f"TikTok creator info lookup failed: {response.text}")
-    return response.json().get("data") or {}
-
-
-async def get_tiktok_creator_info(business_id: str) -> TikTokCreatorInfoResponse:
-    _, access_token = await _access_token_for_provider(business_id, "tiktok")
-    try:
-        data = await _query_tiktok_creator_info(access_token)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return TikTokCreatorInfoResponse(
-        creator_username=data.get("creator_username"),
-        creator_nickname=data.get("creator_nickname"),
-        creator_avatar_url=data.get("creator_avatar_url"),
-        privacy_level_options=data.get("privacy_level_options") or [],
-        comment_disabled=bool(data.get("comment_disabled")),
-        duet_disabled=bool(data.get("duet_disabled")),
-        stitch_disabled=bool(data.get("stitch_disabled")),
-        max_video_post_duration_sec=data.get("max_video_post_duration_sec"),
-    )
-
-
-def _resolve_tiktok_privacy_level(options: dict[str, Any] | None, privacy_options: list[str]) -> str:
-    requested = (options or {}).get("privacy_level") or settings.marketing_tiktok_privacy_level
-    if privacy_options and requested not in privacy_options:
-        return privacy_options[0]
-    return requested
-
-
-async def _poll_tiktok_publish_status(client: httpx.AsyncClient, headers: dict[str, str], publish_id: str) -> None:
-    last_status = "PROCESSING_UPLOAD"
-    fail_reason = ""
-    for attempt in range(5):
-        status_response = await client.post(
-            f"{TIKTOK_API_BASE}/post/publish/status/fetch/",
-            headers=headers,
-            json={"publish_id": publish_id},
-        )
-        if status_response.status_code >= 400:
-            break
-        status_data = status_response.json().get("data") or {}
-        last_status = status_data.get("status") or last_status
-        fail_reason = status_data.get("fail_reason") or fail_reason
-        if last_status in {"PUBLISH_COMPLETE", "SEND_TO_USER_INBOX"}:
-            break
-        if last_status == "FAILED":
-            raise RuntimeError(f"TikTok post failed: {fail_reason or 'unknown reason'}")
-        if attempt < 4:
-            await asyncio.sleep(5)
-
-
-async def _publish_video_to_tiktok(
-    client: httpx.AsyncClient, headers: dict[str, str], asset: dict[str, Any], caption: str, privacy_level: str, options: dict[str, Any] | None
-) -> str:
-    content_type = str(asset.get("content_type") or "video/mp4")
-    video_bytes = _download_asset_bytes(asset)
-    video_size = len(video_bytes)
-    init_response = await client.post(
-        f"{TIKTOK_API_BASE}/post/publish/video/init/",
-        headers=headers,
-        json={
-            "post_info": {
-                "title": caption[:2200],
-                "privacy_level": privacy_level,
-                "disable_duet": bool((options or {}).get("disable_duet")),
-                "disable_comment": bool((options or {}).get("disable_comment")),
-                "disable_stitch": bool((options or {}).get("disable_stitch")),
-            },
-            "source_info": {
-                "source": "FILE_UPLOAD",
-                "video_size": video_size,
-                "chunk_size": video_size,
-                "total_chunk_count": 1,
-            },
-        },
-    )
-    if init_response.status_code >= 400:
-        raise RuntimeError(f"TikTok post init failed: {init_response.text}")
-    init_data = init_response.json().get("data") or {}
-    publish_id = init_data.get("publish_id")
-    upload_url = init_data.get("upload_url")
-    if not publish_id or not upload_url:
-        raise RuntimeError(f"TikTok post init returned no publish_id/upload_url: {init_response.text}")
-    upload_response = await client.put(
-        upload_url,
-        headers={
-            "Content-Type": content_type,
-            "Content-Range": f"bytes 0-{video_size - 1}/{video_size}",
-        },
-        content=video_bytes,
-    )
-    if upload_response.status_code >= 400:
-        raise RuntimeError(f"TikTok video upload failed: {upload_response.text}")
-    return publish_id
-
-
-async def _publish_photo_to_tiktok(
-    client: httpx.AsyncClient, headers: dict[str, str], asset: dict[str, Any], caption: str, privacy_level: str, options: dict[str, Any] | None
-) -> str:
-    photo_url = build_public_asset_url(asset)
-    init_response = await client.post(
-        f"{TIKTOK_API_BASE}/post/publish/content/init/",
-        headers=headers,
-        json={
-            "post_info": {
-                "description": caption[:4000],
-                "privacy_level": privacy_level,
-                "disable_comment": bool((options or {}).get("disable_comment")),
-                "auto_add_music": True,
-            },
-            "source_info": {
-                "source": "PULL_FROM_URL",
-                "photo_images": [photo_url],
-                "photo_cover_index": 0,
-            },
-            "post_mode": "DIRECT_POST",
-            "media_type": "PHOTO",
-        },
-    )
-    if init_response.status_code >= 400:
-        raise RuntimeError(f"TikTok photo post init failed: {init_response.text}")
-    init_data = init_response.json().get("data") or {}
-    publish_id = init_data.get("publish_id")
-    if not publish_id:
-        raise RuntimeError(f"TikTok photo post init returned no publish_id: {init_response.text}")
-    return publish_id
-
-
-async def _publish_to_tiktok(
-    business_id: str, asset: dict[str, Any], caption: str, options: dict[str, Any] | None = None
-) -> tuple[str, str]:
-    _, access_token = await _access_token_for_provider(business_id, "tiktok")
-    content_type = str(asset.get("content_type") or "")
-    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json; charset=UTF-8"}
-    async with httpx.AsyncClient(timeout=60) as client:
-        creator_data = await _query_tiktok_creator_info(access_token)
-        privacy_level = _resolve_tiktok_privacy_level(options, creator_data.get("privacy_level_options") or [])
-        if content_type.startswith("video/"):
-            publish_id = await _publish_video_to_tiktok(client, headers, asset, caption, privacy_level, options)
-        elif content_type.startswith("image/"):
-            publish_id = await _publish_photo_to_tiktok(client, headers, asset, caption, privacy_level, options)
-        else:
-            raise RuntimeError(f"TikTok direct post does not support content type: {content_type or 'unknown'}")
-        await _poll_tiktok_publish_status(client, headers, publish_id)
-    # TikTok's status endpoint does not return a public permalink; unaudited apps are
-    # restricted to private viewing regardless of privacy_level until the app passes review.
-    return publish_id, ""
-
-
 async def _publish_to_linkedin(business_id: str, asset: dict[str, Any], caption: str) -> tuple[str, str]:
     row, access_token = await _access_token_for_provider(business_id, "linkedin")
     author_id = row.get("provider_account_id")
@@ -1330,15 +988,6 @@ async def publish_scheduled_post(business_id: str, scheduled_post_id: str) -> di
                     provider_post_urls["instagram"] = post_url
             except Exception as exc:
                 errors.append(f"Instagram: {exc}")
-        elif provider == "tiktok":
-            try:
-                tiktok_options = metadata.get("tiktok_options")
-                post_id, post_url = await _publish_to_tiktok(business_id, asset, post["caption"], tiktok_options)
-                provider_post_ids["tiktok"] = post_id
-                if post_url:
-                    provider_post_urls["tiktok"] = post_url
-            except Exception as exc:
-                errors.append(f"TikTok: {exc}")
         elif provider == "linkedin":
             try:
                 post_id, post_url = await _publish_to_linkedin(business_id, asset, post["caption"])

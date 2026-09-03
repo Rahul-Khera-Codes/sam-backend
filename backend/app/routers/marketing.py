@@ -3,7 +3,6 @@ import os
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import Response
 
 from app.core.auth import get_user_id, verify_business_access
 from app.schemas.marketing import (
@@ -61,20 +60,11 @@ from app.services.marketing_generation_service import (
     upsert_draft,
     start_video_job_disabled,
 )
-from app.services.marketing_social_service import get_public_marketing_asset_bytes, publish_scheduled_post
+from app.services.marketing_social_service import publish_scheduled_post
 
 _ALLOWED_PRODUCT_IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp"}
 
 router = APIRouter(prefix="/marketing", tags=["marketing"])
-
-
-@router.get("/public/assets/{token}")
-async def get_public_marketing_asset_route(token: str):
-    """Unauthenticated by design — TikTok's Content Posting API (PULL_FROM_URL)
-    fetches this URL directly from its own servers. Access is gated by the
-    short-lived signed token, not a session."""
-    content, content_type = get_public_marketing_asset_bytes(token)
-    return Response(content=content, media_type=content_type)
 
 
 @router.get("/workspace", response_model=MarketingWorkspaceResponse)
