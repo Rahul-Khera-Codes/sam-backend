@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     google_redirect_uri: str = "http://localhost:5173/integrations/google/callback"
     gmail_redirect_uri: str = "http://localhost:5173/integrations/gmail/callback"
 
+    # Microsoft OAuth (Outlook email integration — Azure AD app "AI Employees - Outlook Integration")
+    microsoft_client_id: str = ""
+    microsoft_client_secret: str = ""
+    outlook_redirect_uri: str = "http://localhost:5173/integrations/outlook/callback"
+
     # Twilio / SIP
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
