@@ -77,5 +77,8 @@ access only, same as Gmail.
   `send_reschedule_confirmation`, `send_cancellation_confirmation`,
   `report_scheduler.py`'s sales digest) is an explicitly separate, not-yet-scoped follow-up —
   those all still use Gmail exclusively.
-- **Migration not yet pushed.** `supabase db push` needs to be run and confirmed separately
-  before this works end-to-end (see SESSION_HANDOFF.md).
+- **Migration applied.** `20260903000000_outlook_tokens.sql` was pushed 2026-09-03;
+  `supabase gen types` confirmed the hand-written TS types match exactly.
+- **Still needed before this is testable end-to-end:** fix the double-slash typo in the
+  Azure app's registered redirect URI, and paste the real `MICROSOFT_CLIENT_SECRET` value
+  into `backend/.env` (see SESSION_HANDOFF.md → Pending Manual Steps).
