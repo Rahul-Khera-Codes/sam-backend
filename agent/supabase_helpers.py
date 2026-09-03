@@ -589,6 +589,25 @@ def _fmt_time_12h(t: str) -> str:
         return t
 
 
+def _format_slots_for_speech(name: str, date: str, slots: list[str], cap: int = 8) -> str:
+    """
+    Format a day's available slots for a spoken response, capped at `cap` shown times.
+    AIE-43: when there are more slots than `cap`, the caller must never be left thinking
+    the last *shown* time is the last *available* one — always state the true last slot
+    of the day explicitly, since the model has no other way to know the list was truncated.
+    """
+    if not slots:
+        return f"{name} has no available slots on {date}."
+
+    formatted = ", ".join(_fmt_time_12h(s) for s in slots[:cap])
+    if len(slots) > cap:
+        last = _fmt_time_12h(slots[-1])
+        more = f" (and {len(slots) - cap} more, up to {last} — the actual last available time that day)"
+    else:
+        more = ""
+    return f"{name} is available on {date} at: {formatted}{more}."
+
+
 # ── Location-scoped fetch functions (no fallback) ────────────────────────────
 
 
@@ -870,12 +889,14 @@ def _find_next_slots(
                 )
                 if after_time and i == 0:
                     slots = [s for s in slots if s >= after_time]
-                for slot in slots[:3]:  # cap at 3 per staff member
+                last_slot = slots[-1] if len(slots) > 3 else None
+                for slot in slots[:3]:  # cap at 3 per staff member shown, but remember the true last one
                     day_slots.append({
                         "date": date_str,
                         "time": slot,
                         "staff_name": name,
                         "staff_user_id": user_id,
+                        "last_time": last_slot,
                     })
             except Exception as e:
                 logger.warning("_find_next_slots: error for user %s on %s: %s", user_id, date_str, e)

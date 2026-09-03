@@ -63,6 +63,12 @@ silently or generically:
 - `src/hooks/useCustomSchedules.ts` — `useCustomSchedules()`, direct Supabase read of
   `custom_schedules` for the current business + selected location, pre-sorted
   `priority desc, created_at desc` (same tie-break the backend applies).
+- `src/components/business/BusinessDateOverrideModal.tsx` / `BusinessDateOverridesList.tsx` (AIE-46,
+  2026-09-03) — simplified single-date add/list UI over `useCustomSchedules`, restricted to
+  `schedule_type: "one_time"` rows. Surfaced in Business Settings → Business Hours tab as "Business
+  Date Overrides", separate from the pre-existing per-user "Team Member Date Overrides" card
+  (`DateOverrideModal`/`DateOverridesList`, `useUserAvailability`) that sits below it on the same
+  tab. See AIE-46 below for why these are two distinct cards.
 - `src/hooks/useTeamMemberAvailability.ts` — direct Supabase read of `user_availability` +
   `user_availability_overrides` for an arbitrary `targetUserId` (an admin/manager viewing a staff
   member's schedule, as opposed to `useUserAvailability.ts` which is "my own" schedule). Wired into
@@ -240,6 +246,42 @@ business's local day — same bug class as 2026-09-01, missed in that pass since
 - **Not fixed in this pass:** `executive_agent.py`/`hr_onboarding_agent.py` also compute their
   "Today is ..." line via naive `datetime.now()` — out of scope for AIE-43 (CSE booking agent only),
   flagged here for a future ticket since it's the same underlying pattern.
+
+## Feature added 2026-09-03 (AIE-46) — Business-level Date Overrides UI
+Original ticket asked to move the "Date Override" section from Profile settings into Business
+Settings, under Business Hours. That move (2026-09-01) only relocated the UI — the override it
+manages was, and still is, scoped to the *logged-in user* (`user_availability_overrides`, `user_id`
+only, no `business_id`/`location_id`). Sam reopened the ticket: a business needs two independent
+override concepts shown together — the business itself can be closed for a holiday while an
+individual team member's own vacation override is a separate thing, and vice versa (business open,
+one staff member out).
+
+**Decision: reuse `custom_schedules`, don't add a new table.** That table is already
+business+location-scoped and already the sole source `_fetch_active_custom_schedule` (see above)
+checks *before* regular weekly hours, with `is_agent_disabled` already meaning "business closed."
+Its existing UI (`CustomScheduleDialog`/Scheduler page) supports this but is built for the richer
+recurring/priority/named-schedule case. Rather than fork the data model, a second, simpler
+add/list UI (`BusinessDateOverrideModal`/`BusinessDateOverridesList`) was added that only creates
+and lists `schedule_type: "one_time"` rows (multi-date calendar picker, "Mark Business as Closed" or
+custom hours, optional reason → `name`), mirroring the UX of the pre-existing per-user override
+modal. Because it's the same table, a business-level override added from either surface (Business
+Hours tab or Scheduler) is immediately enforced by the existing backend/agent booking validation —
+no backend change was needed for this ticket.
+
+**Result:** Business Settings → Business Hours tab now shows three cards top to bottom: the weekly
+hours grid, "Business Date Overrides" (new, `custom_schedules`), and "Team Member Date Overrides"
+(renamed from "Date Overrides", unchanged behavior, `user_availability_overrides`).
+
+**Tradeoff flagged, not acted on:** a one-time row created via this new card is indistinguishable
+from one created via the Scheduler's Custom Schedule dialog — both just filter to
+`schedule_type: "one_time"` — so they'll cross-appear in both UIs. Considered acceptable/desired
+(a holiday added from either screen should show up everywhere), but worth knowing if the two UIs
+ever need to diverge in meaning.
+
+**Access control:** `custom_schedules` RLS restricts INSERT/UPDATE/DELETE to `admin`/`super_admin`.
+Business Settings (`/dashboard/settings/business`) is already gated to those same roles by default
+(`RESTRICTED_PAGES` in `src/lib/roles.ts`), so no new permission gap was introduced — confirmed
+before implementing, not assumed.
 
 ## Decisions / tradeoffs
 - **Frontend hint mirrors backend logic rather than calling an API.** No new backend endpoint was

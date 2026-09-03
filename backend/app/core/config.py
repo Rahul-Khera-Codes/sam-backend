@@ -33,17 +33,7 @@ class Settings(BaseSettings):
     marketing_instagram_app_secret: str = ""
     marketing_instagram_redirect_uri_local: str = ""
     marketing_instagram_redirect_uri_production: str = ""
-    marketing_public_backend_url: str = ""
     marketing_token_encryption_key: str = ""
-
-    # TikTok (Content Posting API) — field names mirror TikTok's own "client key"/"client secret" terms
-    tiktok_client_key: str = ""
-    tiktok_client_secret: str = ""
-    marketing_tiktok_redirect_uri_local: str = "http://localhost:8080/integrations/marketing/tiktok/callback"
-    marketing_tiktok_redirect_uri_production: str = ""
-    # Unaudited TikTok apps are force-restricted to private viewing regardless of what's sent,
-    # so default to the safest privacy_level until the app passes TikTok's Content Posting API audit.
-    marketing_tiktok_privacy_level: str = "SELF_ONLY"
 
     # LinkedIn — built against LinkedIn's documented OAuth + Posts API, but unverified:
     # no LinkedIn Developer app exists yet, so exact scope/product names may need adjustment

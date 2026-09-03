@@ -64,6 +64,7 @@ async def get_auth_url(
     location_id: Optional[str] = None,
     return_to: str = "/dashboard/settings/business",
     user_id: str = Depends(get_user_id),
+    current_user: dict = Depends(get_current_user),
 ):
     verify_business_access(user_id, business_id)
 
@@ -85,6 +86,7 @@ async def get_auth_url(
         client_id=settings.google_client_id,
         redirect_uri=settings.gmail_redirect_uri,
         state=state,
+        login_hint=current_user.get("email"),
     )
     return {"url": url}
 
@@ -106,6 +108,7 @@ async def oauth_callback(body: GmailCallbackRequest):
         state = json.loads(body.state)
         business_id = state["business_id"]
         location_id = state.get("location_id")
+        initiating_user_id = state.get("user_id")
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid state parameter.")
 
@@ -159,6 +162,29 @@ async def oauth_callback(body: GmailCallbackRequest):
                     google_email = resp.json().get("email", "")
         except Exception:
             pass
+
+    if google_email and initiating_user_id:
+        profile = (
+            supabase_admin.table("profiles")
+            .select("email")
+            .eq("id", initiating_user_id)
+            .limit(1)
+            .execute()
+        )
+        account_email = profile.data[0]["email"] if profile.data else None
+        if account_email and account_email.strip().lower() != google_email.strip().lower():
+            try:
+                await gmail.revoke_token(token_data["access_token"])
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"The Gmail account you selected ({google_email}) doesn't match your "
+                    f"account email ({account_email}). Please reconnect using the Gmail "
+                    "account you use to sign in."
+                ),
+            )
 
     token_expiry = gmail.token_expiry_from_response(token_data)
 
