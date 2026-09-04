@@ -92,13 +92,18 @@ class CancelAppointmentResponse(BaseModel):
     message: str
 
 
-# "unpaid"/"partially_paid"/"paid" are always computed from entries vs grand_total — never
-# stored directly. "refunded" is the one manual override, tracked via refunded_at.
+# "unpaid"/"partially_paid"/"paid"/"refunded" are always computed from entries vs
+# grand_total at read time -- never stored directly. "refunded" means fully refunded
+# (net paid_amount is back to zero); a partial refund just reduces paid_amount and
+# the status recomputes normally (see booking_service.compute_invoice_status).
 PaymentStatus = Literal["unpaid", "partially_paid", "paid", "refunded"]
 PaymentType = Literal[
     "cash", "credit_card", "debit_card", "e_transfer", "other",
     "coupon", "gift_card", "paypal", "cheque",
 ]
+# "payment" = money collected, "refund" = money returned to the client. Both live in
+# the same appointment_payment_entries ledger, distinguished by entry_type.
+EntryType = Literal["payment", "refund"]
 
 
 class AppointmentListItemResponse(BaseModel):
@@ -140,6 +145,7 @@ class SaveAppointmentPaymentRequest(BaseModel):
 class AppointmentPaymentEntry(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str
+    entry_type: EntryType = "payment"
     payment_type: PaymentType
     amount: float
     note: Optional[str] = None
@@ -170,6 +176,10 @@ class UpdatePaymentEntryRequest(BaseModel):
 
 class RefundPaymentRequest(BaseModel):
     business_id: str
+    payment_type: PaymentType
+    amount: float
+    note: Optional[str] = None
+    employee_code: Optional[str] = None
 
 
 class AppointmentPaymentResponse(BaseModel):

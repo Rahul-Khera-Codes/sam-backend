@@ -595,3 +595,75 @@ def test_find_next_slots_last_time_none_when_not_truncated():
     rahul_slots = [r for r in result if r["staff_name"] == "Rahul"]
     assert len(rahul_slots) == 1
     assert all(r["last_time"] is None for r in rahul_slots)
+
+
+# ── AIE-56 regression: a standing time-of-day preference ("an afternoon      ──
+# ── appointment, any day this week") must filter every day in the scan, not ──
+# ── just the first — the agent kept re-offering the same day (or handing    ──
+# ── back an unrelated day's morning slots) because after_time only ever     ──
+# ── applied to from_date itself (the AIE-43 "later, same day" behavior).    ──
+
+
+def test_find_next_slots_min_time_applies_across_every_day():
+    """Monday only has morning availability; Tuesday has afternoon availability.
+    Asking for min_time="12:00" starting Monday must skip Monday's non-matching
+    morning slots and return Tuesday's afternoon slots — not stop on Monday with
+    slots that don't actually match what the caller asked for."""
+    monday = _future_date(0)
+    tuesday = (datetime.strptime(monday, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    with patch("supabase_helpers._validate_booking_date", return_value=None), \
+         patch("supabase_helpers._fetch_user_availability", return_value=[
+             {"day_of_week": "monday", "is_available": True,
+              "start_time": "09:00", "end_time": "12:00"},
+             {"day_of_week": "tuesday", "is_available": True,
+              "start_time": "13:00", "end_time": "17:00"},
+         ]), \
+         patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
+         patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
+        result = _find_next_slots(
+            supabase=None,
+            business_id="biz",
+            location_id="loc",
+            user_entries=[{"user_id": "u1", "name": "Rahul"}],
+            slot_minutes=60,
+            from_date=monday,
+            max_days=5,
+            min_time="12:00",
+        )
+
+    assert len(result) > 0
+    assert all(r["date"] == tuesday for r in result)
+    assert all(r["time"] >= "12:00" for r in result)
+
+
+def test_find_next_slots_after_time_does_not_leak_into_later_days():
+    """after_time (the AIE-43 "later today" resume) must stay scoped to from_date
+    only — a later day's earlier slots are new offers the caller hasn't heard yet,
+    not something to re-hide. This is exactly why min_time had to be a separate
+    parameter rather than reusing after_time across the whole scan."""
+    monday = _future_date(0)
+    tuesday = (datetime.strptime(monday, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    with patch("supabase_helpers._validate_booking_date", return_value=None), \
+         patch("supabase_helpers._fetch_user_availability", return_value=[
+             {"day_of_week": "monday", "is_available": True,
+              "start_time": "09:00", "end_time": "10:00"},
+             {"day_of_week": "tuesday", "is_available": True,
+              "start_time": "09:00", "end_time": "10:00"},
+         ]), \
+         patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
+         patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
+        result = _find_next_slots(
+            supabase=None,
+            business_id="biz",
+            location_id="loc",
+            user_entries=[{"user_id": "u1", "name": "Rahul"}],
+            slot_minutes=60,
+            from_date=monday,
+            max_days=5,
+            after_time="15:00",  # later than Monday's only slot, so Monday is skipped
+        )
+
+    assert len(result) > 0
+    assert all(r["date"] == tuesday for r in result)  # Tuesday's 09:00 slot isn't hidden

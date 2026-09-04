@@ -278,10 +278,67 @@ from one created via the Scheduler's Custom Schedule dialog — both just filter
 (a holiday added from either screen should show up everywhere), but worth knowing if the two UIs
 ever need to diverge in meaning.
 
+## Feature updated 2026-09-04 (AIE-46) — Team Member Date Overrides moved back to Profile
+Sam asked (comment on AIE-46, with a screenshot of the "Team Member Date Overrides" card as it
+looked in the Business Hours tab) to move that card specifically — not "Business Date Overrides" —
+back into Profile Settings, under "My Availability."
+
+**Result:** `ai-employees-app/src/pages/dashboard/AccountSettings.tsx` now renders a "Team Member
+Date Overrides" card (same `DateOverrideModal`/`DateOverridesList` components, unchanged behavior,
+still `user_availability_overrides`) directly below the "My Availability" weekly-hours section.
+Removed from `ai-employees-app/src/pages/dashboard/BusinessSettings.tsx`'s Business Hours tab,
+which now shows only two cards: the weekly hours grid and "Business Date Overrides"
+(`custom_schedules`, unchanged). No component or data-model changes — this was a pure relocation of
+the existing per-user override UI, same as the underlying components take no props tied to Business
+Settings context.
+
 **Access control:** `custom_schedules` RLS restricts INSERT/UPDATE/DELETE to `admin`/`super_admin`.
 Business Settings (`/dashboard/settings/business`) is already gated to those same roles by default
 (`RESTRICTED_PAGES` in `src/lib/roles.ts`), so no new permission gap was introduced — confirmed
 before implementing, not assumed.
+
+## Bug fixed 2026-09-04 (AIE-56) — agent kept re-offering the same day for "afternoon, any day this week"
+Filed by Heather as a deliberate follow-up to AIE-43 ("I will report a separate ticket for the
+'any day of the week' issue") once the same-day "later time" fix was verified. Reported behavior:
+asking for an afternoon appointment without naming a specific day made the agent keep circling back
+to the first day it had already offered instead of checking other days in the week, until pressed
+repeatedly.
+
+Root cause: `find_next_available_slot` → `_find_next_slots` (`agent/supabase_helpers.py`) scans
+forward day-by-day and returns the first day with *any* slots — but its only "steer the search"
+parameter, `after_time` (added for AIE-43's "later, same day" fix), is deliberately restricted to
+`from_date` only (`if after_time and i == 0`) so a later day's untouched morning slots aren't hidden.
+That's correct for "later than what you just offered, same day," but gave the model no way to
+express "any day, but only afternoons" — a standing time-of-day preference that should hold across
+every day scanned, not just the first. The prompt's only instruction for "a different day" (step 6a)
+told the model to retry the *same* `from_date`/`date` with a bumped `after_time` and only "naturally"
+fall through to the next day once that came back empty — nothing told it to carry a time-of-day
+constraint forward across days, so it either kept re-checking the same day or landed on a different
+day's non-matching (e.g. morning-only) slots.
+
+**Fix:**
+- Added a new `min_time` parameter to `_find_next_slots` (`agent/supabase_helpers.py`), distinct from
+  `after_time`: it filters every day in the scan (not just `i == 0`), so `min_time="12:00"` finds the
+  first day that actually has an afternoon slot, skipping non-matching days entirely rather than
+  stopping on the first day that has *some* (possibly wrong-time-of-day) opening.
+- Threaded `min_time` through `find_next_available_slot` (`agent/agent.py`) as an optional tool
+  parameter, with its own docstring explaining when to use it instead of `after_time`.
+- Added prompt step 6a-2 (`agent/prompt_builder.py`) telling the model: when the caller's ask is a
+  standing time-of-day preference not tied to the day already offered ("anything in the afternoon
+  this week", "any day, just not mornings"), call `find_next_available_slot` again with `min_time`
+  instead of re-checking the same day.
+- Added regression tests in `agent/tests/test_booking_validation.py`:
+  `test_find_next_slots_min_time_applies_across_every_day` (Monday morning-only + Tuesday
+  afternoon-only availability, `min_time="12:00"` must skip Monday and return Tuesday) and
+  `test_find_next_slots_after_time_does_not_leak_into_later_days` (locks in the pre-existing
+  `after_time`-is-`from_date`-only invariant this fix depends on, so a future change can't
+  accidentally make `after_time` and `min_time` collide). Full `agent/tests/` suite run: 52 passed,
+  1 pre-existing unrelated failure (`test_prompt_builder.py::test_build_instructions_custom_greeting_replaces_welcome_block`,
+  flagged during AIE-43's 2026-09-03 pass, not touched here).
+- **Not investigated:** the ticket notes "Brand Voice is set to Friendly and Conversational in
+  Global Settings" — no code path connects brand-voice tone/style to search or tool-call behavior
+  (`_format_brand_voice` only affects phrasing), so this is very likely incidental context from the
+  business used to reproduce, not a causal factor. Flagged here rather than assumed away.
 
 ## Decisions / tradeoffs
 - **Frontend hint mirrors backend logic rather than calling an API.** No new backend endpoint was

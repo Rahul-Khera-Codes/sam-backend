@@ -28,7 +28,11 @@ total, and payment count — broken down by date, payment type, and employee. Fi
   Permissions.
 - **Two assumptions not specified in the ticket**, flagged and accepted:
   - Buckets/filters by `paid_at` (when money came in), not `appointment_date`.
-  - Excludes entries whose invoice has `refunded_at` set — a refund isn't "money made."
+  - Excludes refunds from "money made" — updated for AIE-50's partial-refund follow-up: the entries
+    query now filters `entry_type != "refund"` directly (a refund entry sits in the same table as
+    payment entries, see [[project_ai_employees_repos|appointment-payments.md]]), on top of the
+    original invoice-level `refunded_at` exclusion which still applies for pre-AIE-50 historical
+    rows that used the old all-or-nothing toggle.
 - **Employee codes shown in "By Employee (Collected)" only, as snapshots** — the user asked to
   show codes since this page is Admin/Manager-only, but this deliberately does **not** expose each
   employee's live `user_roles.check_in_code`, which AIE-28 made write-only (an Admin sees it once
