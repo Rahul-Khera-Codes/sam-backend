@@ -383,6 +383,7 @@ class Assistant(Agent):
         staff_name: str = "",
         from_date: str = "",
         after_time: str = "",
+        min_time: str = "",
     ) -> str:
         """
         Find the next available appointment slot, scanning forward from today (or from_date).
@@ -395,6 +396,12 @@ class Assistant(Agent):
         what you already offered, call this again with the same from_date/staff_name and
         after_time set to the last time you offered, to search for a later slot that same day
         before moving on to the next day.
+        min_time is optional HH:MM (24-hour) — use this instead of after_time when the caller
+        has a standing time-of-day preference that isn't tied to the day you already offered
+        (e.g. "an afternoon appointment, any day this week" → min_time="12:00"). Unlike
+        after_time, min_time filters every day of the scan, not just the first one, so it finds
+        the first day that actually has a matching slot instead of getting stuck re-checking the
+        same day or returning an unrelated day's morning slots.
         """
         if not self._supabase:
             return "Availability check is unavailable right now."
@@ -440,13 +447,15 @@ class Assistant(Agent):
             from_date=start,
             max_days=30,
             after_time=after_time or None,
+            min_time=min_time or None,
             business_timezone=self._business_timezone,
         )
 
         if not slots:
             search_desc = f"with {staff_name}" if staff_name else "with any available staff"
+            time_desc = f" at or after {_fmt_time_12h(min_time)}" if min_time else ""
             msg = (
-                f"I couldn't find any available slots {search_desc} "
+                f"I couldn't find any available slots {search_desc}{time_desc} "
                 f"in the next 30 days. You may want to call back or check with the team directly."
             )
             logger.info("find_next_available_slot: no slots found — service=%s staff=%s", service_name, staff_name)

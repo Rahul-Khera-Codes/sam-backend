@@ -172,6 +172,7 @@ async def get_payment_summary_report(
         supabase_admin.table("appointment_payment_entries")
         .select("id, payment_type, amount, paid_at, collected_by_user_id, collected_by_code, appointment_payment_id")
         .eq("business_id", business_id)
+        .neq("entry_type", "refund")
         .gte("paid_at", start_iso)
         .lt("paid_at", end_iso_exclusive)
         .in_("appointment_payment_id", list(invoices_by_id.keys()))
@@ -307,6 +308,7 @@ async def get_revenue_summary(
             supabase_admin.table("appointment_payment_entries")
             .select("appointment_payment_id, amount, paid_at")
             .eq("business_id", business_id)
+            .neq("entry_type", "refund")
             .gte("paid_at", range_start_iso)
             .lt("paid_at", range_end_iso_exclusive)
             .in_("appointment_payment_id", list(invoices_by_id.keys()))
@@ -333,11 +335,11 @@ async def get_revenue_summary(
 
     # Outstanding balance is all-time (not week-scoped) -- a separate query over
     # every invoice for the business/location. Refunded invoices are included:
-    # compute_invoice_status treats a refund as reverting the invoice to fully
-    # owing, so they can still surface here if that owing amount is > 0.
+    # compute_invoice_status nets refund entries out of paid_amount, so a fully or
+    # partially refunded invoice can still surface here if that owing amount is > 0.
     outstanding_query = (
         supabase_admin.table("appointment_payments")
-        .select("id, appointment_id, grand_total, refunded_at")
+        .select("id, appointment_id, grand_total")
         .eq("business_id", business_id)
     )
     if location_id:
@@ -352,7 +354,7 @@ async def get_revenue_summary(
         invoice_ids = [inv["id"] for inv in outstanding_invoices]
         all_entries = (
             supabase_admin.table("appointment_payment_entries")
-            .select("appointment_payment_id, amount")
+            .select("appointment_payment_id, amount, entry_type")
             .in_("appointment_payment_id", invoice_ids)
             .execute()
             .data
@@ -366,7 +368,7 @@ async def get_revenue_summary(
         owing_by_appointment: dict[str, Decimal] = {}
         for inv in outstanding_invoices:
             derived = booking_service.compute_invoice_status(
-                inv.get("grand_total"), entries_by_invoice.get(inv["id"], []), inv.get("refunded_at")
+                inv.get("grand_total"), entries_by_invoice.get(inv["id"], [])
             )
             owing = Decimal(str(derived["owing_amount"]))
             if owing > 0:

@@ -185,9 +185,7 @@ def _get_payment_row_or_404(appointment_id: str, business_id: str) -> dict:
 
 def _build_full_payment_response(payment_row: dict) -> dict:
     entries = _fetch_payment_entries(payment_row["id"])
-    derived = booking_service.compute_invoice_status(
-        payment_row.get("grand_total"), entries, payment_row.get("refunded_at")
-    )
+    derived = booking_service.compute_invoice_status(payment_row.get("grand_total"), entries)
     return {
         **payment_row,
         "entries": entries,
@@ -269,7 +267,7 @@ async def list_appointments(
 
     payments = (
         supabase_admin.table("appointment_payments")
-        .select("id, appointment_id, grand_total, refunded_at")
+        .select("id, appointment_id, grand_total")
         .eq("business_id", business_id)
         .in_("appointment_id", appointment_ids)
         .execute()
@@ -283,7 +281,7 @@ async def list_appointments(
     if payment_ids:
         entries = (
             supabase_admin.table("appointment_payment_entries")
-            .select("appointment_payment_id, amount, paid_at")
+            .select("appointment_payment_id, amount, paid_at, entry_type")
             .in_("appointment_payment_id", payment_ids)
             .execute()
             .data
@@ -303,7 +301,6 @@ async def list_appointments(
             derived = booking_service.compute_invoice_status(
                 payment.get("grand_total"),
                 entries_by_payment.get(payment["id"], []),
-                payment.get("refunded_at"),
             )
             payment_status = derived["status"]
             owing_amount = derived["owing_amount"]
@@ -542,6 +539,21 @@ async def update_payment_entry(
         amount = _money(body.amount)
         if amount <= 0:
             raise HTTPException(status_code=400, detail="Payment amount must be greater than zero")
+
+        entries = _fetch_payment_entries(payment_row["id"])
+        current_entry = next((e for e in entries if e["id"] == entry_id), None)
+        if current_entry and current_entry.get("entry_type") == "refund":
+            # Re-validate against the amount paid, excluding this entry's own (old)
+            # amount so raising it can't be used to sneak past the refund cap.
+            other_entries = [e for e in entries if e["id"] != entry_id]
+            paid_amount = _money(
+                booking_service.compute_invoice_status(payment_row.get("grand_total"), other_entries)["paid_amount"]
+            )
+            if amount > paid_amount:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Refund amount cannot exceed the amount paid (${paid_amount:.2f})",
+                )
         updates["amount"] = float(amount)
     if body.note is not None:
         updates["note"] = body.note
@@ -588,35 +600,41 @@ async def refund_appointment_payment(
     body: RefundPaymentRequest,
     user_id: str = Depends(get_user_id),
 ):
+    """Records a refund as an entry_type="refund" ledger entry (AIE-50 follow-up:
+    partial refunds, not an all-or-nothing toggle). created_by on the entry is the
+    audit record of who processed it. Undoing a refund is just deleting that entry
+    via DELETE /payment/entries/{entry_id} -- no separate "unrefund" endpoint."""
     verify_business_access(user_id, body.business_id)
     payment_row = _get_payment_row_or_404(appointment_id, body.business_id)
 
-    result = (
-        supabase_admin.table("appointment_payments")
-        .update({"refunded_at": datetime.now(timezone.utc).isoformat(), "updated_by": user_id})
-        .eq("id", payment_row["id"])
-        .execute()
-    )
+    amount = _money(body.amount)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Refund amount must be greater than zero")
+
+    entries = _fetch_payment_entries(payment_row["id"])
+    paid_amount = _money(booking_service.compute_invoice_status(payment_row.get("grand_total"), entries)["paid_amount"])
+    if amount > paid_amount:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Refund amount cannot exceed the amount paid (${paid_amount:.2f})",
+        )
+
+    entry_row = {
+        "appointment_payment_id": payment_row["id"],
+        "business_id": body.business_id,
+        "entry_type": "refund",
+        "payment_type": body.payment_type,
+        "amount": float(amount),
+        "note": body.note,
+        "created_by": user_id,
+        "updated_by": user_id,
+    }
+    if _get_business_code_flags(body.business_id)["require_payment_employee_code"]:
+        entry_row["collected_by_user_id"] = _resolve_employee_code(body.business_id, body.employee_code)
+        entry_row["collected_by_code"] = body.employee_code
+
+    result = supabase_admin.table("appointment_payment_entries").insert(entry_row).execute()
     if not result.data:
-        raise HTTPException(status_code=500, detail="Failed to mark payment refunded")
-    return _build_full_payment_response(result.data[0])
+        raise HTTPException(status_code=500, detail="Failed to record refund")
 
-
-@router.delete("/{appointment_id}/payment/refund", response_model=AppointmentPaymentResponse)
-async def unrefund_appointment_payment(
-    appointment_id: str,
-    business_id: str,
-    user_id: str = Depends(get_user_id),
-):
-    verify_business_access(user_id, business_id)
-    payment_row = _get_payment_row_or_404(appointment_id, business_id)
-
-    result = (
-        supabase_admin.table("appointment_payments")
-        .update({"refunded_at": None, "updated_by": user_id})
-        .eq("id", payment_row["id"])
-        .execute()
-    )
-    if not result.data:
-        raise HTTPException(status_code=500, detail="Failed to clear refund status")
-    return _build_full_payment_response(result.data[0])
+    return _build_full_payment_response(payment_row)

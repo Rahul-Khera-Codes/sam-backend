@@ -40,33 +40,47 @@ def _money(value) -> Decimal:
     return Decimal(str(value or 0)).quantize(MONEY_QUANT, rounding=ROUND_HALF_UP)
 
 
-def compute_invoice_status(
-    grand_total,
-    entries: list[dict],
-    refunded_at: Optional[str] = None,
-) -> dict:
-    """Derives paid_amount/owing_amount/status/paid_at from an invoice's grand_total
-    and its payment entries. Never stored directly -- always computed at read time,
-    since partial/split payments can be added or edited independently of the invoice
-    row. Shared by appointments.py's payment endpoints, the dashboard appointments
-    list, and the dashboard revenue-summary's outstanding-balance calculation."""
-    grand_total_dec = _money(grand_total)
-    paid_amount = Decimal("0.00")
-    fully_paid_at: Optional[str] = None
-    for entry in entries:
-        paid_amount += _money(entry.get("amount"))
-        if fully_paid_at is None and paid_amount >= grand_total_dec and grand_total_dec > 0:
-            fully_paid_at = entry.get("paid_at")
+def compute_invoice_status(grand_total, entries: list[dict]) -> dict:
+    """Derives paid_amount/owing_amount/status/paid_at/refunded_at from an invoice's
+    grand_total and its payment entries. Never stored directly -- always computed at
+    read time, since partial/split payments (and now partial refunds) can be added or
+    edited independently of the invoice row. Shared by appointments.py's payment
+    endpoints, the dashboard appointments list, and the dashboard revenue-summary's
+    outstanding-balance calculation.
 
-    if refunded_at:
-        # The money was returned to the client, so none of it counts toward
-        # paid_amount anymore -- the invoice reverts to fully owing even though
-        # the original entries stay on record for history.
+    Entries are a single ledger distinguished by entry_type: "payment" (money
+    collected) or "refund" (money returned to the client, AIE-50). paid_amount is
+    the net of the two -- a partial refund just reduces it and owing_amount reopens
+    by the same amount; a full refund brings paid_amount back to zero, which is
+    reported as status "refunded" rather than "unpaid" so the history is visible.
+    """
+    grand_total_dec = _money(grand_total)
+    collected = Decimal("0.00")
+    refunded = Decimal("0.00")
+    fully_paid_at: Optional[str] = None
+    last_refunded_at: Optional[str] = None
+    for entry in entries:
+        amount = _money(entry.get("amount"))
+        if entry.get("entry_type") == "refund":
+            refunded += amount
+            paid_at = entry.get("paid_at")
+            if paid_at and (last_refunded_at is None or paid_at > last_refunded_at):
+                last_refunded_at = paid_at
+        else:
+            collected += amount
+            net_so_far = collected - refunded
+            if fully_paid_at is None and net_so_far >= grand_total_dec and grand_total_dec > 0:
+                fully_paid_at = entry.get("paid_at")
+
+    paid_amount = collected - refunded
+    if paid_amount < 0:
+        # Shouldn't happen -- refunds are validated against paid_amount at creation
+        # time -- but never report a negative "amount paid".
         paid_amount = Decimal("0.00")
 
     owing_amount = (grand_total_dec - paid_amount).quantize(MONEY_QUANT, rounding=ROUND_HALF_UP)
 
-    if refunded_at:
+    if refunded > 0 and paid_amount <= 0:
         status = "refunded"
     elif paid_amount <= 0:
         status = "unpaid"
@@ -80,6 +94,7 @@ def compute_invoice_status(
         "owing_amount": float(owing_amount),
         "status": status,
         "paid_at": fully_paid_at,
+        "refunded_at": last_refunded_at,
     }
 
 

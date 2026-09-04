@@ -3,8 +3,9 @@
 ## What it does
 Business Settings → Integrations → Marketing Integrations lets a tenant connect its own
 social profiles so the Marketing Employee can auto-publish generated campaign assets on a
-schedule. Instagram and X shipped first; LinkedIn was added fully wired, but **unverified** —
-no LinkedIn Developer app exists yet.
+schedule. Instagram and X shipped first; LinkedIn (personal-profile posting) went live
+2026-09-04 (AIE-32) once a real LinkedIn Developer app ("AI Employees Inc.") was created.
+LinkedIn Company Page posting is a separate follow-up — see "LinkedIn" below.
 
 > **TikTok was removed (AIE-52, 2026-09-03).** It was previously "fully wired, credentials
 > live" (OAuth, video/photo publish, privacy picker) but never passed TikTok's Content Posting
@@ -46,21 +47,46 @@ Single generic table, no schema change needed to add a provider:
   and a polling/webhook job pipeline. Until then, publishing uses AI-generated **photos**, not
   video.
 
-### LinkedIn — built but unverified (no Developer app yet)
+### LinkedIn — personal-profile posting live (AIE-32, 2026-09-04)
 - Auth: standard `https://www.linkedin.com/oauth/v2/authorization` → token exchange at
-  `/oauth/v2/accessToken`. Scopes: `openid profile email w_member_social`. Identity via OIDC
-  `GET https://api.linkedin.com/v2/userinfo`.
-- Publish: `_publish_to_linkedin` — image-only. Registers an image upload
+  `/oauth/v2/accessToken`. Scopes: `openid profile email w_member_social` (self-serve
+  "Sign In with LinkedIn using OpenID Connect" + "Share on LinkedIn" products — both
+  auto-approved instantly). Identity via OIDC `GET https://api.linkedin.com/v2/userinfo`.
+- Publish: `_publish_to_linkedin` — image-only, posts as the connected **member** (author URN
+  `urn:li:person:{id}`), not a Company Page. Registers an image upload
   (`POST /rest/images?action=initializeUpload`), PUTs bytes, then
   `POST /rest/posts` with `LinkedIn-Version` + `X-Restli-Protocol-Version: 2.0.0` headers.
   Post id comes back in the `x-restli-id` response header.
-- Config: `MARKETING_LINKEDIN_CLIENT_ID`/`_SECRET` (currently blank — integration 501s until
-  set), redirect URIs, `MARKETING_LINKEDIN_API_VERSION` (defaults `202502`, bump when tested).
-- **Known risk**: this was built from LinkedIn's current public docs but has never been
-  exercised against a real LinkedIn Developer app. When a real app is created, verify: the
-  exact API products granted ("Share on LinkedIn" vs "Community Management API" have
-  different scope names/approval flows), and bump `MARKETING_LINKEDIN_API_VERSION` to
-  whatever's current at that time.
+- Config: `MARKETING_LINKEDIN_CLIENT_ID`/`_SECRET` set in `backend/.env` (LinkedIn Developer
+  app "AI Employees Inc.", client ID `86q1jafz5xj00p`). Redirect URIs and
+  `MARKETING_LINKEDIN_API_VERSION` (`202502`) use their existing defaults.
+- **Fixed 2026-09-04**: `marketing_platform_integrations.provider` CHECK constraint only ever
+  allowed `('instagram', 'x')` — LinkedIn OAuth would complete but fail to persist. Migration
+  `20260904120000_add_linkedin_provider.sql` added `'linkedin'` to the allow-list.
+- **Redirect URI gotcha**: the LinkedIn app's Auth tab must have
+  `https://portal.aiemployeesinc.com/integrations/marketing/linkedin/callback` registered
+  (note the `/marketing/` segment — this repo's older setup docs, written before the app
+  existed, incorrectly said `/integrations/linkedin/callback` with no `/marketing/`; that's
+  what got registered first and had to be corrected by adding the right URL alongside it).
+- **No refresh tokens on this product tier.** `w_member_social` access tokens last 60 days and
+  LinkedIn does not issue a `refresh_token` outside the Marketing Developer Platform — the only
+  path to a new token is sending the member through the LinkedIn consent screen again.
+  `_refresh_linkedin_access_token` exists in code but will never actually run since no refresh
+  token is ever stored. Current handling is minimal: `token_expires_at` is stored, and a
+  scheduled-post publish attempt against an expired/broken token fails and surfaces
+  "Reconnect" in the Integrations tab like any other provider error — no proactive
+  before-expiry reminder yet.
+- **Company Page posting is a separate, gated follow-up.** Posting as an organization instead
+  of a member requires the `w_organization_social` scope via LinkedIn's **Community Management
+  API**, which is not self-serve: it needs a use-case application through the Marketing
+  Developer Platform partner program (legal company name, registered address, business email,
+  website, privacy policy URL), 1–4 weeks for Development-tier approval (capped at 500
+  calls/day), then a screencast demo of the live login+posting flow to reach Standard tier.
+  Once approved, implementation needs: requesting `w_organization_social` in the auth-url scope,
+  a step to look up which Company Pages the connecting member administers
+  (`organizationAcls?q=roleAssignee`), a page-picker in the connect UI, storing the chosen
+  `provider_page_id` (column already exists, unused by LinkedIn today), and switching
+  `_publish_to_linkedin`'s `author` URN to `urn:li:organization:{id}`.
 
 ## Key files
 **Backend (sam-backend)**

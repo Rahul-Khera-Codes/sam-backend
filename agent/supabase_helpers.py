@@ -838,6 +838,7 @@ def _find_next_slots(
     from_date: str,
     max_days: int = 30,
     after_time: str | None = None,
+    min_time: str | None = None,
     business_timezone: str = "UTC",
 ) -> list[dict]:
     """
@@ -845,7 +846,12 @@ def _find_next_slots(
     user_entries: list of {"user_id": str, "name": str}
     after_time: optional HH:MM (24-hour) — when given, slots on from_date earlier than this
     time are excluded, so a caller can ask for something later than what was already offered.
-    Only applies to from_date itself; later days in the scan are unaffected.
+    Only applies to from_date itself; later days in the scan are unaffected, since a later
+    day's morning slots haven't been offered yet and shouldn't be hidden.
+    min_time: optional HH:MM (24-hour) — when given, slots earlier than this time are excluded
+    on EVERY day scanned, not just from_date. Use for a standing time-of-day preference (e.g.
+    "afternoons only, any day this week") that should hold across the whole scan, unlike
+    after_time which only resumes the search on the single day already offered.
     Returns list of {"date": str, "time": str, "staff_name": str, "staff_user_id": str}.
     Returns at most 3 slots per staff member for the first available day.
     Returns [] if no availability found within max_days.
@@ -889,6 +895,8 @@ def _find_next_slots(
                 )
                 if after_time and i == 0:
                     slots = [s for s in slots if s >= after_time]
+                if min_time:
+                    slots = [s for s in slots if s >= min_time]
                 last_slot = slots[-1] if len(slots) > 3 else None
                 for slot in slots[:3]:  # cap at 3 per staff member shown, but remember the true last one
                     day_slots.append({

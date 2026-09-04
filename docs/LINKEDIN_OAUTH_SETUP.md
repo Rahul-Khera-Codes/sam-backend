@@ -33,8 +33,12 @@ On the app's **Auth** tab:
 1. Note the **Client ID** and **Client Secret** (click "Show" for the secret)
 2. Under **Authorized redirect URLs for your app**, add:
    ```
-   https://portal.aiemployeesinc.com/integrations/linkedin/callback
+   https://portal.aiemployeesinc.com/integrations/marketing/linkedin/callback
    ```
+   (Note the `/marketing/` segment — this doc previously omitted it, which caused a
+   redirect_uri mismatch when the real app was created. See
+   `docs/features/marketing-platform-integrations.md` for what actually shipped and the
+   Company Page follow-up.)
 3. Confirm the **OAuth 2.0 scopes** section shows: `openid`, `profile`, `email`, `w_member_social`
 
 ## Step 4 — Send Credentials
