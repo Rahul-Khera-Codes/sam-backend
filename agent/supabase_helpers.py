@@ -916,6 +916,86 @@ def _find_next_slots(
     return []
 
 
+def _find_latest_slot(
+    supabase,
+    business_id: str,
+    location_id: str | None,
+    user_entries: list[dict],
+    slot_minutes: int,
+    from_date: str,
+    within_days: int = 7,
+    min_time: str | None = None,
+    business_timezone: str = "UTC",
+) -> dict | None:
+    """
+    Scan forward from from_date (YYYY-MM-DD) across `within_days` calendar days (inclusive of
+    from_date) and return the single LATEST matching slot in that window — i.e. the slot with
+    the greatest (date, time), not the first day that has any opening.
+
+    This is the counterpart to _find_next_slots, which stops at the first day with any match
+    and therefore structurally can't answer "what's the latest appointment this week" — it
+    never looks at, or compares against, later days once an earlier match is found.
+
+    min_time: optional HH:MM (24-hour) floor applied on every day scanned, same semantics as
+    _find_next_slots's min_time (e.g. "afternoons only, but give me the latest one that week").
+    Returns {"date": str, "time": str, "staff_name": str, "staff_user_id": str} or None if no
+    matching slot exists anywhere in the window.
+    """
+    try:
+        start = datetime.strptime(from_date, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+    today = _local_now(business_timezone).date()
+    if start < today:
+        start = today
+
+    availability_cache: dict[str, list[dict]] = {}
+    for entry in user_entries:
+        uid = entry["user_id"]
+        try:
+            availability_cache[uid] = _fetch_user_availability(supabase, uid)
+        except Exception as e:
+            logger.warning("_find_latest_slot: failed to fetch availability for %s: %s", uid, e)
+            availability_cache[uid] = []
+
+    best: dict | None = None
+    for i in range(within_days):
+        check_date = start + timedelta(days=i)
+        date_str = check_date.strftime("%Y-%m-%d")
+
+        if _validate_booking_date(supabase, business_id, location_id, date_str, business_timezone):
+            continue  # closed day — skip
+
+        for entry in user_entries:
+            user_id = entry["user_id"]
+            name = entry["name"]
+            try:
+                availability = availability_cache.get(user_id, [])
+                overrides = _fetch_user_overrides(supabase, user_id, date_str)
+                booked = _fetch_appointments_on_date(supabase, user_id, date_str)
+                slots = _compute_available_slots(
+                    availability, overrides, booked, date_str, slot_minutes, business_timezone,
+                )
+                if min_time:
+                    slots = [s for s in slots if s >= min_time]
+                if not slots:
+                    continue
+                latest_time = slots[-1]
+                if best is None or (date_str, latest_time) > (best["date"], best["time"]):
+                    best = {
+                        "date": date_str,
+                        "time": latest_time,
+                        "staff_name": name,
+                        "staff_user_id": user_id,
+                    }
+            except Exception as e:
+                logger.warning("_find_latest_slot: error for user %s on %s: %s", user_id, date_str, e)
+                continue
+
+    return best
+
+
 def _is_feature_enabled_for_location(
     supabase,
     business_id: str,

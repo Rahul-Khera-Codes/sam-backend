@@ -1,4 +1,4 @@
-# Employee Check-in / Payment Codes (AIE-28)
+# Employee Check-in / Payment Codes (AIE-28, AIE-58)
 
 ## What it does
 Businesses that share one front-desk login across staff had no way to tell *which employee*
@@ -7,6 +7,9 @@ disputes/errors. Each team member can now be given an optional 4-digit code. An 
 independently require that code before (a) marking an appointment "Checked In"/"No Show"/
 "Cancelled" and/or (b) recording a payment entry. The resolved employee identity is stored
 alongside the action.
+
+**AIE-58 (2026-09-05)** extended (b) to also gate *deleting* a payment/refund entry, and to keep
+a permanent record of who deleted it — see "Deleting a payment/refund entry" below.
 
 **Attribution is captured either way, code-required or not** (as of 2026-08-27): if the business
 hasn't turned the code requirement on, the action is attributed to whoever is actually logged in
@@ -37,11 +40,21 @@ under Decisions/tradeoffs.
   employee's code, historical records still show whatever was actually entered at the time, while
   the `_user_id` column still correctly resolves to the same employee regardless. Same
   `^[0-9]{4}$` format check as the live code column.
+- `appointment_payment_entry_deletions` (added AIE-58) — a standalone insert-only audit table, not
+  a column triplet on `appointment_payment_entries`, since deleting an entry is a **hard delete**
+  (the row itself is gone, so `deleted_by_*` can't live on it). Snapshots the deleted entry's own
+  data (`payment_entry_id`, `appointment_payment_id`, `business_id`, `entry_type`, `payment_type`,
+  `amount`, `note`, `paid_at`, `collected_by_user_id`/`collected_by_code`) plus
+  `deleted_by_user_id` + `deleted_by_code` (same immutable-snapshot format as the other `_code`
+  columns) + `deleted_at`. RLS: `FOR SELECT` only, scoped by `business_id` — no write policy,
+  since only the backend's service-role client ever inserts into it.
 - Migrations: `ai-employees-app/supabase/migrations/20260824060000_employee_checkin_codes.sql`
   (base feature), `20260824101200_employee_checkin_code_snapshot.sql` (the `_code` snapshot
-  columns), and `20260827120000_appointment_status_attribution.sql` (the `no_show_by_*` /
+  columns), `20260827120000_appointment_status_attribution.sql` (the `no_show_by_*` /
   `cancelled_by_*` triplets, added 2026-08-27 per an AIE-28 client follow-up asking the UI to show
-  who marked an appointment No Show/Cancelled and when, not just Checked In).
+  who marked an appointment No Show/Cancelled and when, not just Checked In), and
+  `20260905090000_payment_entry_deletion_audit.sql` (the `appointment_payment_entry_deletions`
+  table, AIE-58).
 - **Gap:** the AI voice agent can also cancel an appointment directly
   (`agent/executive_agent.py`, `agent/agent.py`) via a code path that bypasses this endpoint
   entirely (by design — there's no human employee to attribute on an agent-driven action). Those
@@ -59,9 +72,14 @@ below) — otherwise there'd be no way for them to actually learn it.
 - `backend/app/routers/appointments.py` — `_resolve_employee_code()` / `_get_business_code_flags()`
   helpers; `update_appointment_status` (gates on `require_checkin_employee_code`, for the
   `checked_in`, `no_show`, and `cancelled` transitions — attribution now written for all three,
-  each to its own column triplet) and `add_payment_entry` (gates on `require_payment_employee_code`)
-  both accept an optional `employee_code` and 422 with "Employee code required"/"Invalid employee
-  code" when the flag is on and the code is missing/wrong.
+  each to its own column triplet), `add_payment_entry`/`refund_appointment_payment` (gate on
+  `require_payment_employee_code`), and `delete_payment_entry` (AIE-58, same flag) all accept an
+  optional `employee_code` and 422 with "Employee code required"/"Invalid employee code" when the
+  flag is on and the code is missing/wrong. `delete_payment_entry` always attributes the delete
+  (code-resolved user when the flag is on, otherwise the authenticated `user_id`, same fallback
+  `update_appointment_status` uses — see Decisions/tradeoffs) by inserting a snapshot row into
+  `appointment_payment_entry_deletions` before returning, built from the row Postgrest's
+  `.delete()` itself returns (no extra SELECT needed to capture the entry before it's gone).
 - `backend/app/routers/roles.py` — admin-only endpoints (reuses the existing `_require_admin`
   helper): `GET /roles/check-in-codes` (per-member `has_code` status, never the code itself),
   `PUT /roles/users/{id}/check-in-code` (set/reset one member's code, custom or auto-generated,
@@ -81,8 +99,12 @@ below) — otherwise there'd be no way for them to actually learn it.
   before marking an appointment Checked In, No Show, or Cancelled when
   `business.require_checkin_employee_code` is true. The `EmployeeCodeDialog` title/description are
   worded per target status.
-- `src/components/appointments/PaymentDetailsDialog.tsx` — `submitEntry`: same gate on "Add
-  Payment" for `business.require_payment_employee_code`.
+- `src/components/appointments/PaymentDetailsDialog.tsx` — `submitEntry`/`submitRefund`: same gate
+  on "Add Payment"/"Record Refund" for `business.require_payment_employee_code`.
+  `handleDeleteEntryClick`/`handleDeleteEntry` (AIE-58): same gate on the trash-icon delete button
+  for both payment and refund entries (one endpoint/button covers both — refunds are just
+  `entry_type = 'refund'` rows in the same ledger), via a `deleteGateEntryId` state carrying which
+  entry is pending deletion, mirroring Calendar's `codeGateAction` pattern.
 - `src/pages/dashboard/TeamManagement.tsx` — per-member "Set/Reset Employee Code" menu item, a
   "No employee code set" indicator, and a page-level "Generate codes for N missing" bulk action.
   Admin/super_admin only (`isAdmin`).
@@ -185,6 +207,12 @@ This is now surfaced directly on the two existing screens rather than a separate
 - **Code required for `checked_in`, `no_show`, and `cancelled`** (not `confirmed`). Originally
   scoped to `checked_in` only, matching the ticket's literal wording — widened 2026-08-26 after a
   QA comment on AIE-28 asked for the same requirement on No Show/Cancelled.
+- **Deletion audit has no UI surface yet (AIE-58, 2026-09-05).** `appointment_payment_entry_deletions`
+  rows are captured on every delete but nothing renders them in the app today — same starting point
+  as `no_show_by_*`/`cancelled_by_*` before their 2026-08-27 follow-up added the Appointment Details
+  attribution line. Deliberately out of scope for AIE-58 (the ticket asked to gate the delete and
+  keep a record, not to add a report view); can be surfaced later the same way if asked, e.g. from
+  a query against this table by `business_id`.
 - **Attribution now recorded for all three gated transitions, not just `checked_in`.** Initially
   (2026-08-26) No Show/Cancelled were gate-only — code validated but nothing recorded — as a
   deliberate scope decision to avoid a migration. Reversed 2026-08-27 after the client asked

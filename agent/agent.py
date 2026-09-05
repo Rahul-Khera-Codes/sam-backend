@@ -62,6 +62,7 @@ from supabase_helpers import (
     _validate_booking_date,
     _validate_staff_availability,
     _find_next_slots,
+    _find_latest_slot,
     _fetch_documents_for_location,
 )
 from sms_helpers import (
@@ -490,6 +491,103 @@ class Assistant(Agent):
 
         result = f"The next available is {date_label}. {'. '.join(parts)}."
         logger.info("find_next_available_slot: → %s", result)
+        return result
+
+    @function_tool()
+    async def find_latest_available_slot(
+        self,
+        context: RunContext,
+        service_name: str,
+        staff_name: str = "",
+        from_date: str = "",
+        within_days: int = 7,
+        min_time: str = "",
+    ) -> str:
+        """
+        Find the single LATEST available appointment slot within a bounded window. Use this
+        specifically when the caller asks for the latest/last appointment — e.g. "what's your
+        latest appointment this week?", "what's the latest you've got available?", "anything
+        later during the week?" — as opposed to find_next_available_slot, which finds the
+        SOONEST slot. Do NOT try to answer a "latest this week" question using
+        find_next_available_slot's result for a single day — that tool only reports the
+        soonest matching day and has not checked whether a later day has an even later slot;
+        only this tool actually compares across the whole window before answering. Call this
+        tool before telling the caller what the latest slot is — never state a "latest this
+        week" answer based on a single day's result alone.
+        If staff_name is given, searches only that person; empty searches all qualified staff.
+        from_date is optional YYYY-MM-DD; defaults to today.
+        within_days is optional, defaults to 7 (i.e. "this week") — how many days ahead to
+        search for the latest match.
+        min_time is optional HH:MM (24-hour) — restrict to a time-of-day floor (e.g.
+        "afternoons only" → min_time="12:00") while still finding the latest match within
+        that floor.
+        """
+        if not self._supabase:
+            return "Availability check is unavailable right now."
+
+        slot_minutes = 60
+        svc = self._resolve_service(service_name) if service_name else None
+        if svc and svc.get("duration_minutes"):
+            slot_minutes = svc["duration_minutes"]
+
+        if staff_name:
+            staff = self._resolve_staff(staff_name)
+            if not staff:
+                return f"Staff member '{staff_name}' not found."
+            user_entries = [{"user_id": staff["user_id"], "name": staff["name"]}]
+        else:
+            if service_name and svc is None:
+                return f"I don't recognise the service '{service_name}'. Please use get_services to list available services."
+            service_id = svc.get("id") if svc else None
+            candidates = []
+            for s in self._staff:
+                if not s.get("user_id"):
+                    continue
+                if service_id:
+                    offered = self._user_service_ids.get(s["user_id"], [])
+                    if service_id not in offered:
+                        continue
+                candidates.append({"user_id": s["user_id"], "name": s["name"]})
+            if not candidates:
+                service_label = svc["name"] if svc else service_name
+                return f"No staff at this location offer {service_label}."
+            user_entries = candidates
+
+        start = from_date or _local_now(self._business_timezone).strftime("%Y-%m-%d")
+        days = max(1, min(within_days or 7, 30))
+
+        best = _find_latest_slot(
+            supabase=self._supabase,
+            business_id=self._business_id,
+            location_id=self._location_id,
+            user_entries=user_entries,
+            slot_minutes=slot_minutes,
+            from_date=start,
+            within_days=days,
+            min_time=min_time or None,
+            business_timezone=self._business_timezone,
+        )
+
+        if not best:
+            time_desc = f" at or after {_fmt_time_12h(min_time)}" if min_time else ""
+            msg = (
+                f"I couldn't find any available slots{time_desc} in the next {days} days. "
+                f"You may want to check a further-out date or a different staff member."
+            )
+            logger.info("find_latest_available_slot: no slots found — service=%s staff=%s", service_name, staff_name)
+            return msg
+
+        try:
+            d = datetime.strptime(best["date"], "%Y-%m-%d")
+            date_label = d.strftime(f"%A %B {d.day}")
+        except Exception:
+            date_label = best["date"]
+
+        result = (
+            f"The latest available slot in the next {days} days is on {date_label} "
+            f"at {_fmt_time_12h(best['time'])} with {best['staff_name']}."
+        )
+        logger.info("find_latest_available_slot: → %s", result)
         return result
 
     @function_tool()
