@@ -340,6 +340,54 @@ day's non-matching (e.g. morning-only) slots.
   (`_format_brand_voice` only affects phrasing), so this is very likely incidental context from the
   business used to reproduce, not a causal factor. Flagged here rather than assumed away.
 
+## Bug fixed 2026-09-05 (AIE-56 round 2) — agent fabricated "the latest this week" from one day's data
+QA bounced the 2026-09-04 `min_time` fix back with a fresh repro (call id
+`13eef36c-98ef-4227-bcc4-672f1d00a3e3`, pulled and read via the `transcripts` table): caller asked
+"what's your latest appointment during the week?", agent found Tuesday's afternoon slot (via
+`min_time`, working as designed) and correctly stated Tuesday's own last time (3:00 PM). Caller
+pushed further ("anything later during the week?"), and the agent replied "the latest available
+consultation we have during the week is ... Tuesday ... 3:00 PM" — restating the same single day's
+last time as if it were the whole week's answer, without checking any other day. When the caller
+then named Thursday specifically, the agent found a 5:45 PM slot — proving Tuesday's 3:00 PM was
+never actually the week's latest, the agent just had no way to know that and answered anyway.
+
+Root cause: `min_time`/`after_time` and `_find_next_slots` only ever answer "the first day that
+matches a filter" — the scan stops at the first hit and never looks at, or compares against, any
+later day. There was no tool capability at all for "collect every matching day and tell me the
+single latest one" — a structurally different question from "the soonest match." The 2026-09-04
+fix closed the "any day, standing time-of-day preference" gap but never touched this one; QA's new
+repro is a different request shape ("the latest/last", not "an afternoon, any day"), not a
+regression of that fix.
+
+**Fix:**
+- Added `_find_latest_slot` (`agent/supabase_helpers.py`) — a sibling to `_find_next_slots` that
+  scans forward across a bounded `within_days` window (default 7, i.e. "this week") and returns
+  the single slot with the greatest `(date, time)`, not the first day with any match. Supports the
+  same `min_time` floor semantics for "latest afternoon slot this week"-style asks.
+- Added a new tool, `find_latest_available_slot` (`agent/agent.py`), rather than overloading
+  `find_next_available_slot` with a mode flag — keeps "find soonest" and "find latest" as two
+  distinct, unambiguous tool choices for the model instead of one tool with a hidden behavior
+  switch. Its docstring explicitly tells the model not to answer a "latest this week" question
+  from a single day's result.
+- `agent/prompt_builder.py` gained step 6c: caller asks for the latest/last appointment across a
+  period (not a single named day) → call `find_latest_available_slot`, never answer from a prior
+  single-day result. Step 6b was tightened to explicitly forbid describing one day's last time as
+  "the latest this week" without qualifying it to that day. Step 5 also now tells the model to go
+  straight to `min_time`/`find_latest_available_slot` when the caller states a time-of-day or
+  latest/last preference *before* any offer has been made, instead of only reacting after an
+  initial (wrong) offer — the "must be pressed" complaint in the ticket title was partly this:
+  every fix so far only ever triggered reactively, after a correction round-trip.
+- Added regression tests in `agent/tests/test_booking_validation.py`:
+  `test_find_latest_slot_picks_max_across_days_not_first_match` (direct repro shape: two earlier
+  matching days plus a later, later-still day — must return the later-still day, not stop early),
+  `test_find_latest_slot_respects_min_time_floor`, `test_find_latest_slot_within_days_bounds_the_search`,
+  `test_find_latest_slot_returns_none_when_nothing_matches`. Full `agent/tests/` suite: 56 passed,
+  same 1 pre-existing unrelated failure as before (`test_build_instructions_custom_greeting_replaces_welcome_block`).
+- **Note on "this week" semantics:** `within_days` is a rolling N-day window from `from_date`
+  (default 7), not a calendar-week (Mon–Sun) boundary — simpler to reason about and matches how
+  callers actually use "this week" mid-week (meaning "the next several days," not strictly through
+  Sunday). Flagged here in case a future ticket wants literal calendar-week semantics instead.
+
 ## Decisions / tradeoffs
 - **Frontend hint mirrors backend logic rather than calling an API.** No new backend endpoint was
   added to compute "effective hours for a date" — the frontend already has `business_hours` and

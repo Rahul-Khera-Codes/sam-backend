@@ -576,10 +576,18 @@ async def delete_payment_entry(
     appointment_id: str,
     entry_id: str,
     business_id: str,
+    employee_code: Optional[str] = None,
     user_id: str = Depends(get_user_id),
 ):
     verify_business_access(user_id, business_id)
     payment_row = _get_payment_row_or_404(appointment_id, business_id)
+
+    if _get_business_code_flags(business_id)["require_payment_employee_code"]:
+        deleted_by_user_id = _resolve_employee_code(business_id, employee_code)
+        deleted_by_code = employee_code
+    else:
+        deleted_by_user_id = user_id
+        deleted_by_code = None
 
     result = (
         supabase_admin.table("appointment_payment_entries")
@@ -590,6 +598,22 @@ async def delete_payment_entry(
     )
     if not result.data:
         raise HTTPException(status_code=404, detail="Payment entry not found")
+
+    deleted_entry = result.data[0]
+    supabase_admin.table("appointment_payment_entry_deletions").insert({
+        "payment_entry_id": deleted_entry["id"],
+        "appointment_payment_id": deleted_entry["appointment_payment_id"],
+        "business_id": deleted_entry["business_id"],
+        "entry_type": deleted_entry.get("entry_type", "payment"),
+        "payment_type": deleted_entry["payment_type"],
+        "amount": deleted_entry["amount"],
+        "note": deleted_entry.get("note"),
+        "paid_at": deleted_entry["paid_at"],
+        "collected_by_user_id": deleted_entry.get("collected_by_user_id"),
+        "collected_by_code": deleted_entry.get("collected_by_code"),
+        "deleted_by_user_id": deleted_by_user_id,
+        "deleted_by_code": deleted_by_code,
+    }).execute()
 
     return _build_full_payment_response(payment_row)
 

@@ -667,3 +667,124 @@ def test_find_next_slots_after_time_does_not_leak_into_later_days():
 
     assert len(result) > 0
     assert all(r["date"] == tuesday for r in result)  # Tuesday's 09:00 slot isn't hidden
+
+
+# ── AIE-56 regression #2: "what's your latest appointment this week?" was    ──
+# ── answered by re-stating the first (soonest) matching day's own last time  ──
+# ── as if it were the whole week's latest — reproduced verbatim by call id   ──
+# ── 13eef36c-98ef-4227-bcc4-672f1d00a3e3 (Heather AIE): agent said Tuesday   ──
+# ── 3:00 PM was "the latest available... during the week", then immediately ──
+# ── found a 5:45 PM Thursday slot once asked about Thursday by name.        ──
+# ── _find_next_slots structurally cannot answer this — it stops at the      ──
+# ── first matching day and never compares later days. _find_latest_slot     ──
+# ── scans the whole window and keeps the true max (date, time).             ──
+
+
+from supabase_helpers import _find_latest_slot
+
+
+def test_find_latest_slot_picks_max_across_days_not_first_match():
+    """Monday and Tuesday both have matching slots, but Thursday has a later one.
+    Must return Thursday's slot, not stop at the first day that matches."""
+    monday = _future_date(0)
+    thursday = (datetime.strptime(monday, "%Y-%m-%d") + timedelta(days=3)).strftime("%Y-%m-%d")
+
+    with patch("supabase_helpers._validate_booking_date", return_value=None), \
+         patch("supabase_helpers._fetch_user_availability", return_value=[
+             {"day_of_week": "monday", "is_available": True,
+              "start_time": "13:00", "end_time": "15:00"},
+             {"day_of_week": "tuesday", "is_available": True,
+              "start_time": "13:00", "end_time": "15:00"},
+             {"day_of_week": "thursday", "is_available": True,
+              "start_time": "13:00", "end_time": "18:00"},
+         ]), \
+         patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
+         patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
+        result = _find_latest_slot(
+            supabase=None,
+            business_id="biz",
+            location_id="loc",
+            user_entries=[{"user_id": "u1", "name": "Heather AIE"}],
+            slot_minutes=15,
+            from_date=monday,
+            within_days=7,
+        )
+
+    assert result is not None
+    assert result["date"] == thursday
+    assert result["time"] == "17:45"  # last 15-min slot before 18:00 close
+    assert result["staff_name"] == "Heather AIE"
+
+
+def test_find_latest_slot_respects_min_time_floor():
+    """min_time still applies on every day scanned — asking for the latest
+    afternoon slot must not return an even-later morning-only day."""
+    monday = _future_date(0)
+    tuesday = (datetime.strptime(monday, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    with patch("supabase_helpers._validate_booking_date", return_value=None), \
+         patch("supabase_helpers._fetch_user_availability", return_value=[
+             {"day_of_week": "monday", "is_available": True,
+              "start_time": "13:00", "end_time": "15:00"},
+             {"day_of_week": "tuesday", "is_available": True,
+              "start_time": "06:00", "end_time": "08:00"},
+         ]), \
+         patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
+         patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
+        result = _find_latest_slot(
+            supabase=None,
+            business_id="biz",
+            location_id="loc",
+            user_entries=[{"user_id": "u1", "name": "Rahul"}],
+            slot_minutes=60,
+            from_date=monday,
+            within_days=7,
+            min_time="12:00",
+        )
+
+    assert result is not None
+    assert result["date"] == monday  # Tuesday's slot is earlier in the day and filtered out
+    assert result["time"] == "14:00"
+
+
+def test_find_latest_slot_within_days_bounds_the_search():
+    """A later slot outside the within_days window must not be returned."""
+    monday = _future_date(0)
+
+    with patch("supabase_helpers._validate_booking_date", return_value=None), \
+         patch("supabase_helpers._fetch_user_availability", return_value=[
+             {"day_of_week": "monday", "is_available": True,
+              "start_time": "13:00", "end_time": "15:00"},
+             {"day_of_week": "wednesday", "is_available": True,
+              "start_time": "13:00", "end_time": "18:00"},
+         ]), \
+         patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
+         patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
+        result = _find_latest_slot(
+            supabase=None,
+            business_id="biz",
+            location_id="loc",
+            user_entries=[{"user_id": "u1", "name": "Rahul"}],
+            slot_minutes=60,
+            from_date=monday,
+            within_days=2,  # only Monday and Tuesday — Wednesday's later slot is out of range
+        )
+
+    assert result is not None
+    assert result["date"] == monday
+    assert result["time"] == "14:00"
+
+
+def test_find_latest_slot_returns_none_when_nothing_matches():
+    with patch("supabase_helpers._validate_booking_date", return_value="closed"), \
+         patch("supabase_helpers._fetch_user_availability", return_value=[]):
+        result = _find_latest_slot(
+            supabase=None,
+            business_id="biz",
+            location_id="loc",
+            user_entries=[{"user_id": "u1", "name": "Rahul"}],
+            slot_minutes=60,
+            from_date=_future_date(0),
+            within_days=7,
+        )
+    assert result is None
