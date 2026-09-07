@@ -1,8 +1,15 @@
+import asyncio
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
 import pytest
 
 from supabase_helpers import _validate_booking_datetime, _local_now, _compute_available_slots
+
+
+def _run(coro):
+    """Run an async helper's coroutine to completion, since this suite has no
+    pytest-asyncio plugin installed — plain asyncio.run() (stdlib) is enough."""
+    return asyncio.run(coro)
 
 
 def _future_date(weekday: int) -> str:
@@ -238,9 +245,9 @@ from supabase_helpers import _validate_staff_availability
 def test_staff_availability_skips_when_unconfigured():
     """No user_availability rows at all — skip enforcement, defer to business hours."""
     with patch("supabase_helpers._fetch_user_availability", return_value=[]):
-        result = _validate_staff_availability(
+        result = _run(_validate_staff_availability(
             None, "user-1", "Alex", FUTURE_MONDAY, "23:45", duration_minutes=60,
-        )
+        ))
     assert result is None
 
 
@@ -251,9 +258,9 @@ def test_staff_availability_rejects_duration_past_employee_end_time():
          "start_time": "09:00", "end_time": "16:00"}
     ]), patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
          patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
-        result = _validate_staff_availability(
+        result = _run(_validate_staff_availability(
             None, "user-1", "Alex", FUTURE_MONDAY, "16:45", duration_minutes=30,
-        )
+        ))
     assert result is not None
     assert "Alex" in result
 
@@ -264,9 +271,9 @@ def test_staff_availability_accepts_slot_within_employee_hours():
          "start_time": "09:00", "end_time": "17:00"}
     ]), patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
          patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
-        result = _validate_staff_availability(
+        result = _run(_validate_staff_availability(
             None, "user-1", "Alex", FUTURE_MONDAY, "16:00", duration_minutes=60,
-        )
+        ))
     assert result is None
 
 
@@ -275,9 +282,9 @@ def test_staff_availability_rejects_day_off():
         {"day_of_week": "tuesday", "is_available": True,
          "start_time": "09:00", "end_time": "17:00"}
     ]):
-        result = _validate_staff_availability(
+        result = _run(_validate_staff_availability(
             None, "user-1", "Alex", FUTURE_MONDAY, "10:00", duration_minutes=60,
-        )
+        ))
     assert result is not None
 
 
@@ -288,9 +295,9 @@ def test_staff_availability_rejects_full_day_override():
     ]), patch("supabase_helpers._fetch_user_overrides", return_value=[
         {"is_unavailable": True, "start_time": None, "end_time": None}
     ]), patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
-        result = _validate_staff_availability(
+        result = _run(_validate_staff_availability(
             None, "user-1", "Alex", FUTURE_MONDAY, "10:00", duration_minutes=60,
-        )
+        ))
     assert result is not None
 
 
@@ -304,9 +311,9 @@ def test_staff_availability_rejects_overlap_with_existing_booking():
              {"id": "existing-1", "appointment_time": "10:00", "duration": "60"}
          ]):
         # New request 10:30-11:00 overlaps the existing 10:00-11:00 booking.
-        result = _validate_staff_availability(
+        result = _run(_validate_staff_availability(
             None, "user-1", "Alex", FUTURE_MONDAY, "10:30", duration_minutes=30,
-        )
+        ))
     assert result is not None
 
 
@@ -319,11 +326,67 @@ def test_staff_availability_excludes_self_when_rescheduling():
          patch("supabase_helpers._fetch_appointments_on_date", return_value=[
              {"id": "appt-1", "appointment_time": "10:00", "duration": "60"}
          ]):
-        result = _validate_staff_availability(
+        result = _run(_validate_staff_availability(
             None, "user-1", "Alex", FUTURE_MONDAY, "10:15", duration_minutes=60,
             exclude_appointment_id="appt-1",
-        )
+        ))
     assert result is None
+
+
+# ── AIE-69: booking must also respect the staff member's connected Google  ──
+# ── Calendar busy times, not just the Portal Calendar (user_availability + ──
+# ── internal appointments).                                                ──
+
+
+def test_staff_availability_rejects_google_calendar_busy_time():
+    """A personal Google Calendar event overlapping the requested slot must
+    block the booking even though the Portal Calendar itself is free."""
+    with patch("supabase_helpers._fetch_user_availability", return_value=[
+        {"day_of_week": FUTURE_DAY_NAME, "is_available": True,
+         "start_time": "09:00", "end_time": "17:00"}
+    ]), patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
+         patch("supabase_helpers._fetch_appointments_on_date", return_value=[]), \
+         patch("supabase_helpers._gcal_fetch_busy_intervals", return_value=[
+             (datetime(1900, 1, 1, 10, 0), datetime(1900, 1, 1, 11, 0)),
+         ]):
+        result = _run(_validate_staff_availability(
+            None, "user-1", "Alex", FUTURE_MONDAY, "10:30", duration_minutes=30,
+        ))
+    assert result is not None
+    assert "Alex" in result
+
+
+def test_staff_availability_ignores_google_calendar_when_not_connected():
+    """No connected calendar (or a failed lookup) must fail open — booking
+    proceeds on Portal Calendar availability alone, same as before this fix."""
+    with patch("supabase_helpers._fetch_user_availability", return_value=[
+        {"day_of_week": FUTURE_DAY_NAME, "is_available": True,
+         "start_time": "09:00", "end_time": "17:00"}
+    ]), patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
+         patch("supabase_helpers._fetch_appointments_on_date", return_value=[]), \
+         patch("supabase_helpers._gcal_fetch_busy_intervals", return_value=[]):
+        result = _run(_validate_staff_availability(
+            None, "user-1", "Alex", FUTURE_MONDAY, "10:30", duration_minutes=30,
+        ))
+    assert result is None
+
+
+def test_compute_available_slots_excludes_google_calendar_busy_time():
+    """The advisory slot-listing path (get_available_slots / find_next_available_slot)
+    must also hide a slot the staff member's Google Calendar shows as busy, not just
+    reject it at final booking time — offering a slot only to reject it a moment
+    later is worse UX than never offering it."""
+    availability = [{
+        "day_of_week": FUTURE_DAY_NAME, "is_available": True,
+        "start_time": "09:00", "end_time": "12:00",
+    }]
+    external_busy = [(datetime(1900, 1, 1, 10, 0), datetime(1900, 1, 1, 11, 0))]
+    slots = _compute_available_slots(
+        availability, [], [], FUTURE_MONDAY, slot_minutes=60, external_busy=external_busy,
+    )
+    assert "10:00" not in slots
+    assert "09:00" in slots
+    assert "11:00" in slots
 
 
 from supabase_helpers import _find_next_slots
@@ -333,7 +396,7 @@ def test_find_next_slots_returns_empty_when_all_days_closed():
     """If all days are closed, returns empty list."""
     with patch("supabase_helpers._validate_booking_date", return_value="closed"), \
          patch("supabase_helpers._fetch_user_availability", return_value=[]):
-        result = _find_next_slots(
+        result = _run(_find_next_slots(
             supabase=None,
             business_id="biz",
             location_id="loc",
@@ -341,7 +404,7 @@ def test_find_next_slots_returns_empty_when_all_days_closed():
             slot_minutes=60,
             from_date="2099-01-06",  # far-future date; all days mocked as closed
             max_days=5,
-        )
+        ))
     assert result == []
 
 
@@ -360,7 +423,7 @@ def test_find_next_slots_skips_closed_days_and_finds_open():
          ]), \
          patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
          patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
-        result = _find_next_slots(
+        result = _run(_find_next_slots(
             supabase=None,
             business_id="biz",
             location_id="loc",
@@ -368,7 +431,7 @@ def test_find_next_slots_skips_closed_days_and_finds_open():
             slot_minutes=60,
             from_date=monday,
             max_days=5,
-        )
+        ))
 
     assert len(result) > 0
     assert all(r["date"] == tuesday for r in result)
@@ -386,7 +449,7 @@ def test_find_next_slots_returns_max_3_per_staff():
          ]), \
          patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
          patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
-        result = _find_next_slots(
+        result = _run(_find_next_slots(
             supabase=None,
             business_id="biz",
             location_id="loc",
@@ -394,7 +457,7 @@ def test_find_next_slots_returns_max_3_per_staff():
             slot_minutes=60,
             from_date=future_monday,
             max_days=5,
-        )
+        ))
 
     rahul_slots = [r for r in result if r["staff_name"] == "Rahul"]
     assert 1 <= len(rahul_slots) <= 3
@@ -555,7 +618,7 @@ def test_find_next_slots_reports_true_last_time_when_more_than_3():
          ]), \
          patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
          patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
-        result = _find_next_slots(
+        result = _run(_find_next_slots(
             supabase=None,
             business_id="biz",
             location_id="loc",
@@ -563,7 +626,7 @@ def test_find_next_slots_reports_true_last_time_when_more_than_3():
             slot_minutes=15,  # 32 total slots that day — well over the 3 shown
             from_date=future_monday,
             max_days=5,
-        )
+        ))
 
     rahul_slots = [r for r in result if r["staff_name"] == "Rahul"]
     assert len(rahul_slots) == 3
@@ -582,7 +645,7 @@ def test_find_next_slots_last_time_none_when_not_truncated():
          ]), \
          patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
          patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
-        result = _find_next_slots(
+        result = _run(_find_next_slots(
             supabase=None,
             business_id="biz",
             location_id="loc",
@@ -590,7 +653,7 @@ def test_find_next_slots_last_time_none_when_not_truncated():
             slot_minutes=60,  # exactly 1 slot that day (09:00-10:00)
             from_date=future_monday,
             max_days=5,
-        )
+        ))
 
     rahul_slots = [r for r in result if r["staff_name"] == "Rahul"]
     assert len(rahul_slots) == 1
@@ -621,7 +684,7 @@ def test_find_next_slots_min_time_applies_across_every_day():
          ]), \
          patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
          patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
-        result = _find_next_slots(
+        result = _run(_find_next_slots(
             supabase=None,
             business_id="biz",
             location_id="loc",
@@ -630,7 +693,7 @@ def test_find_next_slots_min_time_applies_across_every_day():
             from_date=monday,
             max_days=5,
             min_time="12:00",
-        )
+        ))
 
     assert len(result) > 0
     assert all(r["date"] == tuesday for r in result)
@@ -654,7 +717,7 @@ def test_find_next_slots_after_time_does_not_leak_into_later_days():
          ]), \
          patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
          patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
-        result = _find_next_slots(
+        result = _run(_find_next_slots(
             supabase=None,
             business_id="biz",
             location_id="loc",
@@ -663,7 +726,7 @@ def test_find_next_slots_after_time_does_not_leak_into_later_days():
             from_date=monday,
             max_days=5,
             after_time="15:00",  # later than Monday's only slot, so Monday is skipped
-        )
+        ))
 
     assert len(result) > 0
     assert all(r["date"] == tuesday for r in result)  # Tuesday's 09:00 slot isn't hidden
@@ -700,7 +763,7 @@ def test_find_latest_slot_picks_max_across_days_not_first_match():
          ]), \
          patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
          patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
-        result = _find_latest_slot(
+        result = _run(_find_latest_slot(
             supabase=None,
             business_id="biz",
             location_id="loc",
@@ -708,7 +771,7 @@ def test_find_latest_slot_picks_max_across_days_not_first_match():
             slot_minutes=15,
             from_date=monday,
             within_days=7,
-        )
+        ))
 
     assert result is not None
     assert result["date"] == thursday
@@ -731,7 +794,7 @@ def test_find_latest_slot_respects_min_time_floor():
          ]), \
          patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
          patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
-        result = _find_latest_slot(
+        result = _run(_find_latest_slot(
             supabase=None,
             business_id="biz",
             location_id="loc",
@@ -740,7 +803,7 @@ def test_find_latest_slot_respects_min_time_floor():
             from_date=monday,
             within_days=7,
             min_time="12:00",
-        )
+        ))
 
     assert result is not None
     assert result["date"] == monday  # Tuesday's slot is earlier in the day and filtered out
@@ -760,7 +823,7 @@ def test_find_latest_slot_within_days_bounds_the_search():
          ]), \
          patch("supabase_helpers._fetch_user_overrides", return_value=[]), \
          patch("supabase_helpers._fetch_appointments_on_date", return_value=[]):
-        result = _find_latest_slot(
+        result = _run(_find_latest_slot(
             supabase=None,
             business_id="biz",
             location_id="loc",
@@ -768,7 +831,7 @@ def test_find_latest_slot_within_days_bounds_the_search():
             slot_minutes=60,
             from_date=monday,
             within_days=2,  # only Monday and Tuesday — Wednesday's later slot is out of range
-        )
+        ))
 
     assert result is not None
     assert result["date"] == monday
@@ -778,7 +841,7 @@ def test_find_latest_slot_within_days_bounds_the_search():
 def test_find_latest_slot_returns_none_when_nothing_matches():
     with patch("supabase_helpers._validate_booking_date", return_value="closed"), \
          patch("supabase_helpers._fetch_user_availability", return_value=[]):
-        result = _find_latest_slot(
+        result = _run(_find_latest_slot(
             supabase=None,
             business_id="biz",
             location_id="loc",
@@ -786,5 +849,5 @@ def test_find_latest_slot_returns_none_when_nothing_matches():
             slot_minutes=60,
             from_date=_future_date(0),
             within_days=7,
-        )
+        ))
     assert result is None

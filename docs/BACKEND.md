@@ -183,7 +183,7 @@ The backend expects (or creates) at least:
 
 ### 6.5 Settings and Communication
 
-- **agent_settings** — Feature flags (inbound_calling, outbound_calling, call_forwarding, send_texts_during_after_calls, missed_call_text_back, callback_scheduling, reschedule_cancel_appointments, confirmation_reminder_calls, multi_language_support, feedback_after_call).
+- **agent_settings** — Feature flags (inbound_calling, outbound_calling, call_forwarding, send_texts_during_after_calls, callback_scheduling, reschedule_cancel_appointments, confirmation_reminder_calls, multi_language_support, feedback_after_call).
 - **agent_state** — Single row per business: is_active (global on/off).
 - **communication_settings** — Scripts per channel (call, email, sms) and type (reminder, followup): is_enabled, days_offset, script. These align with the frontend’s Customer Service Settings (Call/Email/SMS, reminder vs follow-up, days before/after, script text).
 

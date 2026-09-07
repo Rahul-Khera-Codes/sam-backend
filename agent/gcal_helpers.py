@@ -5,6 +5,7 @@ Google Calendar helpers for the voice agent (async HTTP).
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from constants import GOOGLE_TOKEN_URL, GOOGLE_CALENDAR_BASE
 
@@ -159,6 +160,75 @@ async def _gcal_delete_event(supabase, staff_id: str, google_event_id: str) -> b
     except Exception as e:
         logger.warning("Failed to delete Google Calendar event %s: %s", google_event_id, e)
     return False
+
+
+async def _gcal_fetch_busy_intervals(
+    supabase, staff_id: str, target_date: str, business_timezone: str = "UTC",
+) -> list[tuple[datetime, datetime]]:
+    """
+    Query the staff member's connected Google Calendar for busy intervals on
+    target_date (YYYY-MM-DD) via the freeBusy API. Each interval is returned as
+    a (start, end) datetime pair anchored to 1900-01-01, matching the
+    date-agnostic time-of-day convention `_compute_busy_intervals` already uses
+    for internal overrides/bookings, so the two lists can be merged directly.
+
+    Fails open — returns [] (no external busy data) if the staff member hasn't
+    connected Google Calendar, their token can't be refreshed, or the API call
+    fails for any reason. A flaky third-party API or an expired token the staff
+    member hasn't noticed must never block booking.
+    """
+    access_token = await _gcal_get_valid_token(supabase, staff_id)
+    if not access_token:
+        return []
+    try:
+        tz = ZoneInfo(business_timezone or "UTC")
+    except ZoneInfoNotFoundError:
+        tz = ZoneInfo("UTC")
+    try:
+        day_start = datetime.strptime(target_date, "%Y-%m-%d").replace(tzinfo=tz)
+    except ValueError:
+        return []
+    day_end = day_start + timedelta(days=1)
+
+    try:
+        import httpx
+        async with httpx.AsyncClient() as http:
+            r = await http.post(
+                f"{GOOGLE_CALENDAR_BASE}/freeBusy",
+                headers={"Authorization": f"Bearer {access_token}"},
+                json={
+                    "timeMin": day_start.isoformat(),
+                    "timeMax": day_end.isoformat(),
+                    "timeZone": business_timezone or "UTC",
+                    "items": [{"id": "primary"}],
+                },
+            )
+            if r.status_code != 200:
+                logger.warning(
+                    "Google Calendar freeBusy query failed for staff %s: %s %s",
+                    staff_id, r.status_code, r.text[:300],
+                )
+                return []
+            data = r.json()
+    except Exception as e:
+        logger.warning("Google Calendar freeBusy query failed for staff %s: %s", staff_id, e)
+        return []
+
+    busy_raw = data.get("calendars", {}).get("primary", {}).get("busy", [])
+    base = datetime(1900, 1, 1)
+    intervals: list[tuple[datetime, datetime]] = []
+    for slot in busy_raw:
+        try:
+            start = datetime.fromisoformat(slot["start"]).astimezone(tz)
+            end = datetime.fromisoformat(slot["end"]).astimezone(tz)
+        except (KeyError, ValueError):
+            continue
+        clipped_start = max(start, day_start)
+        clipped_end = min(end, day_end)
+        if clipped_end <= clipped_start:
+            continue
+        intervals.append((base + (clipped_start - day_start), base + (clipped_end - day_start)))
+    return intervals
 
 
 def _gcal_get_superadmin_id(supabase, business_id: str) -> str | None:

@@ -388,6 +388,74 @@ regression of that fix.
   callers actually use "this week" mid-week (meaning "the next several days," not strictly through
   Sunday). Flagged here in case a future ticket wants literal calendar-week semantics instead.
 
+## Feature added 2026-09-07 (AIE-69) — availability now checks connected Google Calendar too
+Reported: a client's Customer Service Employee could offer/book a slot that conflicted with a
+staff member's personal Google Calendar event, because availability was computed purely from
+`user_availability` + `user_availability_overrides` + internal `appointments` bookings (the
+"Portal Calendar") — the "My Google Calendar" per-staff integration (`google_calendar_tokens`,
+`google_calendar_service.py`/`agent/gcal_helpers.py`) was, until this fix, **one-way push-out
+only**: it created/updated/deleted events on the staff member's calendar when a portal
+appointment changed, but nothing ever read events back to check busy times.
+
+**Fix — added a read path (Google Calendar `freeBusy` API), fully additive:**
+- `google_calendar_service.fetch_busy_intervals(token_row, date, ...)` (backend) and
+  `agent/gcal_helpers.py::_gcal_fetch_busy_intervals(supabase, staff_id, date, business_timezone)`
+  (voice agent) — both query `POST .../freeBusy` for the connected calendar's `primary`
+  calendar on the given date, and return `(start, end)` intervals anchored to `1900-01-01` to
+  match the date-agnostic time-of-day tuples `_compute_busy_intervals` already used for
+  internal overrides/bookings, so the two merge directly. **Fails open**: returns `[]` (no
+  external busy data, behaves exactly as before) if the calendar isn't connected, the token
+  can't be refreshed, or the API call errors for any reason — a flaky Google API call or an
+  expired token the staff member hasn't noticed must never block booking.
+- `_compute_busy_intervals` / `_compute_available_slots` (`agent/supabase_helpers.py`) gained an
+  optional `external_busy` param (default `None`, fully backward compatible) that's merged into
+  the internal busy-interval list.
+- `_validate_staff_availability` (both `agent/supabase_helpers.py` and
+  `backend/app/services/booking_service.py`) — now `async def`, fetches the staff member's
+  Google Calendar busy intervals for the requested date and merges them in before the
+  overlap check. Gained a `business_timezone` param (needed to align the freeBusy day-boundary
+  query to the business's local midnight, not UTC).
+- `_find_next_slots` / `_find_latest_slot` (`agent/supabase_helpers.py`) — also converted to
+  `async def`, fetching Google Calendar busy intervals per (staff, date) pair scanned, so the
+  *advisory* slot-listing tools (what the agent offers out loud) already exclude a
+  Google-Calendar-busy slot, not just the final booking-time check. Offering a slot only to
+  reject it a moment later at booking time would have been worse UX than never offering it.
+- All 5 call sites in `agent/agent.py` (`get_available_slots`, `find_next_available_slot`,
+  `find_latest_available_slot`, `book_appointment`, `update_appointment`) updated to `await`
+  the now-async calls; all were already `async def` tool functions, so no wider signature
+  changes were needed there.
+- `backend/app/services/booking_service.py`'s `create_appointment`/`update_appointment` each
+  gained one extra `_get_business(...)` lookup (for `business_timezone`) ahead of the
+  availability check — accepted as a minor redundant read rather than restructuring the
+  functions' existing business-fetch ordering.
+
+**Scope decision:** applied to both the voice agent and the dashboard's manual booking API
+(`booking_service.py`) even though the ticket only mentioned the CSE agent — the two paths
+duplicate the same availability logic (same pattern as AIE-45), and a manager booking manually
+in the dashboard should respect a staff member's personal calendar exactly as much as the phone
+agent does.
+
+**Outlook Calendar: no code path added — blocked on an external permission grant.** The Azure
+app registration for Outlook (see "Outlook Email Integration" doc) only has `Mail.Send`,
+`offline_access`, `User.Read` — no `Calendars.Read`/`Calendars.ReadWrite` was ever granted, and
+Outlook has no calendar-read code in either repo. Adding Outlook busy-time checking needs, in
+order: (1) `Calendars.Read` (or `Calendars.ReadWrite`) added to the existing Azure app
+registration and re-consented by the client, (2) a new Microsoft Graph read call (e.g.
+`GET /me/calendarView` or `POST /me/calendar/getSchedule`) — nothing to build on top of today,
+since no Outlook calendar code exists yet. Not attempted in this pass since it can't be
+implemented or tested without that scope first.
+
+**Tests:** `agent/tests/test_booking_validation.py` and
+`backend/tests/test_booking_service_validation.py` — added regression tests for a Google
+Calendar busy interval blocking a slot, and for the fail-open (not-connected) case; existing
+tests calling the now-async functions updated to run via `asyncio.run(...)` (agent suite) /
+`unittest.IsolatedAsyncioTestCase` (backend suite) — both stdlib-only, no new test dependency
+added. Full suites verified inside the actual Docker images (local interpreter is Python 3.9,
+too old for this codebase's `X | None` type hints; agent runs on 3.13, backend on 3.11 per their
+Dockerfiles): agent 50/50 in this file (59/60 full suite, the 1 failure being the pre-existing,
+previously-flagged `test_build_instructions_custom_greeting_replaces_welcome_block`), backend
+16/16 full suite.
+
 ## Decisions / tradeoffs
 - **Frontend hint mirrors backend logic rather than calling an API.** No new backend endpoint was
   added to compute "effective hours for a date" — the frontend already has `business_hours` and

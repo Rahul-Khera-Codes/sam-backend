@@ -211,7 +211,7 @@ Manages AI agent configuration for a business.
 
 #### Feature Flags (`/settings/agent`)
 
-10 feature toggles stored in `agent_settings` table. All changes are logged to `settings_audit_log`.
+9 feature toggles stored in `agent_settings` table. All changes are logged to `settings_audit_log`.
 
 | Feature Key | Default | Description |
 |---|---|---|
@@ -219,7 +219,6 @@ Manages AI agent configuration for a business.
 | `outbound_calling` | ✓ | Agent makes outbound calls |
 | `call_forwarding` | ✓ | Forward calls to contacts |
 | `send_texts_during_after_calls` | ✓ | SMS confirmations after booking |
-| `missed_call_text_back` | ✓ | SMS when caller hangs up without help |
 | `callback_scheduling` | ✓ | Schedule callback calls |
 | `reschedule_cancel_appointments` | ✓ | Agent can modify appointments |
 | `confirmation_reminder_calls` | ✓ | Reminder call before appointments |
@@ -446,7 +445,6 @@ After every call, `_finalize_call()` executes:
 1. **Transcripts:** Bulk-saves all conversation turns to `transcripts` table
 2. **Call record:** Updates `status=completed`, `ended_at`, `duration_seconds`
 3. **Summary:** Sends full transcript to GPT-4o chat endpoint → receives structured JSON `{summary, key_topics, insights, sentiment}` → saves to `call_summaries` + updates `calls.sentiment`
-4. **Missed call SMS:** If `inbound` call + empty transcript + `missed_call_text_back` feature enabled → sends text-back SMS to caller
 
 ### 6.6 After Booking — Triggered Actions
 
@@ -819,7 +817,7 @@ Agent session ends (customer hangs up)
 **Used for:**
 - Purchasing and managing PSTN phone numbers
 - Elastic SIP trunking (inbound: Twilio → LiveKit; outbound: LiveKit → Twilio → PSTN)
-- Sending SMS (appointment confirmations, reminders, missed-call text-backs)
+- Sending SMS (appointment confirmations, reminders)
 
 **Key env vars:** `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_TRUNK_SID`, `TWILIO_TERM_DOMAIN`, `TWILIO_TERM_SIP_USERNAME`, `TWILIO_TERM_SIP_PASSWORD`
 

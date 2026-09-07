@@ -30,6 +30,7 @@ from gcal_helpers import (
     _gcal_update_event,
     _gcal_delete_event,
     _gcal_get_superadmin_id,
+    _gcal_fetch_busy_intervals,
 )
 from gmail_helpers import (
     _gmail_send_confirmation,
@@ -67,7 +68,6 @@ from supabase_helpers import (
 )
 from sms_helpers import (
     send_appointment_confirmation_sms,
-    send_missed_call_sms,
 )
 from prompt_builder import DEFAULT_INSTRUCTIONS, build_instructions
 
@@ -92,6 +92,45 @@ def _normalize_phone_e164(phone: str) -> str:
     elif len(digits) > 7:
         return f"+{digits}"
     return phone
+
+
+def _split_client_name(client_name: str) -> tuple[str, str]:
+    parts = (client_name or "").strip().split(maxsplit=1)
+    if not parts:
+        return "Unknown", ""
+    if len(parts) == 1:
+        return parts[0], ""
+    return parts[0], parts[1]
+
+
+def _resolve_or_create_customer(
+    supabase, business_id: str, location_id: str | None,
+    client_name: str, client_phone: str, client_email: str,
+) -> str | None:
+    """Resolve-or-create a `customers` record for a booking (AIE-61). Duplicated
+    from backend/app/services/customers_service.py — agent/ and backend/ are
+    separate deployables with no shared module."""
+    phone = _normalize_phone_e164(client_phone) if client_phone else None
+    email = (client_email or "").strip().lower() or None
+    if not phone and not email:
+        return None
+
+    query = supabase.table("customers").select("id").eq("business_id", business_id)
+    query = query.eq("phone", phone) if phone else query.eq("email", email)
+    existing = query.limit(1).execute()
+    if existing.data:
+        return existing.data[0]["id"]
+
+    first_name, last_name = _split_client_name(client_name)
+    created = supabase.table("customers").insert({
+        "business_id": business_id,
+        "location_id": location_id,
+        "first_name": first_name or "Unknown",
+        "last_name": last_name,
+        "phone": phone,
+        "email": email,
+    }).execute()
+    return created.data[0]["id"] if created.data else None
 
 
 # ── Agent with booking tools ──────────────────────────────────────────────────
@@ -367,9 +406,11 @@ class Assistant(Agent):
         availability = _fetch_user_availability(self._supabase, user_id)
         overrides = _fetch_user_overrides(self._supabase, user_id, date)
         booked = _fetch_appointments_on_date(self._supabase, user_id, date)
+        external_busy = await _gcal_fetch_busy_intervals(self._supabase, user_id, date, self._business_timezone)
 
         slots = _compute_available_slots(
-            availability, overrides, booked, date, slot_minutes, self._business_timezone
+            availability, overrides, booked, date, slot_minutes, self._business_timezone,
+            external_busy=external_busy,
         )
         if after_time:
             slots = [s for s in slots if s >= after_time]
@@ -439,7 +480,7 @@ class Assistant(Agent):
 
         start = from_date or _local_now(self._business_timezone).strftime("%Y-%m-%d")
 
-        slots = _find_next_slots(
+        slots = await _find_next_slots(
             supabase=self._supabase,
             business_id=self._business_id,
             location_id=self._location_id,
@@ -556,7 +597,7 @@ class Assistant(Agent):
         start = from_date or _local_now(self._business_timezone).strftime("%Y-%m-%d")
         days = max(1, min(within_days or 7, 30))
 
-        best = _find_latest_slot(
+        best = await _find_latest_slot(
             supabase=self._supabase,
             business_id=self._business_id,
             location_id=self._location_id,
@@ -666,8 +707,9 @@ class Assistant(Agent):
             return date_err
 
         # Guard 1b: staff member's own working hours (may be stricter than business hours)
-        staff_err = _validate_staff_availability(
+        staff_err = await _validate_staff_availability(
             self._supabase, staff["user_id"], staff["name"], date, time, duration_minutes,
+            business_timezone=self._business_timezone,
         )
         if staff_err:
             return staff_err
@@ -686,12 +728,18 @@ class Assistant(Agent):
             combined_notes = (combined_notes + f" | call_id: {self._call_id}").lstrip(" | ")
 
         try:
+            booking_location_id_final = (loc["id"] if loc else None) or self._location_id
+            customer_id = _resolve_or_create_customer(
+                self._supabase, self._business_id, booking_location_id_final,
+                client_name, client_phone, client_email,
+            )
             row = {
                 "business_id": self._business_id,
                 # Fall back to the called location if the resolver couldn't match the
                 # user-spoken location name. self._location_id is set from dispatch
                 # rule metadata and is always present for SIP calls.
-                "location_id": (loc["id"] if loc else None) or self._location_id,
+                "location_id": booking_location_id_final,
+                "customer_id": customer_id,
                 "assigned_user_id": staff["user_id"],
                 "client_name": client_name,
                 "client_phone": client_phone,
@@ -1114,10 +1162,11 @@ class Assistant(Agent):
 
                 if assigned_uid and check_date and check_time:
                     staff_name = self._staff_id_to_name.get(assigned_uid, "The assigned staff member")
-                    staff_err = _validate_staff_availability(
+                    staff_err = await _validate_staff_availability(
                         self._supabase, assigned_uid, staff_name,
                         check_date, check_time, check_duration_minutes,
                         exclude_appointment_id=full_id,
+                        business_timezone=self._business_timezone,
                     )
                     if staff_err:
                         return staff_err
@@ -1583,8 +1632,6 @@ async def _finalize_call(
     transcript_log: list[dict],
     *,
     call_direction: str = "inbound",
-    caller_phone: str | None = None,
-    business_name: str = "",
 ) -> None:
     """Save transcripts, mark call completed/missed, generate summary, send SMS if needed."""
     if not supabase or not call_id:
@@ -1626,25 +1673,6 @@ async def _finalize_call(
             await _generate_summary(supabase, call_id, business_id, transcript_log)
         except Exception as e:
             logger.error("Failed to generate summary: %s", e)
-
-    # Missed call text-back
-    if is_missed and business_id and caller_phone:
-        if _is_feature_enabled_for_location(supabase, business_id, location_id, "missed_call_text_back"):
-            try:
-                _missed_cfg = _get_feature_config_value(
-                    supabase, business_id, location_id,
-                    "missed_call_text_back",
-                )
-                send_missed_call_sms(
-                    supabase=supabase,
-                    business_id=business_id,
-                    location_id=location_id,
-                    business_name=business_name or "us",
-                    caller_phone=caller_phone,
-                    custom_template=str(_missed_cfg.get("message_template", "")),
-                )
-            except Exception as e:
-                logger.warning("Missed-call SMS failed: %s", e)
 
     logger.info(
         "Call %s finalized status=%s duration=%ds utterances=%d",
@@ -2022,7 +2050,7 @@ async def voice_agent(ctx: agents.JobContext):
     # For outbound calls the agent initiates the conversation with purpose/intro.
     # For inbound calls (web or SIP) the agent greets normally.
     if call_direction == "outbound":
-        if message_template and call_purpose in ("appointment_reminder", "appointment_reschedule"):
+        if message_template and call_purpose in ("appointment_reminder", "appointment_reschedule", "noshow_followup"):
             outbound_instructions = (
                 f"You are making an outbound call on behalf of the business. "
                 f"Open with this script exactly: \"{message_template}\" — then continue "
@@ -2099,14 +2127,6 @@ async def voice_agent(ctx: agents.JobContext):
         call_id, duration_s, len(transcript_log),
     )
 
-    if not _caller_phone:
-        try:
-            _row = supabase.table("calls").select("caller_phone").eq("id", call_id).limit(1).execute() if supabase and call_id else None
-            if _row and _row.data:
-                _caller_phone = _row.data[0].get("caller_phone")
-        except Exception:
-            pass
-
     # Run finalization in background so the entrypoint can return before the
     # framework's 10-second kill timeout fires (summary generation via OpenAI
     # can take longer than 10 s and was getting cut off).
@@ -2118,8 +2138,6 @@ async def voice_agent(ctx: agents.JobContext):
         duration_s,
         transcript_log,
         call_direction=call_direction,
-        caller_phone=_caller_phone,
-        business_name=business_name,
     ))
 
 

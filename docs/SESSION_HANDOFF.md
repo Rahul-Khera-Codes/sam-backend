@@ -38,7 +38,7 @@ Two repos:
 - Custom Schedules — create/edit/toggle/delete; agent applies active schedule
 - Gmail OAuth per location — confirmation + cancellation + reschedule emails to customer + staff
 - Google Calendar per staff — creates/updates/deletes events on booking/reschedule/cancel (**now uses business timezone**)
-- SMS — confirmation on booking, missed call text-back (Twilio)
+- SMS — confirmation on booking (Twilio)
 - Phone Numbers page — search/provision/release US + Canadian numbers
 - Team Management — invite by email, role assignment, location assignment, Option B (reassign before remove)
 - Roles & Permissions v2 — editable matrix; create/delete custom roles; DB-driven page access

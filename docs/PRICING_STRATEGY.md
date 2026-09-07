@@ -42,7 +42,6 @@ Multi-location service businesses — barbershops, salons, spas, dental/medical 
 - Inbound call answering — AI greets, understands intent, collects booking info
 - Outbound calls — agent dials customers for reminders and follow-ups
 - Live call forwarding — SIP REFER transfer to a real human (Option C implementation)
-- Missed call text-back — automatic SMS when a call is not answered
 - Multi-language support (configurable feature flag)
 c- Custom business hours + holiday/special schedule overrides per location
 
@@ -84,7 +83,7 @@ c- Custom business hours + holiday/special schedule overrides per location
 **Third-Party Integrations**
 - Gmail OAuth (per location) — send automated emails on bookings, reschedules, cancellations
 - Google Calendar (per staff) — creates, updates, and deletes calendar events
-- SMS via Twilio A2P (confirmations + missed call text-back)
+- SMS via Twilio A2P (confirmations)
 
 ### Technology Stack
 
@@ -389,7 +388,7 @@ Supabase is **not a meaningful per-customer cost** beyond the early stage (10–
 
 - **Average call duration:** 3 minutes (industry average for AI receptionist interactions)
 - **Call mix:** 80% inbound, 20% outbound (outbound = reminders, follow-ups)
-- **SMS trigger rate:** 50% of calls send 1 SMS (booking confirmation or missed call text-back)
+- **SMS trigger rate:** 50% of calls send 1 SMS (booking confirmation)
 - **AI model:** GPT-4o mini Realtime (recommended; full model analyzed separately)
 - **Telephony:** Twilio Elastic SIP Trunking (current platform implementation)
 
