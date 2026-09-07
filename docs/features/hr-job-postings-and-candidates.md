@@ -85,10 +85,11 @@ The client asked for three linked pieces on top of the existing native HR "Job P
   already fit an inbound-applicant list almost exactly, and the client's mockup shows applicants
   landing in this same section, so we wired real data into it rather than building a parallel
   page.
-- **Out of scope for this pass:** real candidate sourcing/search; actual LinkedIn/Indeed
-  publishing (those toggles already exist, already labeled not-live); recruiter-side stage
-  management beyond listing (moving an applicant through interview stages); rate limiting /
-  abuse hardening on the public apply endpoint beyond PDF-type validation.
+- **Out of scope for this pass:** real candidate sourcing/search; actual LinkedIn publishing (the
+  toggle already exists, already labeled not-live — see `hr-recruitment-dashboard.md` for the
+  2026-09-07 removal of the equivalent Indeed toggle, which will never be integrated);
+  recruiter-side stage management beyond listing (moving an applicant through interview stages);
+  rate limiting / abuse hardening on the public apply endpoint beyond PDF-type validation.
 - **Preview vs. accepting applications (2026-09-01 follow-up).** Initially the public page and
   apply flow were gated to `status == "active"` end-to-end (icon hidden, 404 on view). The client
   clarified they want to preview/test the full page for any job they've created before publishing

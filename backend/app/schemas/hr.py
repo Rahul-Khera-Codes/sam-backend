@@ -28,7 +28,6 @@ class HrJobPostingUpsertRequest(BaseModel):
     required_experience: str = ""
     seniority: str = ""
     publish_in_linkedin: bool = False
-    publish_in_indeed: bool = False
     status: Literal["draft", "active", "closed"] = "draft"
 
 
@@ -67,9 +66,7 @@ class HrJobPostingResponse(BaseModel):
     applicants: int = 0
     applicant_bar_class_name: str = ""
     publish_in_linkedin: bool = False
-    publish_in_indeed: bool = False
     linkedin_status: str = ""
-    indeed_status: str = ""
     ai_status: str = ""
     metadata: Any = None
     source_payload: Any = None
@@ -147,8 +144,21 @@ class HrDashboardPostingResponse(BaseModel):
     team: str
     applicants: int
     linkedin: str
-    indeed: str
     aiStatus: str
+    status: Literal["Draft", "Active", "Closed"]
+    source: Literal["native"]
+
+
+class HrDashboardStatCard(BaseModel):
+    title: str
+    value: str
+    change: str
+    icon: Literal["users", "briefcase", "calendar"]
+
+
+class HrFunnelStage(BaseModel):
+    label: str
+    value: int
 
 
 HrDraftField = Literal[

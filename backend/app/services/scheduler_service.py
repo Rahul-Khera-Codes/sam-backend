@@ -333,6 +333,8 @@ async def run_noshow_calls() -> None:
         )
 
         target_date = (today - timedelta(days=days)).isoformat()
+        window_start = f"{target_date}T00:00:00+00:00"
+        window_end   = f"{target_date}T23:59:59+00:00"
 
         try:
             appts = (
@@ -341,7 +343,8 @@ async def run_noshow_calls() -> None:
                 .eq("business_id", business_id)
                 .eq("location_id", location_id)
                 .eq("status", "no_show")
-                .eq("appointment_date", target_date)
+                .gte("no_show_at", window_start)
+                .lte("no_show_at", window_end)
                 .is_("noshow_called_at", "null")
                 .execute()
             )

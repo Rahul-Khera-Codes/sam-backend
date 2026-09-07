@@ -135,34 +135,3 @@ def send_appointment_reminder_sms(
         f"Need to reschedule? Call {from_number}"
     )
     _send_sms(from_number, client_phone, body)
-
-
-def send_missed_call_sms(
-    supabase,
-    business_id: str,
-    location_id: str | None,
-    business_name: str,
-    caller_phone: str,
-    custom_template: str = "",
-) -> None:
-    """
-    Send a text-back when a caller hangs up before the agent could help.
-    Fires from _finalize_call when missed_call_text_back is enabled.
-    If custom_template is provided, substitute placeholders; otherwise use default.
-    """
-    from_number = _get_business_number(supabase, business_id, location_id)
-    if not from_number or not caller_phone:
-        return
-
-    if custom_template:
-        body = (
-            custom_template
-            .replace("{{business_name}}", business_name)
-            .replace("{{phone}}", from_number)
-        )
-    else:
-        body = (
-            f"Hi! You recently called {business_name} and we missed you.\n"
-            f"Reply here or call us back at {from_number} — we'd love to help!"
-        )
-    _send_sms(from_number, caller_phone, body)

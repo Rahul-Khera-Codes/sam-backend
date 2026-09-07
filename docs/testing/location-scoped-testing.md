@@ -28,8 +28,8 @@ Run all tests with at least two locations active (e.g. **Mirage** and **Downtown
 ### 1.4 Agent Settings (Feature Flags)
 - [o] Select **Mirage** → disable "Send Texts During or After Calls"
 - [o] Switch to **Downtown office** → confirm the toggle is independent (its own state)
-- [o] Enable "Missed Call Text-Back" on Downtown only
-- [o] Switch back to Mirage → "Missed Call Text-Back" is off
+- [o] Enable "Call Forwarding" on Downtown only
+- [o] Switch back to Mirage → "Call Forwarding" is off
 
 ### 1.5 Custom Schedules
 - [ ] Select **Mirage** → create a one-time schedule "Mirage Holiday" for a future date
@@ -98,7 +98,6 @@ Run all tests with at least two locations active (e.g. **Mirage** and **Downtown
 - [ ] Enable SMS confirmation on Mirage, disable on Downtown
 - [ ] Book appointment via Mirage call → SMS sent
 - [ ] Book appointment via Downtown call → SMS NOT sent
-- [ ] Enable "Missed Call Text-Back" on Downtown only → missed Downtown call sends text; missed Mirage call does not
 
 ### 2.7 SMS Sender Number
 - [ ] SMS sent after Mirage booking uses Mirage's provisioned number as sender

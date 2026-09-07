@@ -20,6 +20,7 @@ from app.schemas.appointments import (
     CancelAppointmentResponse,
 )
 from app.services import google_calendar_service
+from app.services.customers_service import resolve_or_create_customer
 from app.services.email_service import (
     send_appointment_confirmation,
     send_staff_notification,
@@ -295,17 +296,19 @@ def _fetch_staff_appointments_on_date(user_id: str, date: str) -> list[dict]:
         return []
 
 
-def _validate_staff_availability(
+async def _validate_staff_availability(
     user_id: str,
     staff_name: str,
     date: str,
     time: str,
     duration_minutes: int = 60,
     exclude_appointment_id: Optional[str] = None,
+    business_timezone: str = "UTC",
 ) -> None:
     """Raises HTTPException(400) if the staff member isn't available for
     [time, time+duration_minutes) on the given date, per their user_availability,
-    date overrides, and existing booked appointments.
+    date overrides, existing booked appointments, and (AIE-69) their connected
+    Google Calendar's busy times, if any.
 
     If the staff member has zero user_availability rows configured at all (never
     set up individual hours), this is a no-op — booking then relies on
@@ -383,6 +386,13 @@ def _validate_staff_availability(
                 pass
         if b_start:
             busy.append((b_start, b_start + timedelta(minutes=dur_min)))
+
+    token_row = _get_gcal_token_row(user_id)
+    external_busy = await google_calendar_service.fetch_busy_intervals(
+        token_row, date, settings.google_client_id, settings.google_client_secret,
+        supabase_admin, timezone=business_timezone,
+    )
+    busy.extend(external_busy)
 
     for b_start, b_end in busy:
         if appt_start < b_end and b_start < appt_end:
@@ -494,9 +504,10 @@ async def create_appointment(
         duration_minutes=duration_minutes,
     )
     staff_name = _get_staff_name(req.assigned_user_id) or "This staff member"
-    _validate_staff_availability(
+    biz_tz_for_validation = _get_business(req.business_id).get("timezone") or "America/Toronto"
+    await _validate_staff_availability(
         req.assigned_user_id, staff_name, req.appointment_date, req.appointment_time,
-        duration_minutes=duration_minutes,
+        duration_minutes=duration_minutes, business_timezone=biz_tz_for_validation,
     )
 
     if _check_double_booking(req.assigned_user_id, req.appointment_date, req.appointment_time):
@@ -505,9 +516,15 @@ async def create_appointment(
             detail="That time slot is already booked. Please choose a different time.",
         )
 
+    customer_id = resolve_or_create_customer(
+        supabase_admin, req.business_id, req.location_id,
+        req.client_name, req.client_phone, req.client_email,
+    )
+
     row = {
         "business_id": req.business_id,
         "location_id": req.location_id,
+        "customer_id": customer_id,
         "assigned_user_id": req.assigned_user_id,
         "client_name": req.client_name,
         "client_phone": req.client_phone or "",
@@ -754,9 +771,11 @@ async def update_appointment(
             duration_minutes=new_duration_minutes,
         )
         staff_name = _get_staff_name(assigned_uid) or "This staff member"
-        _validate_staff_availability(
+        biz_tz_for_validation = _get_business(req.business_id).get("timezone") or "America/Toronto"
+        await _validate_staff_availability(
             assigned_uid, staff_name, new_date, new_time,
             duration_minutes=new_duration_minutes, exclude_appointment_id=appointment_id,
+            business_timezone=biz_tz_for_validation,
         )
         if _check_double_booking(assigned_uid, new_date, new_time, exclude_id=appointment_id):
             raise HTTPException(

@@ -8,6 +8,8 @@ import os
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from gcal_helpers import _gcal_fetch_busy_intervals
+
 logger = logging.getLogger("voice-agent")
 
 
@@ -484,11 +486,16 @@ def _compute_busy_intervals(
     overrides: list[dict],
     booked: list[dict],
     default_duration_minutes: int = 60,
+    external_busy: list[tuple[datetime, datetime]] | None = None,
 ) -> list[tuple[datetime, datetime]] | None:
     """
     Build busy time intervals for a day from date-specific overrides and booked
     appointments. Returns None if a full-day "unavailable" override applies
     (an override with is_unavailable=True and no start/end time set).
+    external_busy (AIE-69): additional (start, end) intervals from the staff
+    member's connected Google Calendar, already in the same 1900-01-01-anchored
+    time-of-day representation — merged in as-is, does not affect the full-day
+    "unavailable" override check above.
     """
     for ov in overrides:
         if ov.get("is_unavailable") and not ov.get("start_time"):
@@ -525,6 +532,9 @@ def _compute_busy_intervals(
             except ValueError:
                 pass
 
+    if external_busy:
+        busy.extend(external_busy)
+
     return busy
 
 
@@ -535,6 +545,7 @@ def _compute_available_slots(
     target_date: str,
     slot_minutes: int = 60,
     business_timezone: str = "UTC",
+    external_busy: list[tuple[datetime, datetime]] | None = None,
 ) -> list[str]:
     """
     Compute free time slots for a given date.
@@ -553,7 +564,7 @@ def _compute_available_slots(
         return []
     work_start, work_end = work_hours
 
-    busy = _compute_busy_intervals(overrides, booked, slot_minutes)
+    busy = _compute_busy_intervals(overrides, booked, slot_minutes, external_busy=external_busy)
     if busy is None:
         return []
 
@@ -761,7 +772,7 @@ def _validate_booking_date(
     )
 
 
-def _validate_staff_availability(
+async def _validate_staff_availability(
     supabase,
     user_id: str,
     staff_name: str,
@@ -769,11 +780,13 @@ def _validate_staff_availability(
     time: str,
     duration_minutes: int = 60,
     exclude_appointment_id: str | None = None,
+    business_timezone: str = "UTC",
 ) -> str | None:
     """
     Returns None if the staff member is available for [time, time+duration_minutes)
-    on the given date, per their user_availability, date overrides, and existing
-    booked appointments.
+    on the given date, per their user_availability, date overrides, existing
+    booked appointments, and (AIE-69) their connected Google Calendar's busy times,
+    if any.
     Returns an agent-readable error string if not.
 
     If the staff member has zero user_availability rows configured at all (they've
@@ -815,7 +828,8 @@ def _validate_staff_availability(
     booked = _fetch_appointments_on_date(supabase, user_id, date)
     if exclude_appointment_id:
         booked = [b for b in booked if b.get("id") != exclude_appointment_id]
-    busy = _compute_busy_intervals(overrides, booked, duration_minutes)
+    external_busy = await _gcal_fetch_busy_intervals(supabase, user_id, date, business_timezone)
+    busy = _compute_busy_intervals(overrides, booked, duration_minutes, external_busy=external_busy)
     if busy is None:
         return f"{staff_name} is unavailable on {date}. Please choose a different day."
 
@@ -829,7 +843,7 @@ def _validate_staff_availability(
     return None
 
 
-def _find_next_slots(
+async def _find_next_slots(
     supabase,
     business_id: str,
     location_id: str | None,
@@ -890,8 +904,10 @@ def _find_next_slots(
                 availability = availability_cache.get(user_id, [])
                 overrides = _fetch_user_overrides(supabase, user_id, date_str)
                 booked = _fetch_appointments_on_date(supabase, user_id, date_str)
+                external_busy = await _gcal_fetch_busy_intervals(supabase, user_id, date_str, business_timezone)
                 slots = _compute_available_slots(
                     availability, overrides, booked, date_str, slot_minutes, business_timezone,
+                    external_busy=external_busy,
                 )
                 if after_time and i == 0:
                     slots = [s for s in slots if s >= after_time]
@@ -916,7 +932,7 @@ def _find_next_slots(
     return []
 
 
-def _find_latest_slot(
+async def _find_latest_slot(
     supabase,
     business_id: str,
     location_id: str | None,
@@ -974,8 +990,10 @@ def _find_latest_slot(
                 availability = availability_cache.get(user_id, [])
                 overrides = _fetch_user_overrides(supabase, user_id, date_str)
                 booked = _fetch_appointments_on_date(supabase, user_id, date_str)
+                external_busy = await _gcal_fetch_busy_intervals(supabase, user_id, date_str, business_timezone)
                 slots = _compute_available_slots(
                     availability, overrides, booked, date_str, slot_minutes, business_timezone,
+                    external_busy=external_busy,
                 )
                 if min_time:
                     slots = [s for s in slots if s >= min_time]

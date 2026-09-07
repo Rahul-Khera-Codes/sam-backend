@@ -164,7 +164,6 @@ async def reset_agent_settings(
         "outbound_calling": True,
         "call_forwarding": True,
         "send_texts_during_after_calls": True,
-        "missed_call_text_back": True,
         "callback_scheduling": True,
         "reschedule_cancel_appointments": True,
         "confirmation_reminder_calls": True,

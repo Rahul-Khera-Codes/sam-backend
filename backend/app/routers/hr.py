@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 import uuid
 import os
 
@@ -18,8 +19,10 @@ from app.schemas.hr import (
     HrCandidateResponse,
     HrCandidatesResponse,
     HrDashboardPostingResponse,
+    HrDashboardStatCard,
     HrDraftAssistRequest,
     HrDraftAssistResponse,
+    HrFunnelStage,
     HrJobPostingResponse,
     HrJobsResponse,
     HrJobPostingUpsertRequest,
@@ -95,7 +98,6 @@ async def get_hr_mock_workspace(
                     "team": "Engineering",
                     "applicants": 142,
                     "linkedin": "Active",
-                    "indeed": "Active",
                     "aiStatus": "Screening",
                 },
                 {
@@ -103,7 +105,6 @@ async def get_hr_mock_workspace(
                     "team": "Design",
                     "applicants": 89,
                     "linkedin": "Active",
-                    "indeed": "Paused",
                     "aiStatus": "Waiting Review",
                 },
                 {
@@ -111,7 +112,6 @@ async def get_hr_mock_workspace(
                     "team": "Marketing",
                     "applicants": 215,
                     "linkedin": "Active",
-                    "indeed": "Active",
                     "aiStatus": "Scheduling",
                 },
             ],
@@ -491,7 +491,7 @@ def _status_label(status: str) -> str:
     }.get(status, "Draft")
 
 
-def _native_job_to_response(row: dict) -> dict:
+def _native_job_to_response(row: dict, applicants: int = 0) -> dict:
     status = _status_label(row.get("status") or "draft")
     sync_state = row.get("sync_state") or "native_only"
     return {
@@ -524,12 +524,10 @@ def _native_job_to_response(row: dict) -> dict:
         "language": row.get("language") or "en",
         "content_html": row.get("content_html") or "",
         "platforms": ["Native"],
-        "applicants": 0,
+        "applicants": applicants,
         "applicant_bar_class_name": "bg-blue-500" if status == "Active" else "bg-slate-300",
         "publish_in_linkedin": bool(row.get("publish_in_linkedin")),
-        "publish_in_indeed": bool(row.get("publish_in_indeed")),
         "linkedin_status": "Pending" if row.get("publish_in_linkedin") else "Off",
-        "indeed_status": "Pending" if row.get("publish_in_indeed") else "Off",
         "ai_status": "Drafting" if status == "Draft" else "Ready",
         "metadata": None,
         "source_payload": row.get("source_payload") or {},
@@ -547,11 +545,11 @@ def _workspace_view_from_jobs(jobs: list[dict]) -> HrWorkspaceJobPayload:
             team=job["department"] or "Unassigned",
             applicants=job.get("applicants", 0),
             linkedin="Active" if job.get("publish_in_linkedin") else "Off",
-            indeed="Active" if job.get("publish_in_indeed") else "Off",
             aiStatus=job.get("ai_status") or "Ready",
+            status=job["status"],
+            source=job["source"],
         ).model_dump()
         for job in jobs
-        if job["status"] == "Active"
     ][:5]
 
     stat_cards = [
@@ -585,7 +583,7 @@ def _workspace_view_from_jobs(jobs: list[dict]) -> HrWorkspaceJobPayload:
     )
 
 
-def _load_native_jobs(business_id: str) -> list[dict]:
+def _load_native_jobs(business_id: str, applicants_by_job: dict[str, int]) -> list[dict]:
     rows = (
         supabase_admin.table("hr_job_postings")
         .select("*")
@@ -594,11 +592,134 @@ def _load_native_jobs(business_id: str) -> list[dict]:
         .order("updated_at", desc=True)
         .execute()
     )
-    return [_native_job_to_response(row) for row in (rows.data or [])]
+    return [
+        _native_job_to_response(row, applicants_by_job.get(row["id"], 0))
+        for row in (rows.data or [])
+    ]
 
 
-async def _get_hr_jobs_payload(business_id: str) -> HrJobsResponse:
-    native_jobs = _load_native_jobs(business_id)
+def _fetch_hr_applications(business_id: str) -> list[dict]:
+    rows = (
+        supabase_admin.table("hr_job_applications")
+        .select("job_posting_id,status,submitted_at")
+        .eq("business_id", business_id)
+        .execute()
+    )
+    return rows.data or []
+
+
+def _fetch_hr_interview_sessions(business_id: str) -> list[dict]:
+    rows = (
+        supabase_admin.table("hr_interview_sessions")
+        .select("status,interview_kind,invited_at")
+        .eq("business_id", business_id)
+        .execute()
+    )
+    return rows.data or []
+
+
+def _parse_ts(value) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _pct_change_label(current: int, previous: int) -> str:
+    if previous == 0:
+        return "+0%" if current == 0 else "+100%"
+    pct = round(((current - previous) / previous) * 100)
+    return f"{'+' if pct >= 0 else ''}{pct}%"
+
+
+def _windowed_change(rows: list[dict], ts_key: str, predicate, now: datetime) -> str:
+    window = timedelta(days=7)
+    current_start = now - window
+    prev_start = current_start - window
+    current = 0
+    previous = 0
+    for row in rows:
+        if predicate is not None and not predicate(row):
+            continue
+        ts = _parse_ts(row.get(ts_key))
+        if ts is None:
+            continue
+        if ts >= current_start:
+            current += 1
+        elif ts >= prev_start:
+            previous += 1
+    return _pct_change_label(current, previous)
+
+
+def _build_dashboard_stats(applications: list[dict], interview_sessions: list[dict]) -> dict:
+    now = datetime.now(timezone.utc)
+
+    total_applicants = len(applications)
+    pending_review = sum(1 for a in applications if a.get("status") == "new")
+    hired = sum(1 for a in applications if a.get("status") == "hired")
+
+    active_interview_statuses = {"invited", "opened", "in_progress"}
+    active_interviews = sum(
+        1 for s in interview_sessions if s.get("status") in active_interview_statuses
+    )
+    ai_screened = sum(
+        1
+        for s in interview_sessions
+        if s.get("interview_kind") == "ai_screen" and s.get("status") != "draft"
+    )
+    interviewed = sum(
+        1 for s in interview_sessions if s.get("status") in {"completed", "reviewed"}
+    )
+
+    stats = [
+        HrDashboardStatCard(
+            title="Total Applicants",
+            value=str(total_applicants),
+            change=_windowed_change(applications, "submitted_at", None, now),
+            icon="users",
+        ).model_dump(),
+        HrDashboardStatCard(
+            title="Pending Review",
+            value=str(pending_review),
+            change=_windowed_change(
+                applications, "submitted_at", lambda a: a.get("status") == "new", now
+            ),
+            icon="briefcase",
+        ).model_dump(),
+        HrDashboardStatCard(
+            title="Active Interviews",
+            value=str(active_interviews),
+            change=_windowed_change(
+                interview_sessions,
+                "invited_at",
+                lambda s: s.get("status") in active_interview_statuses,
+                now,
+            ),
+            icon="calendar",
+        ).model_dump(),
+    ]
+
+    funnel_stages = [
+        HrFunnelStage(label="Applicants", value=total_applicants).model_dump(),
+        HrFunnelStage(label="AI Screened", value=ai_screened).model_dump(),
+        HrFunnelStage(label="Interviewed", value=interviewed).model_dump(),
+        HrFunnelStage(label="Hired", value=hired).model_dump(),
+    ]
+
+    return {"stats": stats, "funnel_stages": funnel_stages}
+
+
+async def _get_hr_jobs_payload(
+    business_id: str, applications: list[dict] | None = None
+) -> HrJobsResponse:
+    if applications is None:
+        applications = _fetch_hr_applications(business_id)
+    applicants_by_job = Counter(
+        row["job_posting_id"] for row in applications if row.get("job_posting_id")
+    )
+    native_jobs = _load_native_jobs(business_id, applicants_by_job)
     native_draft_count = sum(1 for job in native_jobs if job["status"] == "Draft")
     return HrJobsResponse(
         jobs=[HrJobPostingResponse.model_validate(job) for job in native_jobs],
@@ -619,12 +740,20 @@ async def get_hr_jobs_workspace(
     business_id: str,
     _: str = Depends(require_business_access()),
 ):
-    payload = await _get_hr_jobs_payload(business_id)
+    applications = _fetch_hr_applications(business_id)
+    interview_sessions = _fetch_hr_interview_sessions(business_id)
+
+    payload = await _get_hr_jobs_payload(business_id, applications=applications)
     jobs = [job.model_dump() for job in payload.jobs]
-    workspace_jobs = _workspace_view_from_jobs(jobs)
+    workspace = _workspace_view_from_jobs(jobs).model_dump()
+
+    dashboard_stats = _build_dashboard_stats(applications, interview_sessions)
+    workspace["dashboard"]["stats"] = dashboard_stats["stats"]
+    workspace["dashboard"]["funnel_stages"] = dashboard_stats["funnel_stages"]
+
     return {
         "native_draft_count": payload.native_draft_count,
-        **workspace_jobs.model_dump(),
+        **workspace,
     }
 
 
@@ -882,7 +1011,6 @@ async def create_hr_job(
         "required_experience": body.required_experience,
         "seniority": body.seniority,
         "publish_in_linkedin": body.publish_in_linkedin,
-        "publish_in_indeed": body.publish_in_indeed,
         "posted_at": datetime.now(timezone.utc).isoformat() if status == "active" else None,
     }
     created = (
@@ -943,7 +1071,6 @@ async def update_hr_job(
         "required_experience": body.required_experience,
         "seniority": body.seniority,
         "publish_in_linkedin": body.publish_in_linkedin,
-        "publish_in_indeed": body.publish_in_indeed,
         "posted_at": datetime.now(timezone.utc).isoformat() if status == "active" else existing.data[0].get("posted_at"),
     }
     updated = (
