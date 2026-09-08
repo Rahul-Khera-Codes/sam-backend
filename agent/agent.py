@@ -653,6 +653,10 @@ class Assistant(Agent):
         """
         Book an appointment after confirming all details with the customer.
         date: YYYY-MM-DD  |  time: HH:MM (24h, e.g. 14:30)
+        client_name: the customer's full name — always ask for BOTH first and last name before
+        booking, even if the customer only volunteers a first name. Appointments are looked up by
+        full name if the customer calls back to cancel or reschedule, so a first-name-only booking
+        can fail to be found later.
         Always collect client_email — it is required to send a confirmation email.
         For on-site/customer-location services, collect street, city, state/province, postal code, and country.
         Always repeat details back to the customer and get verbal confirmation before calling this.
@@ -888,6 +892,8 @@ class Assistant(Agent):
     ) -> str:
         """
         Look up upcoming appointments for a customer by their name.
+        client_name: the customer's full name (first AND last) — ask for both before calling this,
+        appointments are stored under the full name so a first-name-only search can miss or mismatch.
         Use this before rescheduling or cancelling to find the appointment ref.
         Do NOT read the ref ID out loud — use service, date, and time when confirming with the customer.
         """
@@ -1100,7 +1106,7 @@ class Assistant(Agent):
         """
         Reschedule an existing appointment.
         appointment_ref: the 8-character reference from find_appointments.
-        client_name: the customer's name (used to narrow the search).
+        client_name: the customer's full name, first AND last (used to narrow the search).
         new_date: YYYY-MM-DD  |  new_time: HH:MM (24h)
         """
         if not self._supabase or not self._business_id:
@@ -1371,7 +1377,7 @@ class Assistant(Agent):
     ) -> str:
         """
         Cancel an existing appointment by its reference ID.
-        client_name: the customer's name (used to narrow the search).
+        client_name: the customer's full name, first AND last (used to narrow the search).
         Always confirm verbally with the customer before calling this.
         """
         if not self._supabase or not self._business_id:

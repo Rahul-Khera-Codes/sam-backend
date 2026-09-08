@@ -19,7 +19,7 @@ from datetime import date, datetime, timedelta, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.core.supabase import supabase_admin
-from app.services import livekit_service
+from app.services import livekit_service, settings_service
 from app.routers.market_agent import run_market_agent_refresh
 from app.routers.report_scheduler import send_digest
 from app.services.marketing_social_service import publish_due_scheduled_posts
@@ -44,6 +44,13 @@ async def _trigger_outbound_call(
     Returns call_id on success, None on failure.
     Mirrors the logic in POST /calls/outbound but runs in-process (no HTTP).
     """
+    if not settings_service.is_feature_enabled(business_id, location_id, "outbound_calling"):
+        logger.info(
+            "Scheduler: outbound_calling disabled for location %s — skipping appointment %s",
+            location_id, appointment_id,
+        )
+        return None
+
     # Resolve the outbound trunk for this location
     trunk_row = (
         supabase_admin.table("business_phone_numbers")

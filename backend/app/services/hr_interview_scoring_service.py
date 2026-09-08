@@ -21,6 +21,14 @@ def _normalize_recommendation(value: str) -> str:
     return normalized if normalized in {"strong_hire", "hire", "review", "no_hire"} else "review"
 
 
+def _clamp_criterion_score(item: dict[str, Any]) -> dict[str, Any]:
+    try:
+        score = round(float(item.get("score") or 0))
+    except (TypeError, ValueError):
+        score = 0
+    return {**item, "score": max(1, min(5, score))}
+
+
 async def generate_and_store_interview_outcome(
     *,
     business_id: str,
@@ -76,6 +84,8 @@ async def generate_and_store_interview_outcome(
             "Do not infer protected characteristics.",
             "The recommendation is advisory only and requires human review.",
             "Do not auto-hire, auto-reject, or present the recommendation as final.",
+            "Each criterion_scores[].score must be an integer from 1 to 5, calibrated against that "
+            "criterion's score_1_anchor (=1), score_3_anchor (=3), and score_5_anchor (=5) in the rubric.",
         ],
         "response_schema": {
             "total_score": 0,
@@ -109,6 +119,12 @@ async def generate_and_store_interview_outcome(
         ],
     )
     payload = json.loads(response.choices[0].message.content or "{}")
+    raw_criterion_scores = payload.get("criterion_scores")
+    criterion_scores = (
+        [_clamp_criterion_score(item) for item in raw_criterion_scores if isinstance(item, dict)]
+        if isinstance(raw_criterion_scores, list)
+        else []
+    )
     row = {
         "business_id": business_id,
         "session_id": session_id,
@@ -118,7 +134,7 @@ async def generate_and_store_interview_outcome(
         "summary": str(payload.get("summary") or ""),
         "strengths": payload.get("strengths") if isinstance(payload.get("strengths"), list) else [],
         "concerns": payload.get("concerns") if isinstance(payload.get("concerns"), list) else [],
-        "criterion_scores": payload.get("criterion_scores") if isinstance(payload.get("criterion_scores"), list) else [],
+        "criterion_scores": criterion_scores,
     }
     existing = (
         supabase_admin.table("hr_interview_outcomes")

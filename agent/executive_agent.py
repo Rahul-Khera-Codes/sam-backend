@@ -9,6 +9,7 @@ Tools available:
   Gmail  — list_emails, read_email, draft_reply (preview → approve → send)
   Calendar — get_schedule, find_free_slots, create_calendar_event (preview → approve)
   Appointments — list_appointments, reschedule_appointment, cancel_appointment
+  Customers — search_customers, get_customer (contact info, do-not-contact, appointment history)
 """
 
 import asyncio
@@ -207,12 +208,14 @@ You are Remi, the personal executive assistant for {business_name}. You work dir
 - Gmail: read and summarise recent emails, draft replies, send (with approval).
 - Google Calendar: show the schedule, find free slots, create events.
 - Appointments: view, reschedule, or cancel customer bookings.
+- Customers: search the customer list by name, email, or phone; look up a customer's contact info, do-not-contact status, notes, and appointment history.
 - Documents: attach owner-selected PDFs to emails, list Remi context documents, and search those PDFs for conversation context.
 
 ## How to behave
 - ALWAYS respond in English. Only switch to another language if the owner explicitly speaks in that language and continues in it.
 - ANSWER GENERAL AND PERSONAL QUESTIONS DIRECTLY. Your name is Remi — if asked who you are or your name, say "I'm Remi, your assistant for {business_name}." Do NOT turn casual or identity questions into a task, and never say you don't have a name.
 - Only use a tool when the owner actually wants an email, calendar, or appointment action. Never assume a message is a scheduling/appointment request unless they clearly ask for one.
+- If the owner asks about a customer, or wants to retrieve a customer's info or email them, call `search_customers` first to find them (or `get_customer` if you already have their id from a prior search). Use the email address it returns for `draft_email`/`send_email_draft` — never guess or invent a customer's email address. If the customer is marked do-not-contact, tell the owner clearly and get explicit confirmation before drafting anything to them.
 - Always confirm before sending emails or creating calendar events — draft first, show the preview, then wait for "yes, go ahead".
 - If an email draft is already shown and the owner asks for changes, call `update_email_draft` with the revised recipient, subject, or full body as needed. Do not merely say the changes are complete.
 - When a tool shows a card on screen (emails, schedule), the details are visible to the owner — give a brief one-line summary and ask what they'd like to do; do NOT read every item aloud.
@@ -1204,6 +1207,147 @@ class ExecutiveAssistant(Agent):
             logger.error("reschedule_appointment error: %s", e)
             return "Failed to reschedule. Please try again."
 
+    # ── Customer tools ────────────────────────────────────────────────────────
+
+    @function_tool()
+    async def search_customers(
+        self,
+        context: RunContext,
+        query: str = "",
+        max_results: int = 8,
+    ) -> str:
+        """
+        Search the business's customer list by name, email, or phone.
+        Returns each match's id, name, email, phone, and do-not-contact status.
+        Use this to find a customer's email before drafting them an email, or
+        to check their contact preferences. Leave query empty to list customers.
+        """
+        await _set_state(self._room, "thinking")
+        await self._activity_start("Searching customers…")
+        if not self._supabase:
+            return "I can't search customers because Supabase is unavailable."
+
+        clean_query = query.strip()
+        try:
+            q = (
+                self._supabase.table("customers")
+                .select("id, first_name, last_name, email, phone, do_not_contact")
+                .eq("business_id", self._business_id)
+            )
+            if clean_query:
+                like = f"%{clean_query}%"
+                q = q.or_(
+                    f"first_name.ilike.{like},last_name.ilike.{like},"
+                    f"email.ilike.{like},phone.ilike.{like}"
+                )
+            r = q.order("last_name").limit(max(1, min(max_results, 20))).execute()
+            rows = getattr(r, "data", None) or []
+        except Exception as e:
+            logger.error("search_customers DB error: %s", e)
+            return "Failed to search customers. Please try again."
+
+        if not rows:
+            return f"No customers found matching '{clean_query}'." if clean_query else "No customers found yet."
+
+        customers_data = [
+            {
+                "id": c["id"],
+                "name": f"{c.get('first_name', '')} {c.get('last_name', '')}".strip(),
+                "email": c.get("email") or "",
+                "phone": c.get("phone") or "",
+                "doNotContact": bool(c.get("do_not_contact")),
+            }
+            for c in rows
+        ]
+        await self._send_card("customer_list", {"customers": customers_data})
+        # subject-line data is business-owned (not attacker-controlled like email
+        # content), but still fenced so the model treats it as reference, not
+        # instructions — same defensive pattern as the other list tools.
+        ref = "\n".join(
+            f"- id={c['id']} | {c['name']} | email={c['email'] or 'none'} | phone={c['phone'] or 'none'}"
+            + (" | DO NOT CONTACT" if c["doNotContact"] else "")
+            for c in customers_data
+        )
+        return (
+            f"Showing {len(customers_data)} customer(s) on screen. "
+            "For your reference (do NOT read ids aloud — use get_customer for full detail, "
+            "and use the email shown for draft_email; never guess an email address):\n"
+            f"{ref}"
+        )
+
+    @function_tool()
+    async def get_customer(
+        self,
+        context: RunContext,
+        customer_id: str,
+    ) -> str:
+        """
+        Get full details for one customer by id (from search_customers): contact
+        info, do-not-contact status, notes, and recent appointment history.
+        """
+        await _set_state(self._room, "thinking")
+        await self._activity_start("Opening customer record…")
+        if not self._supabase:
+            return "I can't look up customers because Supabase is unavailable."
+
+        try:
+            r = (
+                self._supabase.table("customers")
+                .select("id, first_name, last_name, email, phone, do_not_contact, notes")
+                .eq("business_id", self._business_id)
+                .eq("id", customer_id)
+                .limit(1)
+                .execute()
+            )
+            rows = getattr(r, "data", None) or []
+            if not rows:
+                return f"No customer found with id '{customer_id}'."
+            c = rows[0]
+
+            hist_r = (
+                self._supabase.table("appointments")
+                .select("appointment_date, appointment_time, service, status")
+                .eq("customer_id", customer_id)
+                .order("appointment_date", desc=True)
+                .limit(5)
+                .execute()
+            )
+            history = getattr(hist_r, "data", None) or []
+        except Exception as e:
+            logger.error("get_customer DB error: %s", e)
+            return "Failed to fetch that customer. Please try again."
+
+        name = f"{c.get('first_name', '')} {c.get('last_name', '')}".strip()
+        do_not_contact = bool(c.get("do_not_contact"))
+        detail = {
+            "id": c["id"],
+            "name": name,
+            "email": c.get("email") or "",
+            "phone": c.get("phone") or "",
+            "doNotContact": do_not_contact,
+            "notes": c.get("notes") or "",
+            "history": [
+                {
+                    "date": h.get("appointment_date", ""),
+                    "time": h.get("appointment_time", ""),
+                    "service": h.get("service") or "",
+                    "status": h.get("status") or "",
+                }
+                for h in history
+            ],
+        }
+        await self._send_card("customer_detail", detail)
+        dnc_warning = (
+            " This customer is marked DO NOT CONTACT — confirm explicitly with the owner "
+            "before drafting or sending anything to them."
+            if do_not_contact else ""
+        )
+        return (
+            f"Showing {name}'s record on screen — email: {detail['email'] or 'none on file'}, "
+            f"phone: {detail['phone'] or 'none on file'}, {len(history)} past appointment(s)."
+            f"{dnc_warning}"
+        )
+
 
 # ── LiveKit entry point ───────────────────────────────────────────────────────
 
@@ -1490,6 +1634,17 @@ async def executive_agent(ctx: agents.JobContext):
                         asyncio.ensure_future(session.generate_reply(user_input=prompt))
                     else:
                         logger.warning("card_action reply_email missing emailId: %s", payload)
+                elif action == "email_customer":
+                    name = (payload.get("name") or "").strip()
+                    email = (payload.get("email") or "").strip()
+                    if email:
+                        prompt = (
+                            f"The owner wants to email the customer {name or email} at {email}. "
+                            "Ask them what they'd like to say, then draft it with draft_email using that email address."
+                        )
+                        asyncio.ensure_future(session.generate_reply(user_input=prompt))
+                    else:
+                        logger.warning("card_action email_customer missing email: %s", payload)
                 elif action == "select_remi_document":
                     document_id = (payload.get("documentId") or "").strip()
                     document_name = (payload.get("documentName") or "").strip()
