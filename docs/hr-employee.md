@@ -448,7 +448,13 @@ Future extension:
 - customer-controlled sync back to Greenhouse as note/tag
 
 ### Section 4: Interview Workflow + Stage Mapping
-Status: Planned
+Status: Planned (partial — see AIE-75)
+
+Update (2026-09-08, AIE-75): a real `stage` column (`applied`/`interviewing`/`final_round`) now
+exists on `hr_job_applications`, with a manual "Final Round" shortlist section in the UI. This is
+a narrow slice of the flow below — not the full Greenhouse stage-mapping layer, which remains
+unbuilt. See `docs/features/hr-final-round.md` for details, including the known email-based
+interview-to-application linkage gap.
 
 Goal:
 - Build AI Employees interview pipeline while allowing mapping to customer-specific Greenhouse stages.

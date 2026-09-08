@@ -34,3 +34,8 @@ Before this feature there was no customer entity at all: `appointments.client_na
 - `resolve_or_create_customer` tested directly against the live DB (business "Test corp"): first call creates a customer with normalized phone; second call with a differently-formatted same phone number resolves to the same row instead of duplicating; test row cleaned up after.
 - Both Docker stacks (`ai-employees-app`, `sam-backend`) rebuilt and confirmed responsive after the change.
 - Not yet verified: an interactive browser walkthrough of the Customer List page and a full end-to-end appointment booking through the web "New Appointment" modal / a live voice-agent call (needs a logged-in session / test call — see open items below).
+
+## Bug fix (AIE-78, 2026-09-08)
+- **Appointment history dates displayed one day early** in the customer edit modal for anyone in a timezone behind UTC. `appointment_date` is a plain Postgres `DATE` (`"YYYY-MM-DD"`, no time/timezone); `CustomerList.tsx:464` parsed it with `new Date(h.appointment_date)`, which JS treats as UTC midnight, then rendered it via `toLocaleDateString()` in the browser's local timezone — shifting the displayed date back a day in negative-UTC-offset zones.
+- **Fix**: parse with date-fns `parseISO()` instead of the bare `Date` constructor — `parseISO` treats a date-only string as local midnight, matching the pattern already used correctly in `Calendar.tsx`.
+- Same bug class also found and fixed in the (separate) Customer Service Agent Scheduler: `src/components/scheduler/CustomScheduleCard.tsx` (`formatDateRange`, one_time schedule display) and `src/hooks/useCustomSchedules.ts` (`deriveStatus`'s UTC-based "today" comparison, which could mis-badge a schedule as Active/Scheduled/Ended near midnight).

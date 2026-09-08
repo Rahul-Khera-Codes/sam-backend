@@ -119,7 +119,7 @@ below) — otherwise there'd be no way for them to actually learn it.
 - `src/lib/voiceAgentApi.ts` — `getCheckInCodeStatus`, `setCheckInCode`, `bulkGenerateCheckInCodes`,
   `getMyCheckInCode`, and `employee_code` threaded through `updateAppointmentStatus`/`addPaymentEntryApi`.
 
-## Viewing who checked in / marked no-show / cancelled / collected a payment
+## Viewing who checked in / marked no-show / cancelled / collected a payment / deleted an entry
 The attribution captured above (`checked_in_by_user_id`, `collected_by_user_id`, etc.) was
 originally write-only from the UI's perspective — stored on the record but not rendered anywhere.
 This is now surfaced directly on the two existing screens rather than a separate report page:
@@ -143,6 +143,14 @@ This is now surfaced directly on the two existing screens rather than a separate
   `"Jane · Code 4821"` format via `collected_by_code`. The dialog takes a new optional
   `getMemberName` prop (passed in from `Calendar.tsx`, which already has team member data via
   `useTeamManagement`) rather than fetching its own copy of the team list.
+- `src/components/appointments/PaymentDetailsDialog.tsx` (AIE-58 follow-up, 2026-09-08) — a
+  **Deleted entries** section renders below the active entries list whenever
+  `payment.deleted_entries` is non-empty: each row shows the struck-through amount/type, a
+  "Deleted by: Jane · Code 4821 · <timestamp>" line (same `getMemberName`/`_code` format as
+  Collected by), and the deletion timestamp. `deleted_entries` comes from a new
+  `AppointmentPaymentResponse.deleted_entries` field — `_build_full_payment_response`
+  (`backend/app/routers/appointments.py`) now also queries `appointment_payment_entry_deletions`
+  by `appointment_payment_id`, newest first, alongside the existing entries fetch.
 - No new role gate — this is visible to anyone who can already open these dialogs (matches every
   other field on them; there's no existing precedent for hiding parts of an appointment/payment
   from non-admin staff who have page access).
@@ -207,12 +215,13 @@ This is now surfaced directly on the two existing screens rather than a separate
 - **Code required for `checked_in`, `no_show`, and `cancelled`** (not `confirmed`). Originally
   scoped to `checked_in` only, matching the ticket's literal wording — widened 2026-08-26 after a
   QA comment on AIE-28 asked for the same requirement on No Show/Cancelled.
-- **Deletion audit has no UI surface yet (AIE-58, 2026-09-05).** `appointment_payment_entry_deletions`
-  rows are captured on every delete but nothing renders them in the app today — same starting point
-  as `no_show_by_*`/`cancelled_by_*` before their 2026-08-27 follow-up added the Appointment Details
-  attribution line. Deliberately out of scope for AIE-58 (the ticket asked to gate the delete and
-  keep a record, not to add a report view); can be surfaced later the same way if asked, e.g. from
-  a query against this table by `business_id`.
+- **Deletion audit is now surfaced in the Payment Details dialog (AIE-58 follow-up, 2026-09-08).**
+  The initial AIE-58 implementation deliberately left `appointment_payment_entry_deletions` write-only
+  (ticket asked to gate the delete and keep a record, not to add a report view) — same starting
+  point as `no_show_by_*`/`cancelled_by_*` before their 2026-08-27 follow-up. QA/client testing
+  after "Verified" reported the feature as not working, because from a user's perspective a record
+  no one can see isn't a record — same lesson as the 2026-08-27 fallback-attribution reversal below.
+  Fixed by rendering it, see "Viewing who ... deleted a payment/refund entry" below.
 - **Attribution now recorded for all three gated transitions, not just `checked_in`.** Initially
   (2026-08-26) No Show/Cancelled were gate-only — code validated but nothing recorded — as a
   deliberate scope decision to avoid a migration. Reversed 2026-08-27 after the client asked

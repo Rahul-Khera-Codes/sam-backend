@@ -83,6 +83,9 @@ class HrCandidateJobResponse(BaseModel):
     absolute_url: str = ""
 
 
+HrCandidateStage = Literal["applied", "interviewing", "final_round"]
+
+
 class HrCandidateResponse(BaseModel):
     id: str
     application_id: str
@@ -98,6 +101,18 @@ class HrCandidateResponse(BaseModel):
     applied_at: Optional[str] = None
     source: str = ""
     prospect: bool = False
+    eligible_for_final_round: bool = False
+    final_round_at: Optional[str] = None
+
+
+class HrCandidateStageUpdateRequest(BaseModel):
+    business_id: str
+    stage: HrCandidateStage
+
+
+class HrCandidateLookupResponse(BaseModel):
+    found: bool = False
+    candidate: Optional[HrCandidateResponse] = None
 
 
 class HrCandidatesResponse(BaseModel):
