@@ -103,6 +103,28 @@ class HrCandidateResponse(BaseModel):
     prospect: bool = False
     eligible_for_final_round: bool = False
     final_round_at: Optional[str] = None
+    interview_kind: Optional[str] = None
+    interview_status: Optional[str] = None
+    interview_started_at: Optional[str] = None
+    interview_completed_at: Optional[str] = None
+    human_interview_provider: Optional[str] = None
+    ai_score: Optional[float] = None
+    recommendation: Optional[str] = None
+    recruiter_score: Optional[float] = None
+    criterion_scores: list[dict[str, Any]] = Field(default_factory=list)
+    strengths: list[str] = Field(default_factory=list)
+    has_resume: bool = False
+    has_cover_letter: bool = False
+    interview_session_id: Optional[str] = None
+
+
+class HrCandidateFileUrlResponse(BaseModel):
+    url: str
+
+
+class HrCandidatePromoteRequest(BaseModel):
+    business_id: str
+    session_id: str
 
 
 class HrCandidateStageUpdateRequest(BaseModel):

@@ -19,7 +19,7 @@ from app.schemas.appointments import (
     AppointmentResponse,
     CancelAppointmentResponse,
 )
-from app.services import google_calendar_service
+from app.services import google_calendar_service, settings_service
 from app.services.customers_service import resolve_or_create_customer
 from app.services.email_service import (
     send_appointment_confirmation,
@@ -654,7 +654,12 @@ async def create_appointment(
         except Exception:
             pass
 
-    if req.client_phone and settings.twilio_account_sid and settings.twilio_auth_token:
+    if (
+        req.client_phone
+        and settings.twilio_account_sid
+        and settings.twilio_auth_token
+        and settings_service.is_feature_enabled(req.business_id, req.location_id, "send_texts_during_after_calls")
+    ):
         try:
             from_number = None
             if req.location_id:

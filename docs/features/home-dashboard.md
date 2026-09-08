@@ -105,12 +105,32 @@ payment-summary report and the new revenue-summary endpoint.
   breakdown that endpoint doesn't provide.
 - **"Needs your attention" is a client-side composition, not a distinct backend payload.**
   `GET /dashboard/activity-feed` returns one merged `items` list; the attention-queue
-  widget (`useAttentionQueue.ts`) instead composes 5 already-real sources directly:
+  widget (`useAttentionQueue.ts`) instead composes 6 already-real sources directly:
   marketing drafts awaiting approval, outstanding balance (from revenue-summary), HR
-  candidates pending, documents with `embedding_status !== "ready"`, and unanswered
-  forwarded calls. All real data — no fabrication — but this deviates from the plan's
-  original assumption that the backend would pre-split attention items from activity
-  items.
+  candidates pending, documents with `embedding_status !== "ready"`, unanswered
+  forwarded calls, and (added for AIE-60) calls with negative sentiment. All real data —
+  no fabrication — but this deviates from the plan's original assumption that the backend
+  would pre-split attention items from activity items.
+
+### AIE-60: Negative-sentiment calls added to "Needs your attention"
+Sentiment scoring already existed end-to-end before this ticket — `agent/agent.py`'s
+`_generate_summary()` derives `positive`/`neutral`/`negative` from the post-call GPT-4o
+summary and writes it to `calls.sentiment`; it just wasn't surfaced on any dashboard.
+`useAttentionQueue.ts` now adds a 6th source, `listCalls(token, businessId, { locationId,
+limit: 100 })`, and counts `sentiment === "negative"` among the results client-side.
+Reuses the existing `customer_service` module icon (no new `AttentionModule` variant
+needed). Clicking the item navigates to `/dashboard/customer-service/recordings` (no
+deep-link to a specific call — that page doesn't support selecting a call via URL param
+today).
+
+**Known limitation:** `GET /calls` has no `sentiment` or date-range query param, so this
+checks the 100 most recent calls rather than a strict "this week" window like the other
+attention sources (`forwarded_calls` uses `analytics/summary`'s real 7-day period). If
+call volume per location regularly exceeds 100/week, negative-sentiment calls older than
+that cutoff would silently drop off this count. Fixing this properly would mean adding a
+`sentiment` filter (and ideally a date range) to `GET /calls` or a dedicated aggregate
+field on `/analytics/summary` — not done here per user's explicit choice to ship the
+client-side-filter approach first.
 - **Marketing's roster stat and workspace/drafts calls have no `location_id` filter** —
   `marketingEmployeeMock.ts` (the file that actually makes these real backend calls,
   despite its name) has no location parameter at the API layer today. The roster's

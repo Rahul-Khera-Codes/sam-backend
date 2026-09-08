@@ -18,7 +18,7 @@ from app.schemas.calls import (
     TranscriptResponse,
     CallSummaryResponse,
 )
-from app.services import livekit_service
+from app.services import livekit_service, settings_service
 from typing import List, Optional
 from datetime import datetime, timezone
 
@@ -395,6 +395,12 @@ async def initiate_outbound_call(
         raise HTTPException(
             status_code=422,
             detail="The selected business number is not attached to a location yet.",
+        )
+
+    if not settings_service.is_feature_enabled(body.business_id, resolved_location_id, "outbound_calling"):
+        raise HTTPException(
+            status_code=403,
+            detail="Outbound calling is disabled for this location. Enable it in Agent Settings.",
         )
 
     from_number = phone_row["phone_number"]

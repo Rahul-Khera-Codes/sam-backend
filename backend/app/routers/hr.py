@@ -16,7 +16,9 @@ from app.core.config import settings
 from app.core.supabase import supabase_admin
 from app.schemas.documents import OnboardingChatRequest, OnboardingChatResponse
 from app.schemas.hr import (
+    HrCandidateFileUrlResponse,
     HrCandidateLookupResponse,
+    HrCandidatePromoteRequest,
     HrCandidateResponse,
     HrCandidatesResponse,
     HrCandidateStageUpdateRequest,
@@ -790,7 +792,233 @@ def _is_eligible_for_final_round(
     return bool(email) and email in completed_emails
 
 
-def _candidate_response(row: dict, title: str, completed_application_ids: set[str], completed_emails: set[str]) -> HrCandidateResponse:
+_INTERVIEW_STATUS_RANK = {"in_progress": 1, "completed": 2, "reviewed": 3}
+
+
+def _fetch_interview_activity(business_id: str) -> list[dict]:
+    """All in-progress/completed/reviewed interview sessions for a business, each merged with its outcome (if any)."""
+    sessions = (
+        supabase_admin.table("hr_interview_sessions")
+        .select(
+            "id,application_id,candidate_id,candidate_email,candidate_name,candidate_phone,"
+            "job_posting_id,interview_kind,status,started_at,completed_at,"
+            "human_interview_provider,recruiter_score"
+        )
+        .eq("business_id", business_id)
+        .in_("status", list(_INTERVIEW_STATUS_RANK.keys()))
+        .execute()
+    ).data or []
+    if not sessions:
+        return []
+
+    session_ids = [s["id"] for s in sessions if s.get("id")]
+    outcomes_by_session: dict[str, dict] = {}
+    if session_ids:
+        outcome_rows = (
+            supabase_admin.table("hr_interview_outcomes")
+            .select("session_id,total_score,recommendation,criterion_scores,strengths")
+            .in_("session_id", session_ids)
+            .execute()
+        ).data or []
+        outcomes_by_session = {row["session_id"]: row for row in outcome_rows}
+
+    return [{**session, "outcome": outcomes_by_session.get(session["id"])} for session in sessions]
+
+
+def _interview_rank_key(session: dict) -> tuple:
+    rank = _INTERVIEW_STATUS_RANK.get(session.get("status"), 0)
+    timestamp = session.get("completed_at") or session.get("started_at") or ""
+    return (rank, timestamp)
+
+
+def _group_interview_activity_by_key(sessions: list[dict]) -> dict[str, dict]:
+    """Most relevant session per candidate, keyed by both application_id and lowercased
+    candidate_email, same dual-key pattern as _completed_interview_keys, since ad hoc
+    interview invites only carry an email rather than a real application_id.
+    """
+    activity: dict[str, dict] = {}
+    for session in sessions:
+        keys = []
+        if session.get("application_id"):
+            keys.append(session["application_id"])
+        email = (session.get("candidate_email") or "").strip().lower()
+        if email:
+            keys.append(email)
+        for key in keys:
+            existing = activity.get(key)
+            if existing is None or _interview_rank_key(session) > _interview_rank_key(existing):
+                activity[key] = session
+    return activity
+
+
+def _distinct_interviewed_candidates(sessions: list[dict]) -> list[dict]:
+    """One session per unique candidate identity (application_id, else candidate_id, else email)."""
+    best: dict[str, dict] = {}
+    for session in sessions:
+        email = (session.get("candidate_email") or "").strip().lower()
+        identity = session.get("application_id") or session.get("candidate_id") or email or session["id"]
+        existing = best.get(identity)
+        if existing is None or _interview_rank_key(session) > _interview_rank_key(existing):
+            best[identity] = session
+    return list(best.values())
+
+
+def _interview_activity_by_key(business_id: str) -> dict[str, dict]:
+    return _group_interview_activity_by_key(_fetch_interview_activity(business_id))
+
+
+def _interviewed_candidate_response(
+    session: dict,
+    applications_by_id: dict[str, dict],
+    applications_by_email: dict[str, dict],
+    jobs_by_id: dict[str, dict],
+    completed_application_ids: set[str],
+    completed_emails: set[str],
+) -> HrCandidateResponse:
+    application = None
+    if session.get("application_id"):
+        application = applications_by_id.get(session["application_id"])
+    if application is None:
+        email = (session.get("candidate_email") or "").strip().lower()
+        if email:
+            application = applications_by_email.get(email)
+
+    outcome = session.get("outcome") or {}
+    job_posting_id = (application or {}).get("job_posting_id") or session.get("job_posting_id")
+    title = jobs_by_id.get(job_posting_id, {}).get("title", "") if job_posting_id else ""
+
+    if application:
+        candidate_id = application["id"]
+        application_id = application["id"]
+        name = application.get("candidate_name") or session.get("candidate_name") or ""
+        location = application.get("candidate_location") or ""
+        email = application.get("candidate_email") or session.get("candidate_email")
+        phone = application.get("candidate_phone") or session.get("candidate_phone")
+        status = application.get("status") or "new"
+        stage = application.get("stage") or "applied"
+        applied_at = application.get("submitted_at")
+        final_round_at = application.get("final_round_at")
+        eligible = _is_eligible_for_final_round(application, completed_application_ids, completed_emails)
+        has_resume = bool(application.get("resume_storage_path"))
+        has_cover_letter = bool(application.get("cover_letter_storage_path"))
+    else:
+        # No application on file for this candidate — they were interviewed via an ad hoc
+        # invite (freeform name/email on the Interviews page), never went through the
+        # careers-apply flow. Surface real session data anyway; final-round/resume actions
+        # stay disabled since there's no application to move or file to show.
+        candidate_id = session.get("candidate_id") or session["id"]
+        application_id = ""
+        name = session.get("candidate_name") or ""
+        location = ""
+        email = session.get("candidate_email")
+        phone = session.get("candidate_phone")
+        status = ""
+        stage = ""
+        applied_at = None
+        final_round_at = None
+        eligible = False
+        has_resume = False
+        has_cover_letter = False
+
+    return HrCandidateResponse(
+        id=candidate_id,
+        application_id=application_id,
+        candidate_id=candidate_id,
+        name=name,
+        title=title,
+        location=location,
+        email=email,
+        phone=phone,
+        status=status,
+        stage=stage,
+        applied_at=applied_at,
+        source="native",
+        prospect=application is None,
+        eligible_for_final_round=eligible,
+        final_round_at=final_round_at,
+        interview_kind=session.get("interview_kind"),
+        interview_status=session.get("status"),
+        interview_started_at=session.get("started_at"),
+        interview_completed_at=session.get("completed_at"),
+        human_interview_provider=session.get("human_interview_provider"),
+        ai_score=outcome.get("total_score"),
+        recommendation=outcome.get("recommendation"),
+        recruiter_score=session.get("recruiter_score"),
+        criterion_scores=outcome.get("criterion_scores") or [],
+        strengths=outcome.get("strengths") or [],
+        has_resume=has_resume,
+        has_cover_letter=has_cover_letter,
+        interview_session_id=session.get("id"),
+    )
+
+
+def _list_interviewed_candidates(business_id: str) -> HrCandidatesResponse:
+    sessions = _fetch_interview_activity(business_id)
+    if not sessions:
+        return HrCandidatesResponse(
+            available=False,
+            message="No candidates have started or completed an interview yet.",
+        )
+    distinct_sessions = _distinct_interviewed_candidates(sessions)
+
+    application_ids = {s["application_id"] for s in distinct_sessions if s.get("application_id")}
+    emails = {(s.get("candidate_email") or "").strip().lower() for s in distinct_sessions if s.get("candidate_email")}
+
+    applications_by_id: dict[str, dict] = {}
+    applications_by_email: dict[str, dict] = {}
+    if application_ids or emails:
+        app_rows = (
+            supabase_admin.table("hr_job_applications")
+            .select("*")
+            .eq("business_id", business_id)
+            .execute()
+        ).data or []
+        for row in app_rows:
+            applications_by_id[row["id"]] = row
+            email = (row.get("candidate_email") or "").strip().lower()
+            if email:
+                applications_by_email.setdefault(email, row)
+
+    job_ids = {row["job_posting_id"] for row in applications_by_id.values() if row.get("job_posting_id")}
+    job_ids |= {s["job_posting_id"] for s in distinct_sessions if s.get("job_posting_id")}
+    jobs_by_id: dict[str, dict] = {}
+    if job_ids:
+        job_rows = (
+            supabase_admin.table("hr_job_postings")
+            .select("id,title")
+            .in_("id", list(job_ids))
+            .execute()
+        ).data or []
+        jobs_by_id = {job["id"]: job for job in job_rows}
+
+    completed_application_ids, completed_emails = _completed_interview_keys(business_id)
+    candidates = [
+        _interviewed_candidate_response(
+            session, applications_by_id, applications_by_email, jobs_by_id, completed_application_ids, completed_emails
+        )
+        for session in distinct_sessions
+    ]
+    candidates.sort(key=lambda c: c.interview_completed_at or c.interview_started_at or "", reverse=True)
+
+    return HrCandidatesResponse(available=True, candidates=candidates, total=len(candidates))
+
+
+def _candidate_response(
+    row: dict,
+    title: str,
+    completed_application_ids: set[str],
+    completed_emails: set[str],
+    interview_activity: dict[str, dict] | None = None,
+) -> HrCandidateResponse:
+    activity_entry = None
+    if interview_activity:
+        activity_entry = interview_activity.get(row["id"])
+        if activity_entry is None:
+            email = (row.get("candidate_email") or "").strip().lower()
+            if email:
+                activity_entry = interview_activity.get(email)
+    outcome = (activity_entry or {}).get("outcome") or {}
+
     return HrCandidateResponse(
         id=row["id"],
         application_id=row["id"],
@@ -807,6 +1035,19 @@ def _candidate_response(row: dict, title: str, completed_application_ids: set[st
         prospect=False,
         eligible_for_final_round=_is_eligible_for_final_round(row, completed_application_ids, completed_emails),
         final_round_at=row.get("final_round_at"),
+        interview_kind=(activity_entry or {}).get("interview_kind"),
+        interview_status=(activity_entry or {}).get("status"),
+        interview_started_at=(activity_entry or {}).get("started_at"),
+        interview_completed_at=(activity_entry or {}).get("completed_at"),
+        human_interview_provider=(activity_entry or {}).get("human_interview_provider"),
+        ai_score=outcome.get("total_score"),
+        recommendation=outcome.get("recommendation"),
+        recruiter_score=(activity_entry or {}).get("recruiter_score"),
+        criterion_scores=outcome.get("criterion_scores") or [],
+        strengths=outcome.get("strengths") or [],
+        has_resume=bool(row.get("resume_storage_path")),
+        has_cover_letter=bool(row.get("cover_letter_storage_path")),
+        interview_session_id=(activity_entry or {}).get("id"),
     )
 
 
@@ -814,8 +1055,12 @@ def _candidate_response(row: dict, title: str, completed_application_ids: set[st
 async def list_hr_candidates(
     business_id: str,
     stage: str | None = None,
+    interviewed: bool = False,
     _: str = Depends(require_business_access()),
 ) -> HrCandidatesResponse:
+    if interviewed:
+        return _list_interviewed_candidates(business_id)
+
     query = (
         supabase_admin.table("hr_job_applications")
         .select("*")
@@ -826,11 +1071,10 @@ async def list_hr_candidates(
     applications = query.order("submitted_at", desc=True).execute().data or []
 
     if not applications:
-        return HrCandidatesResponse(
-            available=False,
-            message="No candidates have applied yet." if not stage else "No candidates in this stage yet.",
-        )
+        message = "No candidates in this stage yet." if stage else "No candidates have applied yet."
+        return HrCandidatesResponse(available=False, message=message)
 
+    interview_activity = _interview_activity_by_key(business_id)
     job_ids = {row["job_posting_id"] for row in applications}
     jobs_by_id: dict[str, dict] = {}
     if job_ids:
@@ -849,6 +1093,7 @@ async def list_hr_candidates(
             jobs_by_id.get(row["job_posting_id"], {}).get("title", ""),
             completed_application_ids,
             completed_emails,
+            interview_activity,
         )
         for row in applications
     ]
@@ -893,9 +1138,10 @@ async def lookup_hr_candidate_by_email(
     title = job_rows[0].get("title", "") if job_rows else ""
 
     completed_application_ids, completed_emails = _completed_interview_keys(business_id)
+    interview_activity = _interview_activity_by_key(business_id)
     return HrCandidateLookupResponse(
         found=True,
-        candidate=_candidate_response(row, title, completed_application_ids, completed_emails),
+        candidate=_candidate_response(row, title, completed_application_ids, completed_emails, interview_activity),
     )
 
 
@@ -948,8 +1194,186 @@ async def update_hr_candidate_stage(
         .execute()
     ).data or []
     title = job_rows[0].get("title", "") if job_rows else ""
+    interview_activity = _interview_activity_by_key(body.business_id)
 
-    return _candidate_response(row, title, completed_application_ids, completed_emails)
+    return _candidate_response(row, title, completed_application_ids, completed_emails, interview_activity)
+
+
+@router.post("/candidates/promote-from-interview")
+async def promote_interview_candidate_to_final_round(
+    body: HrCandidatePromoteRequest,
+    user_id: str = Depends(get_user_id),
+) -> HrCandidateResponse:
+    """Move a candidate to Final Round starting from an interview session rather than an
+    existing application — for candidates interviewed via an ad hoc invite who never went
+    through the careers-apply flow. Creates the missing application record from the real
+    session data (name/email/phone/job) rather than leaving the promotion impossible.
+    """
+    verify_business_access(user_id, body.business_id)
+
+    session_rows = (
+        supabase_admin.table("hr_interview_sessions")
+        .select("*")
+        .eq("business_id", body.business_id)
+        .eq("id", body.session_id)
+        .limit(1)
+        .execute()
+    ).data
+    if not session_rows:
+        raise HTTPException(status_code=404, detail="Interview session not found.")
+    session = session_rows[0]
+
+    if session.get("status") not in ("completed", "reviewed"):
+        raise HTTPException(
+            status_code=422,
+            detail="This candidate needs a completed interview before moving to Final Round.",
+        )
+
+    application = None
+    if session.get("application_id"):
+        rows = (
+            supabase_admin.table("hr_job_applications")
+            .select("*")
+            .eq("business_id", body.business_id)
+            .eq("id", session["application_id"])
+            .limit(1)
+            .execute()
+        ).data
+        application = rows[0] if rows else None
+    if application is None:
+        email = (session.get("candidate_email") or "").strip().lower()
+        if email:
+            rows = (
+                supabase_admin.table("hr_job_applications")
+                .select("*")
+                .eq("business_id", body.business_id)
+                .ilike("candidate_email", email)
+                .order("submitted_at", desc=True)
+                .limit(1)
+                .execute()
+            ).data
+            application = rows[0] if rows else None
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    if application is None:
+        if not session.get("job_posting_id"):
+            raise HTTPException(
+                status_code=422,
+                detail="This interview isn't linked to a job posting, so a candidate record can't be created.",
+            )
+        inserted = (
+            supabase_admin.table("hr_job_applications")
+            .insert(
+                {
+                    "business_id": body.business_id,
+                    "job_posting_id": session["job_posting_id"],
+                    "candidate_name": session.get("candidate_name") or "",
+                    "candidate_email": session.get("candidate_email") or "",
+                    "candidate_phone": session.get("candidate_phone") or "",
+                    # No resume/cover letter exists — this candidate came from an ad hoc
+                    # interview invite, not the careers-apply flow that uploads one.
+                    # resume_storage_path is NOT NULL with no default; "" is the honest
+                    # "no file on record" value, and has_resume/has_cover_letter already
+                    # treat an empty path as falsy.
+                    "resume_storage_path": "",
+                    "status": "reviewed",
+                    "stage": "final_round",
+                    "final_round_at": now,
+                    "source": "native",
+                    "submitted_at": session.get("started_at") or now,
+                }
+            )
+            .execute()
+        ).data
+        application = inserted[0]
+        supabase_admin.table("hr_interview_sessions").update({"application_id": application["id"]}).eq(
+            "id", session["id"]
+        ).execute()
+    else:
+        completed_application_ids, completed_emails = _completed_interview_keys(body.business_id)
+        if not _is_eligible_for_final_round(application, completed_application_ids, completed_emails):
+            raise HTTPException(
+                status_code=422,
+                detail="This candidate needs at least one completed interview before moving to Final Round.",
+            )
+        updated = (
+            supabase_admin.table("hr_job_applications")
+            .update({"stage": "final_round", "final_round_at": now})
+            .eq("business_id", body.business_id)
+            .eq("id", application["id"])
+            .select("*")
+            .execute()
+        ).data
+        application = updated[0]
+
+    job_rows = (
+        supabase_admin.table("hr_job_postings")
+        .select("id,title")
+        .eq("id", application["job_posting_id"])
+        .limit(1)
+        .execute()
+    ).data or []
+    title = job_rows[0].get("title", "") if job_rows else ""
+    completed_application_ids, completed_emails = _completed_interview_keys(body.business_id)
+    interview_activity = _interview_activity_by_key(body.business_id)
+
+    return _candidate_response(application, title, completed_application_ids, completed_emails, interview_activity)
+
+
+_APPLICATIONS_BUCKET = "hr-job-applications"
+
+
+def _signed_application_file_url(path: str) -> str | None:
+    try:
+        result = supabase_admin.storage.from_(_APPLICATIONS_BUCKET).create_signed_url(path, 60 * 60)
+        if isinstance(result, dict):
+            return result.get("signedURL") or result.get("signed_url")
+    except Exception:
+        return None
+    return None
+
+
+def _get_application_or_404(business_id: str, application_id: str) -> dict:
+    rows = (
+        supabase_admin.table("hr_job_applications")
+        .select("*")
+        .eq("business_id", business_id)
+        .eq("id", application_id)
+        .limit(1)
+        .execute()
+    ).data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="Candidate application not found.")
+    return rows[0]
+
+
+@router.get("/candidates/{application_id}/resume")
+async def get_hr_candidate_resume_url(
+    application_id: str,
+    business_id: str,
+    _: str = Depends(require_business_access()),
+) -> HrCandidateFileUrlResponse:
+    application = _get_application_or_404(business_id, application_id)
+    path = application.get("resume_storage_path")
+    url = _signed_application_file_url(path) if path else None
+    if not url:
+        raise HTTPException(status_code=404, detail="No resume on file for this candidate.")
+    return HrCandidateFileUrlResponse(url=url)
+
+
+@router.get("/candidates/{application_id}/cover-letter")
+async def get_hr_candidate_cover_letter_url(
+    application_id: str,
+    business_id: str,
+    _: str = Depends(require_business_access()),
+) -> HrCandidateFileUrlResponse:
+    application = _get_application_or_404(business_id, application_id)
+    path = application.get("cover_letter_storage_path")
+    url = _signed_application_file_url(path) if path else None
+    if not url:
+        raise HTTPException(status_code=404, detail="No cover letter on file for this candidate.")
+    return HrCandidateFileUrlResponse(url=url)
 
 
 @router.post("/jobs/ai-assist")
