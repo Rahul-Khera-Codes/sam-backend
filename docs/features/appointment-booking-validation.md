@@ -456,6 +456,37 @@ Dockerfiles): agent 50/50 in this file (59/60 full suite, the 1 failure being th
 previously-flagged `test_build_instructions_custom_greeting_replaces_welcome_block`), backend
 16/16 full suite.
 
+## Bug fixed 2026-09-08 (AIE-77) — agent booked the customer under the assigned staff member's name
+Reported: an appointment's `client_name` came back as "Sam Maisuria" — the staff member assigned to
+the appointment — instead of the actual caller's name.
+
+Traced via the `transcripts` table (call id `42d62092-aa39-4839-a79d-bd954106ffc5`, linked from the
+appointment's `notes` field, the only place `appointments` ↔ `calls` are joined — there's no FK
+column). Not a phone/customer-table lookup bug: `_resolve_or_create_customer` (AIE-61's auto-link,
+`agent/agent.py`/`backend/app/services/customers_service.py`) only ever resolves `customer_id` for
+linking and never touches `client_name`; `book_appointment`'s `client_name`/`client_phone`/
+`client_email` args come straight from what the LLM extracted from the conversation. The actual
+sequence: the staff member's name ("Sam Maisuria") had just been repeated twice in the assistant's
+own turns (slot offer + booking confirmation) when it then asked the caller for *their* name. The
+caller's reply was transcribed ambiguously ("Samaia."), and the LLM — with "Sam Maisuria" fresh in
+context — filled the gap by borrowing the staff member's surname, replying "Thanks, Mr. Maisuria"
+with no pushback, and that hallucinated name flowed straight into `book_appointment`. Unlike phone
+(read back digit-by-digit) and email (spelled back letter-by-letter), booking step 7
+(`agent/prompt_builder.py`) had no equivalent confirm-back requirement for the spoken name, so a
+misheard/hallucinated name sailed through uncorrected.
+
+**Fix:** `agent/prompt_builder.py` step 7 now requires the agent to repeat the full name back and
+get explicit confirmation before proceeding (matching the existing phone/email pattern), instructs
+it to ask the caller to repeat or spell an unclear/mumbled name rather than guessing, and explicitly
+warns it not to let the assigned staff member's name bleed into what it thinks the customer said —
+they are never the same person. Rebuilt and restarted the `sam-agent` container to pick up the
+prompt change.
+
+**Not changed:** `_resolve_staff`'s bidirectional substring name match (`agent/agent.py`) is loose
+(a short spoken name can partial-match a longer staff name) but only affects `assigned_user_id`
+resolution, not `client_name` — out of scope for this ticket, flagged here as a secondary risk worth
+tightening separately.
+
 ## Decisions / tradeoffs
 - **Frontend hint mirrors backend logic rather than calling an API.** No new backend endpoint was
   added to compute "effective hours for a date" — the frontend already has `business_hours` and

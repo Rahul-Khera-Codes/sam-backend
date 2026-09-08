@@ -183,12 +183,25 @@ def _get_payment_row_or_404(appointment_id: str, business_id: str) -> dict:
     return result.data[0]
 
 
+def _fetch_deleted_payment_entries(appointment_payment_id: str) -> list[dict]:
+    result = (
+        supabase_admin.table("appointment_payment_entry_deletions")
+        .select("*")
+        .eq("appointment_payment_id", appointment_payment_id)
+        .order("deleted_at", desc=True)
+        .execute()
+    )
+    return result.data or []
+
+
 def _build_full_payment_response(payment_row: dict) -> dict:
     entries = _fetch_payment_entries(payment_row["id"])
+    deleted_entries = _fetch_deleted_payment_entries(payment_row["id"])
     derived = booking_service.compute_invoice_status(payment_row.get("grand_total"), entries)
     return {
         **payment_row,
         "entries": entries,
+        "deleted_entries": deleted_entries,
         **derived,
     }
 

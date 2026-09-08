@@ -16,8 +16,10 @@ from app.core.config import settings
 from app.core.supabase import supabase_admin
 from app.schemas.documents import OnboardingChatRequest, OnboardingChatResponse
 from app.schemas.hr import (
+    HrCandidateLookupResponse,
     HrCandidateResponse,
     HrCandidatesResponse,
+    HrCandidateStageUpdateRequest,
     HrDashboardPostingResponse,
     HrDashboardStatCard,
     HrDraftAssistRequest,
@@ -757,23 +759,76 @@ async def get_hr_jobs_workspace(
     }
 
 
+def _completed_interview_keys(business_id: str) -> tuple[set[str], set[str]]:
+    """Application IDs and candidate emails with at least one completed interview.
+
+    Interview sessions are only reliably linked to a candidate application via
+    application_id when the invite came from a candidate row; ad hoc invites
+    (freeform name/email on the Interviews page) only carry candidate_email, so
+    both keys are checked when deciding Final Round eligibility.
+    """
+    rows = (
+        supabase_admin.table("hr_interview_sessions")
+        .select("application_id,candidate_email,status")
+        .eq("business_id", business_id)
+        .in_("status", ["completed", "reviewed"])
+        .execute()
+    ).data or []
+    application_ids = {row["application_id"] for row in rows if row.get("application_id")}
+    emails = {row["candidate_email"].strip().lower() for row in rows if row.get("candidate_email")}
+    return application_ids, emails
+
+
+def _is_eligible_for_final_round(
+    row: dict,
+    completed_application_ids: set[str],
+    completed_emails: set[str],
+) -> bool:
+    if row["id"] in completed_application_ids:
+        return True
+    email = (row.get("candidate_email") or "").strip().lower()
+    return bool(email) and email in completed_emails
+
+
+def _candidate_response(row: dict, title: str, completed_application_ids: set[str], completed_emails: set[str]) -> HrCandidateResponse:
+    return HrCandidateResponse(
+        id=row["id"],
+        application_id=row["id"],
+        candidate_id=row["id"],
+        name=row.get("candidate_name") or "",
+        title=title,
+        location=row.get("candidate_location") or "",
+        email=row.get("candidate_email") or None,
+        phone=row.get("candidate_phone") or None,
+        status=row.get("status") or "new",
+        stage=row.get("stage") or "applied",
+        applied_at=row.get("submitted_at"),
+        source="native",
+        prospect=False,
+        eligible_for_final_round=_is_eligible_for_final_round(row, completed_application_ids, completed_emails),
+        final_round_at=row.get("final_round_at"),
+    )
+
+
 @router.get("/candidates")
 async def list_hr_candidates(
     business_id: str,
+    stage: str | None = None,
     _: str = Depends(require_business_access()),
 ) -> HrCandidatesResponse:
-    applications = (
+    query = (
         supabase_admin.table("hr_job_applications")
         .select("*")
         .eq("business_id", business_id)
-        .order("submitted_at", desc=True)
-        .execute()
-    ).data or []
+    )
+    if stage:
+        query = query.eq("stage", stage)
+    applications = query.order("submitted_at", desc=True).execute().data or []
 
     if not applications:
         return HrCandidatesResponse(
             available=False,
-            message="No candidates have applied yet.",
+            message="No candidates have applied yet." if not stage else "No candidates in this stage yet.",
         )
 
     job_ids = {row["job_posting_id"] for row in applications}
@@ -787,21 +842,13 @@ async def list_hr_candidates(
         ).data or []
         jobs_by_id = {job["id"]: job for job in job_rows}
 
+    completed_application_ids, completed_emails = _completed_interview_keys(business_id)
     candidates = [
-        HrCandidateResponse(
-            id=row["id"],
-            application_id=row["id"],
-            candidate_id=row["id"],
-            name=row.get("candidate_name") or "",
-            title=jobs_by_id.get(row["job_posting_id"], {}).get("title", ""),
-            location=row.get("candidate_location") or "",
-            email=row.get("candidate_email") or None,
-            phone=row.get("candidate_phone") or None,
-            status=row.get("status") or "new",
-            stage="Applied",
-            applied_at=row.get("submitted_at"),
-            source="native",
-            prospect=False,
+        _candidate_response(
+            row,
+            jobs_by_id.get(row["job_posting_id"], {}).get("title", ""),
+            completed_application_ids,
+            completed_emails,
         )
         for row in applications
     ]
@@ -811,6 +858,98 @@ async def list_hr_candidates(
         candidates=candidates,
         total=len(candidates),
     )
+
+
+@router.get("/candidates/lookup")
+async def lookup_hr_candidate_by_email(
+    business_id: str,
+    email: str,
+    _: str = Depends(require_business_access()),
+) -> HrCandidateLookupResponse:
+    normalized = email.strip().lower()
+    if not normalized:
+        return HrCandidateLookupResponse(found=False)
+
+    rows = (
+        supabase_admin.table("hr_job_applications")
+        .select("*")
+        .eq("business_id", business_id)
+        .ilike("candidate_email", normalized)
+        .order("submitted_at", desc=True)
+        .limit(1)
+        .execute()
+    ).data or []
+    if not rows:
+        return HrCandidateLookupResponse(found=False)
+    row = rows[0]
+
+    job_rows = (
+        supabase_admin.table("hr_job_postings")
+        .select("id,title")
+        .eq("id", row["job_posting_id"])
+        .limit(1)
+        .execute()
+    ).data or []
+    title = job_rows[0].get("title", "") if job_rows else ""
+
+    completed_application_ids, completed_emails = _completed_interview_keys(business_id)
+    return HrCandidateLookupResponse(
+        found=True,
+        candidate=_candidate_response(row, title, completed_application_ids, completed_emails),
+    )
+
+
+@router.patch("/candidates/{application_id}/stage")
+async def update_hr_candidate_stage(
+    application_id: str,
+    body: HrCandidateStageUpdateRequest,
+    user_id: str = Depends(get_user_id),
+) -> HrCandidateResponse:
+    verify_business_access(user_id, body.business_id)
+
+    existing = (
+        supabase_admin.table("hr_job_applications")
+        .select("*")
+        .eq("business_id", body.business_id)
+        .eq("id", application_id)
+        .limit(1)
+        .execute()
+    ).data
+    if not existing:
+        raise HTTPException(status_code=404, detail="Candidate application not found.")
+    application = existing[0]
+
+    completed_application_ids, completed_emails = _completed_interview_keys(body.business_id)
+    if body.stage == "final_round" and not _is_eligible_for_final_round(
+        application, completed_application_ids, completed_emails
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="This candidate needs at least one completed interview before moving to Final Round.",
+        )
+
+    updates: dict = {"stage": body.stage}
+    updates["final_round_at"] = datetime.now(timezone.utc).isoformat() if body.stage == "final_round" else None
+    updated = (
+        supabase_admin.table("hr_job_applications")
+        .update(updates)
+        .eq("business_id", body.business_id)
+        .eq("id", application_id)
+        .select("*")
+        .execute()
+    ).data
+    row = updated[0]
+
+    job_rows = (
+        supabase_admin.table("hr_job_postings")
+        .select("id,title")
+        .eq("id", row["job_posting_id"])
+        .limit(1)
+        .execute()
+    ).data or []
+    title = job_rows[0].get("title", "") if job_rows else ""
+
+    return _candidate_response(row, title, completed_application_ids, completed_emails)
 
 
 @router.post("/jobs/ai-assist")

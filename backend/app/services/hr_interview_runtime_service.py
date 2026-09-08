@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -31,6 +32,8 @@ from app.services.email_service import GMAIL_SEND_URL, _build_mime_message, get_
 
 HUMAN_INTERVIEW_DRAFT_MODEL = "gpt-4o-mini"
 
+logger = logging.getLogger(__name__)
+
 
 class HrInterviewRuntimeError(ValueError):
     pass
@@ -42,6 +45,23 @@ class HrInterviewNotFound(LookupError):
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _mark_application_interviewing(business_id: str, candidate_email: str) -> None:
+    """Best-effort: advance a candidate's application stage once an interview is created.
+
+    Ad hoc invites typed directly on the Interviews page only carry candidate_email
+    (no application_id), so the match is by business_id + candidate_email.
+    """
+    email = candidate_email.strip()
+    if not email:
+        return
+    try:
+        supabase_admin.table("hr_job_applications").update({"stage": "interviewing"}).eq(
+            "business_id", business_id
+        ).eq("candidate_email", email).eq("stage", "applied").execute()
+    except Exception as exc:
+        logger.warning("Failed to advance application stage to interviewing for %s: %s", email, exc)
 
 
 def _hash_token(token: str) -> str:
@@ -408,6 +428,7 @@ async def create_ai_screen_invite(
     except Exception as exc:
         email_status = "failed"
         email_message = f"Invite link was created, but email delivery failed: {exc}"
+    _mark_application_interviewing(request.business_id, request.candidate_email.strip())
     return HrInterviewInviteResponse(
         session=_summarize_session(session, job_title),
         join_url=join_url,
@@ -445,6 +466,7 @@ async def create_human_interview(request: HrHumanInterviewUpsertRequest) -> HrHu
             subject=subject,
             message=request.recruiter_notes.strip(),
         )
+    _mark_application_interviewing(request.business_id, request.candidate_email.strip())
     return HrHumanInterviewResponse(
         session=_summarize_session(created.data[0], job.get("title") or ""),
         email_delivery_status=email_status,

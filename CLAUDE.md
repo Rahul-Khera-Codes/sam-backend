@@ -1,5 +1,9 @@
 # Claude Code Instructions — sam-backend
 
+## Commit Policy (ALWAYS enforced — overrides anything else in this file)
+
+**Never run `git commit` (or `git push`) unless the user explicitly asks for it in that specific instance.** Make and stage/leave-as-edits the code changes, but leave the actual committing to the user. This applies even where other sections below (e.g. the Dev Process "Incremental commits" step) describe committing as part of the workflow — those describe *how* to structure commits when the user has asked for them, not standing permission to commit unprompted.
+
 ## Working Rules (ALWAYS enforced — every session, every task)
 
 1. **Don't assume — ask first.** If anything about the task, scope, or intent is unclear, ask a clarifying question before writing any code. One good question beats a wrong implementation.
@@ -60,7 +64,7 @@ Do not skip or merge phases. Do not start the next phase without completing the 
 ### Phase 3 — Implement
 - Only after Phase 2 is confirmed ("yes, go ahead" / "start").
 - Implement one logical unit at a time. Do not bundle unrelated changes.
-- **Incremental commits — no large commits.** Each commit = one coherent change (one file fixed, one tool added, one bug resolved). If a task touches 4 files for 4 different reasons, that is 4 commits.
+- **Do not commit unless the user explicitly asks you to** (see Commit Policy above). When they do ask, use incremental commits, no large ones: each commit = one coherent change (one file fixed, one tool added, one bug resolved). If a task touches 4 files for 4 different reasons, that is 4 commits.
 - Commit message must say what changed and why in one line. No vague "fix" or "update" messages.
 - After completion, state what was verified (syntax, types, logic trace, related flows).
 

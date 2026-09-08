@@ -182,6 +182,21 @@ class RefundPaymentRequest(BaseModel):
     employee_code: Optional[str] = None
 
 
+class DeletedPaymentEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    entry_type: EntryType = "payment"
+    payment_type: PaymentType
+    amount: float
+    note: Optional[str] = None
+    paid_at: str
+    collected_by_user_id: Optional[str] = None
+    collected_by_code: Optional[str] = None
+    deleted_by_user_id: Optional[str] = None
+    deleted_by_code: Optional[str] = None
+    deleted_at: str
+
+
 class AppointmentPaymentResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str
@@ -198,6 +213,7 @@ class AppointmentPaymentResponse(BaseModel):
     paid_amount: float
     owing_amount: float
     entries: list[AppointmentPaymentEntry] = Field(default_factory=list)
+    deleted_entries: list[DeletedPaymentEntry] = Field(default_factory=list)
     refunded_at: Optional[str] = None
     paid_at: Optional[str] = None
     created_by: Optional[str] = None
