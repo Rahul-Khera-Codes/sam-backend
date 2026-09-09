@@ -388,6 +388,46 @@ regression of that fix.
   callers actually use "this week" mid-week (meaning "the next several days," not strictly through
   Sunday). Flagged here in case a future ticket wants literal calendar-week semantics instead.
 
+## Bug fixed 2026-09-09 (AIE-56 round 3) — "next week" silently returned this-week times
+QA bounced the round-2 fix again (comment 2026-09-09, call id `4394089b-1362-4982-ac1b-26e0fd37b9a5`):
+asking specifically about "next week" (and "the latest appointment during the week") still returned
+times for the current week.
+
+Root cause: this was never a code bug in `_find_next_slots`/`_find_latest_slot` — both correctly use
+whatever `from_date`/`within_days` they're given. The gap was that nothing ever gave the model a
+concrete `from_date` for "next week." The prompt's only date anchor, `today_block`
+(`agent/prompt_builder.py`), just *named* "next week" in its list of example relative-day phrases
+the model should resolve, with no formula, no reference date arithmetic, and no worked example —
+unlike "this week," which round 2 explicitly defined for the model as `within_days=7` in step 6c and
+`find_latest_available_slot`'s own docstring. So the model had to compute the next-Monday boundary
+itself on every call, with no instruction telling it to actually override the tools' `from_date`
+default (today) when "next week" was said — the same class of failure (LLM guessing instead of being
+given an explicit lever) as rounds 1 and 2, just for a case neither of those fixes covered.
+
+**Fix:**
+- `agent/prompt_builder.py`'s `today_block` now computes the literal upcoming Monday/Sunday dates in
+  Python (`_now.date() + timedelta(days=7 - _now.weekday())` for the Monday, +6 days for the Sunday)
+  and states them outright — e.g. "Next week begins Monday, September 14, 2026 and ends Sunday,
+  September 20, 2026." The model is never asked to compute this itself, mirroring how "today" is
+  already handled as a computed grounding fact rather than left to the model.
+- Added prompt step 6d: when the caller asks about "next week" specifically, use that exact Monday
+  date as `from_date` (never leave it blank/defaulting to today) for `find_next_available_slot`; for
+  `find_latest_available_slot`, pass the same `from_date` **and** `within_days=7` so the search is
+  bounded to next week only and doesn't return this week's times or spill into the week after. Step 5
+  now also routes a caller who states "next week" up front straight to 6d instead of offering
+  today/this-week slots first.
+- No changes to `agent/agent.py` or `agent/supabase_helpers.py` — the search functions already
+  supported an arbitrary `from_date`/`within_days`; this was purely a missing-grounding/prompt gap.
+- Added regression tests in `agent/tests/test_prompt_builder.py`:
+  `test_build_instructions_includes_next_week_anchor_dates`,
+  `test_build_instructions_next_week_anchor_skips_current_week_when_today_is_monday` (today being
+  Monday must still mean the *following* Monday, not today), and
+  `test_build_instructions_next_week_anchor_from_sunday`. Full `agent/tests/` suite: 62 passed, same
+  1 pre-existing unrelated failure as before (`test_prompt_builder.py::test_build_instructions_custom_greeting_replaces_welcome_block`
+  — asserts "Thank you for calling" doesn't appear anywhere in the prompt, but that phrase is also
+  used in step 10's call-closing line, unrelated to the welcome block under test; not touched by any
+  of the AIE-56 fixes and still open).
+
 ## Feature added 2026-09-07 (AIE-69) — availability now checks connected Google Calendar too
 Reported: a client's Customer Service Employee could offer/book a slot that conflicted with a
 staff member's personal Google Calendar event, because availability was computed purely from

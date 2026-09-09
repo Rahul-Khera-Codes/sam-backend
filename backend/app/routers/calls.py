@@ -66,7 +66,22 @@ async def list_calls(
     if result.data is None:
         raise HTTPException(status_code=500, detail="Failed to fetch calls")
 
-    return result.data
+    calls = result.data
+    call_ids = [c["id"] for c in calls]
+    if call_ids:
+        appt_rows = (
+            supabase_admin.table("appointments")
+            .select("id, call_id")
+            .in_("call_id", call_ids)
+            .execute()
+            .data
+            or []
+        )
+        ref_by_call_id = {a["call_id"]: a["id"][:8].upper() for a in appt_rows if a.get("call_id")}
+        for c in calls:
+            c["appointment_ref"] = ref_by_call_id.get(c["id"])
+
+    return calls
 
 
 # ── GET /calls/recent-activity ────────────────

@@ -125,7 +125,6 @@ class VoiceAgentWorker:
                 "business_id": self.business_id,
                 "summary_text": result.get("summary_text"),
                 "key_topics": result.get("key_topics", []),
-                "insights": {"sentiment_from_summary": result.get("sentiment")},
             }).execute()
 
             # Update call sentiment
