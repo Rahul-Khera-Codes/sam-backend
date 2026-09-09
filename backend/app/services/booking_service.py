@@ -41,6 +41,11 @@ def _money(value) -> Decimal:
     return Decimal(str(value or 0)).quantize(MONEY_QUANT, rounding=ROUND_HALF_UP)
 
 
+def _confirmation_ref(appointment_id: str) -> str:
+    """Short customer-facing Ref derived from an appointment's UUID (AIE-79)."""
+    return (appointment_id or "")[:8].upper()
+
+
 def compute_invoice_status(grand_total, entries: list[dict]) -> dict:
     """Derives paid_amount/owing_amount/status/paid_at/refunded_at from an invoice's
     grand_total and its payment entries. Never stored directly -- always computed at
@@ -550,7 +555,7 @@ async def create_appointment(
 
     appt = r.data[0]
     appt_id: str = appt["id"]
-    short_id = appt_id[:8].upper()
+    short_id = _confirmation_ref(appt_id)
 
     biz = _get_business(req.business_id)
     biz_name = biz.get("name") or "Your Business"
@@ -793,7 +798,7 @@ async def update_appointment(
     supabase_admin.table("appointments").update(updates).eq("id", appointment_id).execute()
 
     updated_appt = {**appt, **updates}
-    short_id = appointment_id[:8].upper()
+    short_id = _confirmation_ref(appointment_id)
     biz = _get_business(req.business_id)
     biz_name = biz.get("name") or "Your Business"
     biz_phone = biz.get("phone") or ""
@@ -913,7 +918,7 @@ async def cancel_appointment(
     supabase_admin.table("appointments").update({"status": "cancelled"}).eq("id", appointment_id).execute()
 
     assigned_uid = appt.get("assigned_user_id")
-    short_id = appointment_id[:8].upper()
+    short_id = _confirmation_ref(appointment_id)
     biz = _get_business(business_id)
     biz_name = biz.get("name") or "Your Business"
     biz_phone = biz.get("phone") or ""

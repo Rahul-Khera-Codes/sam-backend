@@ -64,6 +64,7 @@ class CallResponse(BaseModel):
     sentiment: Optional[str]
     livekit_room_id: Optional[str]
     created_at: datetime
+    appointment_ref: Optional[str] = None
 
 
 class TranscriptUtterance(BaseModel):
@@ -83,7 +84,6 @@ class CallSummaryResponse(BaseModel):
     call_id: str
     summary_text: Optional[str]
     key_topics: Optional[list]
-    insights: Optional[dict]
     generated_at: Optional[datetime]
 
 

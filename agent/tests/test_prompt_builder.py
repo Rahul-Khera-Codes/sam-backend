@@ -71,6 +71,41 @@ def test_build_instructions_includes_current_date_grounding():
     assert "America/Toronto" in result  # default fallback when business has no timezone set
 
 
+def test_build_instructions_includes_next_week_anchor_dates():
+    """
+    AIE-56 round 3 regression: the prompt named "next week" as a phrase the LLM should
+    resolve but never gave it a concrete anchor date, so the model had to compute the
+    next-Monday boundary itself — leading to it silently returning this-week times when
+    asked about next week. Tuesday Sept 8 2026 -> next week is Mon Sep 14 - Sun Sep 20.
+    """
+    with patch("prompt_builder._get_supabase", return_value=_mock_supabase_minimal()), \
+         patch("prompt_builder._local_now", return_value=datetime(2026, 9, 8)):
+        result = build_instructions("biz-123", None)
+    assert "Next week begins Monday, September 14, 2026 and ends Sunday, September 20, 2026" in result
+    assert "step 6d" in result
+    assert "6d." in result
+
+
+def test_build_instructions_next_week_anchor_skips_current_week_when_today_is_monday():
+    """
+    Edge case: if today itself is Monday, "next week" must still mean the FOLLOWING
+    Monday, not today — otherwise "next week" would collapse into "this week".
+    Monday Sept 7 2026 -> next week is Mon Sep 14 - Sun Sep 20.
+    """
+    with patch("prompt_builder._get_supabase", return_value=_mock_supabase_minimal()), \
+         patch("prompt_builder._local_now", return_value=datetime(2026, 9, 7)):
+        result = build_instructions("biz-123", None)
+    assert "Next week begins Monday, September 14, 2026 and ends Sunday, September 20, 2026" in result
+
+
+def test_build_instructions_next_week_anchor_from_sunday():
+    """Edge case: today is Sunday -> next week starts the very next day."""
+    with patch("prompt_builder._get_supabase", return_value=_mock_supabase_minimal()), \
+         patch("prompt_builder._local_now", return_value=datetime(2026, 9, 13)):
+        result = build_instructions("biz-123", None)
+    assert "Next week begins Monday, September 14, 2026 and ends Sunday, September 20, 2026" in result
+
+
 def test_build_instructions_uses_business_timezone_for_current_date():
     """The current-date grounding line uses the business's own timezone, not the default."""
     sb = _mock_supabase_minimal()

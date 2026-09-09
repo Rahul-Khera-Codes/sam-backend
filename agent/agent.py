@@ -94,6 +94,11 @@ def _normalize_phone_e164(phone: str) -> str:
     return phone
 
 
+def _confirmation_ref(appointment_id: str) -> str:
+    """Short customer-facing Ref derived from an appointment's UUID (AIE-79)."""
+    return (appointment_id or "")[:8].upper()
+
+
 def _split_client_name(client_name: str) -> tuple[str, str]:
     parts = (client_name or "").strip().split(maxsplit=1)
     if not parts:
@@ -727,10 +732,6 @@ class Assistant(Agent):
                     f"Please choose a different time slot."
                 )
 
-        combined_notes = notes or ""
-        if self._call_id:
-            combined_notes = (combined_notes + f" | call_id: {self._call_id}").lstrip(" | ")
-
         try:
             booking_location_id_final = (loc["id"] if loc else None) or self._location_id
             customer_id = _resolve_or_create_customer(
@@ -752,7 +753,8 @@ class Assistant(Agent):
                 "appointment_date": date,
                 "appointment_time": time,
                 "duration": duration_str,
-                "notes": combined_notes,
+                "notes": notes or "",
+                "call_id": self._call_id,
                 "created_by": staff["user_id"],
                 "appointment_is_onsite": appointment_is_onsite,
                 "appointment_address_street": address_fields["appointment_address_street"] if appointment_is_onsite else None,
@@ -765,7 +767,7 @@ class Assistant(Agent):
             data = getattr(r, "data", None) or []
             if data:
                 appt_id = data[0].get("id", "")
-                short_id = appt_id[:8].upper()
+                short_id = _confirmation_ref(appt_id)
 
                 # ── Google Calendar: create event on staff + admin calendars ─
                 appt_data = {**row, "client_name": client_name}
@@ -931,7 +933,7 @@ class Assistant(Agent):
                 cname = appt.get("client_name", "")
                 sname = self._staff_id_to_name.get(appt.get("assigned_user_id", ""), "")
                 lname = self._location_id_to_name.get(appt.get("location_id", ""), "")
-                short_id = appt.get("id", "")[:8].upper()
+                short_id = _confirmation_ref(appt.get("id", ""))
 
                 parts = [f"{cname}: {svc} on {adate} at {_fmt_time_12h(atime)}"]
                 if sname:
@@ -1210,7 +1212,7 @@ class Assistant(Agent):
             biz_phone = self._business_phone or ""
             location_label = self._location_id_to_name.get(appt_row.get("location_id", ""), "")
             staff_name_label = self._staff_id_to_name.get(assigned_uid or "", "")
-            short_id = full_id[:8].upper()
+            short_id = _confirmation_ref(full_id)
 
             if client_email_addr:
                 try:
@@ -1428,7 +1430,7 @@ class Assistant(Agent):
             biz_phone = self._business_phone or ""
             location_label = self._location_id_to_name.get(match.get("location_id", ""), "")
             staff_name_label = self._staff_id_to_name.get(assigned_uid or "", "")
-            short_id = match["id"][:8].upper()
+            short_id = _confirmation_ref(match["id"])
 
             # ── Gmail: cancellation notifications ─────────────────────────────
             if client_email_addr:
@@ -1528,7 +1530,6 @@ async def _generate_summary(
         "business_id": business_id,
         "summary_text": result.get("summary_text"),
         "key_topics": result.get("key_topics", []),
-        "insights": {"sentiment_from_summary": sentiment},
     }).execute()
 
     supabase.table("calls").update({
