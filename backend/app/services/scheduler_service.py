@@ -85,6 +85,7 @@ async def _trigger_outbound_call(
             "status": "initiating",
             "livekit_room_id": room_id,
             "started_at": datetime.now(timezone.utc).isoformat(),
+            "appointment_id": appointment_id,
         }).execute()
 
         if not call_row.data:

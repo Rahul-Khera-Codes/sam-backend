@@ -607,8 +607,14 @@ def _format_slots_for_speech(name: str, date: str, slots: list[str], cap: int = 
     the last *shown* time is the last *available* one — always state the true last slot
     of the day explicitly, since the model has no other way to know the list was truncated.
     """
+    try:
+        d = datetime.strptime(date, "%Y-%m-%d")
+        date_label = d.strftime(f"%A %B {d.day}")
+    except Exception:
+        date_label = date
+
     if not slots:
-        return f"{name} has no available slots on {date}."
+        return f"{name} has no available slots on {date_label}."
 
     formatted = ", ".join(_fmt_time_12h(s) for s in slots[:cap])
     if len(slots) > cap:
@@ -616,7 +622,7 @@ def _format_slots_for_speech(name: str, date: str, slots: list[str], cap: int = 
         more = f" (and {len(slots) - cap} more, up to {last} — the actual last available time that day)"
     else:
         more = ""
-    return f"{name} is available on {date} at: {formatted}{more}."
+    return f"{name} is available on {date_label} at: {formatted}{more}."
 
 
 # ── Location-scoped fetch functions (no fallback) ────────────────────────────

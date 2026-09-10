@@ -1655,8 +1655,10 @@ async def _finalize_call(
         except Exception as e:
             logger.error("Failed to save transcripts: %s", e)
 
-    # A call with no transcript utterances on an inbound call = missed
-    is_missed = (call_direction == "inbound" and not transcript_log)
+    # A call with no transcript utterances means nobody ever spoke — true for
+    # a missed inbound call, and equally true for an outbound call nobody
+    # answered (e.g. an appointment reminder that rang out).
+    is_missed = not transcript_log
     final_status = "missed" if is_missed else "completed"
 
     # Don't overwrite a forwarded status set by the forward_call tool.
@@ -1696,6 +1698,7 @@ AGENT_NAME=os.getenv("AGENT_NAME")
 async def voice_agent(ctx: agents.JobContext):
     await ctx.connect(auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY)
     participant = await ctx.wait_for_participant()
+    call_start_time = datetime.now(timezone.utc)
     logger.info("Participant connected: %s", participant.identity)
 
     instructions = DEFAULT_INSTRUCTIONS
@@ -1801,6 +1804,54 @@ async def voice_agent(ctx: agents.JobContext):
         business_id, location_id, call_id, is_sip_call, call_direction,
     )
 
+    # ── For outbound SIP calls, wait for the callee to actually answer ───────────
+    # LiveKit adds the SIP participant to the room at DIAL time, not at answer
+    # time, so proceeding immediately here means the agent speaks its reminder
+    # script into a line that's still ringing (or never picked up) — the customer
+    # never hears it, and the ring/timeout time gets saved as if it were a real
+    # completed call. Wait for the participant's `sip.callStatus` attribute to
+    # reach "active" before doing anything else; if it never does (no answer,
+    # busy, rejected, voicemail hangup) mark the call missed and disconnect
+    # without generating any speech.
+    if is_sip_call and call_direction == "outbound":
+        from livekit.agents.utils.participant import wait_for_participant_attribute
+
+        _SIP_ANSWER_TIMEOUT_S = 45
+        try:
+            await asyncio.wait_for(
+                wait_for_participant_attribute(
+                    ctx.room,
+                    identity=participant.identity,
+                    attribute="sip.callStatus",
+                    value="active",
+                ),
+                timeout=_SIP_ANSWER_TIMEOUT_S,
+            )
+            logger.info("Outbound SIP call answered — proceeding (call_id=%s)", call_id)
+        except (asyncio.TimeoutError, RuntimeError) as e:
+            logger.info(
+                "Outbound SIP call not answered (%s) — marking missed, call_id=%s",
+                e, call_id,
+            )
+            if call_id:
+                if supabase is None:
+                    supabase = _get_supabase()
+                if supabase:
+                    try:
+                        supabase.table("calls").update({
+                            "status": "missed",
+                            "ended_at": datetime.now(timezone.utc).isoformat(),
+                            "duration_seconds": int(
+                                (datetime.now(timezone.utc) - call_start_time).total_seconds()
+                            ),
+                        }).eq("id", call_id).execute()
+                    except Exception as write_err:
+                        logger.warning(
+                            "Failed to mark unanswered outbound call missed: %s", write_err
+                        )
+            await ctx.room.disconnect()
+            return
+
     # ── Create call record for SIP calls (no backend /calls/initiate was called) ─
     if is_sip_call and not call_id and business_id:
         if supabase is None:
@@ -1896,7 +1947,6 @@ async def voice_agent(ctx: agents.JobContext):
         if not services:
             logger.warning("Location %s has no services configured — agent will inform caller", location_id)
 
-    call_start_time = datetime.now(timezone.utc)
     transcript_log: list[dict] = []
     seq_counter = 0
 

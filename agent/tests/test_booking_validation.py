@@ -547,7 +547,7 @@ from supabase_helpers import _format_slots_for_speech
 
 def test_format_slots_for_speech_shows_all_when_under_cap():
     result = _format_slots_for_speech("Heather", "2026-09-08", ["09:00", "09:15", "09:30"], cap=8)
-    assert result == "Heather is available on 2026-09-08 at: 9:00 AM, 9:15 AM, 9:30 AM."
+    assert result == "Heather is available on Tuesday September 8 at: 9:00 AM, 9:15 AM, 9:30 AM."
     assert "more" not in result
 
 
@@ -603,7 +603,7 @@ def test_format_slots_for_speech_reproduces_reported_call():
 
 
 def test_format_slots_for_speech_no_slots():
-    assert _format_slots_for_speech("Heather", "2026-09-08", []) == "Heather has no available slots on 2026-09-08."
+    assert _format_slots_for_speech("Heather", "2026-09-08", []) == "Heather has no available slots on Tuesday September 8."
 
 
 def test_find_next_slots_reports_true_last_time_when_more_than_3():
