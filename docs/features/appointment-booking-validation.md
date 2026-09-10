@@ -428,6 +428,49 @@ given an explicit lever) as rounds 1 and 2, just for a case neither of those fix
   used in step 10's call-closing line, unrelated to the welcome block under test; not touched by any
   of the AIE-56 fixes and still open).
 
+## Bug fixed 2026-09-10 (AIE-56 round 4) — numeric date + "latest" answered from the last calendar day
+QA bounced the round-3 fix again (comment 2026-09-10, ref `CB615908`), flagging two separate
+problems: dates were now spoken as digits instead of "September 12"-style, and the agent answered
+"the latest appointment this week" with the last day of the week rather than the day that actually
+has the latest slot.
+
+Root cause, two independent bugs:
+1. **Numeric dates.** `_format_slots_for_speech` (`agent/supabase_helpers.py`) — the formatter
+   behind `get_available_slots`, the tool the agent is told (step 6c) to call once the caller
+   names a specific day (e.g. "what about Thursday?") — spoke the raw `YYYY-MM-DD` `date` argument
+   verbatim. It never gained the `"%A %B {day}"` formatting `find_next_available_slot` and
+   `find_latest_available_slot` already use (agent.py); present since the function was added
+   2026-09-03, just rarely exercised on this path until round 2/3 started routing "which day"
+   follow-ups through `get_available_slots` more often.
+2. **"Latest" answered from the last day, not the latest slot.** `_find_latest_slot` itself was
+   never wrong — it already compares `(date_str, latest_time)` across every day in the window and
+   returns the true max (round 2 fix). The gap was conversational: on a compound ask (an
+   afternoon/service preference stated earlier in the call, then "what's the latest this week"),
+   the agent could satisfy the "which day" framing by checking only the calendar's last day
+   (`get_available_slots`) instead of carrying the earlier-stated preference into an actual
+   `find_latest_available_slot` call — never invoking the tool that does the real cross-day
+   comparison at all.
+
+**Fix:**
+- `_format_slots_for_speech` (`agent/supabase_helpers.py`) now parses `date` and formats it as
+  `"%A %B {day}"` (falling back to the raw string on parse failure), matching the other two
+  availability tools.
+- `agent/prompt_builder.py` step 6c now explicitly requires carrying forward every constraint
+  stated earlier in the conversation (service, staff, time-of-day floor) into the
+  `find_latest_available_slot` call, and states outright that checking only the last calendar day
+  via `get_available_slots` is not the same claim as "the latest slot," even when it happens to
+  match the day-of-week framing.
+- Updated two existing tests in `agent/tests/test_booking_validation.py`
+  (`test_format_slots_for_speech_shows_all_when_under_cap`,
+  `test_format_slots_for_speech_no_slots`) that asserted the old raw-date output. Full
+  `agent/tests/test_booking_validation.py` suite run inside the `sam-agent` Docker image: 50/50
+  passed. Rebuilt and restarted the full stack (`docker compose down && up --build -d`) to pick up
+  both changes.
+- **Not independently reproduced against the flagged call transcript** — CB615908 is a call
+  reference, not the `call_id`/`transcripts` row used in earlier rounds' write-ups, so this fix is
+  based on tracing the code paths named in the comment rather than a pulled transcript. Flagged
+  here in case QA's retest surfaces a different actual sequence.
+
 ## Feature added 2026-09-07 (AIE-69) — availability now checks connected Google Calendar too
 Reported: a client's Customer Service Employee could offer/book a slot that conflicted with a
 staff member's personal Google Calendar event, because availability was computed purely from

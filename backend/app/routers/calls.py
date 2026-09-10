@@ -68,6 +68,7 @@ async def list_calls(
 
     calls = result.data
     call_ids = [c["id"] for c in calls]
+    ref_by_call_id: dict[str, str] = {}
     if call_ids:
         appt_rows = (
             supabase_admin.table("appointments")
@@ -78,8 +79,13 @@ async def list_calls(
             or []
         )
         ref_by_call_id = {a["call_id"]: a["id"][:8].upper() for a in appt_rows if a.get("call_id")}
-        for c in calls:
-            c["appointment_ref"] = ref_by_call_id.get(c["id"])
+
+    for c in calls:
+        # Booking calls link via appointments.call_id; system-initiated calls
+        # (reminder/reschedule/no-show) link the other way via calls.appointment_id.
+        c["appointment_ref"] = ref_by_call_id.get(c["id"]) or (
+            c["appointment_id"][:8].upper() if c.get("appointment_id") else None
+        )
 
     return calls
 
@@ -247,8 +253,38 @@ async def get_recording(
     bucket = recording.get("storage_bucket", "call-recordings")
     path = recording.get("storage_path")
 
+    # Name the download after the appointment Ref shown in confirmation texts,
+    # the calendar, and the call recording details — not the raw call UUID.
+    # Booking calls link via appointments.call_id; system-initiated calls
+    # (reminder/reschedule/no-show) link the other way via calls.appointment_id.
+    ref: str | None = None
+    appt = (
+        supabase_admin.table("appointments")
+        .select("id")
+        .eq("call_id", call_id)
+        .limit(1)
+        .execute()
+    )
+    if appt.data:
+        ref = appt.data[0]["id"][:8].upper()
+    else:
+        call_row = (
+            supabase_admin.table("calls")
+            .select("appointment_id")
+            .eq("id", call_id)
+            .limit(1)
+            .execute()
+        )
+        if call_row.data and call_row.data[0].get("appointment_id"):
+            ref = call_row.data[0]["appointment_id"][:8].upper()
+
+    ext = Path(path).suffix if path else ".ogg"
+    download_name = f"Ref_{ref}{ext}" if ref else f"Call_{call_id[:8].upper()}{ext}"
+
     # Generate signed URL (valid for 1 hour) — must use admin/service-role client
-    signed = supabase_admin.storage.from_(bucket).create_signed_url(path, 3600)
+    signed = supabase_admin.storage.from_(bucket).create_signed_url(
+        path, 3600, {"download": download_name}
+    )
 
     return {
         "recording_id": recording["id"],
@@ -545,7 +581,12 @@ async def livekit_webhook(request: Request):
                     .limit(1)
                     .execute()
                 )
-                is_missed = call["direction"] == "inbound" and not transcripts.data
+                # Empty transcript means nobody ever spoke — true for a missed
+                # inbound call, and equally true for an outbound call nobody
+                # answered. Direction never exempted this before, which let
+                # unanswered outbound reminder/reschedule/no-show calls save
+                # as "completed".
+                is_missed = not transcripts.data
                 started_at = datetime.fromisoformat(call["started_at"].replace("Z", "+00:00"))
                 duration_s = max(
                     int((datetime.now(timezone.utc) - started_at).total_seconds()), 0
