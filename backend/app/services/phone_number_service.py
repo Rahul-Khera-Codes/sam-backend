@@ -23,6 +23,7 @@ from livekit.protocol.sip import (
 )
 from livekit.protocol.room import RoomConfiguration
 from livekit.protocol.agent_dispatch import RoomAgentDispatch
+from twilio.base.exceptions import TwilioRestException
 from twilio.rest import Client as TwilioClient
 
 from app.core.config import settings
@@ -272,13 +273,20 @@ async def release_phone_number(phone_number_id: str) -> dict:
         finally:
             await lk.aclose()
 
-    # Release Twilio number
+    # Release Twilio number — must succeed (or already be gone) before we mark
+    # the DB row released, otherwise we'd show "released" while Twilio keeps billing.
     if row.get("twilio_number_sid"):
         try:
             _get_twilio().incoming_phone_numbers(row["twilio_number_sid"]).delete()
             logger.info(f"[release] Twilio number released: {row['twilio_number_sid']}")
-        except Exception as e:
-            logger.warning(f"[release] Could not release Twilio number: {e}")
+        except TwilioRestException as e:
+            if e.status == 404:
+                logger.info(
+                    f"[release] Twilio number {row['twilio_number_sid']} already gone, treating as released"
+                )
+            else:
+                logger.error(f"[release] Could not release Twilio number: {e}")
+                raise
 
     # Soft-delete in DB
     from datetime import datetime, timezone
