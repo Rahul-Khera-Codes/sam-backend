@@ -147,7 +147,7 @@ The harness sets:
 HR_ONBOARDING_CACHE_ENABLED=false
 ```
 
-by default, before importing backend services. This keeps answer-quality evals from reusing old cached responses. Cache performance should be evaluated separately with BetterDB/Valkey.
+by default, before importing backend services. This keeps answer-quality evals from reusing old cached responses. Cache performance should be evaluated separately via Valkey directly.
 
 ## Dataset
 

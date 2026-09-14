@@ -3,22 +3,8 @@ services:
     image: valkey/valkey:latest
     container_name: sam-valkey
     ports:
-      - "6379:6379"
-    command: valkey-server --save "" --appendonly no
-    restart: unless-stopped
-
-  sam-betterdb:
-    image: betterdb/monitor:latest
-    container_name: sam-betterdb
-    ports:
-      - "127.0.0.1:3001:3001"
-    environment:
-      DB_HOST: sam-valkey
-      DB_PORT: "6379"
-      DB_TYPE: valkey
-      STORAGE_TYPE: memory
-    depends_on:
-      - sam-valkey
+      - "127.0.0.1:6379:6379"
+    command: valkey-server --save "" --appendonly no --requirepass ${VALKEY_PASSWORD:?VALKEY_PASSWORD must be set in .env}
     restart: unless-stopped
 
   sam-backend:
@@ -34,7 +20,7 @@ services:
       - ./backend/.env
     environment:
       GUARDRAILS_TOKEN: ""
-      VALKEY_URL: redis://sam-valkey:6379/0
+      VALKEY_URL: redis://:${VALKEY_PASSWORD:?VALKEY_PASSWORD must be set in .env}@sam-valkey:6379/0
       HR_ONBOARDING_CACHE_TTL_SECONDS: "3600"
       HR_ONBOARDING_CACHE_CLIENT_NAME: hr-onboarding-backend
     volumes:
@@ -78,7 +64,7 @@ services:
     env_file:
       - ./agent/.env.local
     environment:
-      VALKEY_URL: redis://sam-valkey:6379/0
+      VALKEY_URL: redis://:${VALKEY_PASSWORD:?VALKEY_PASSWORD must be set in .env}@sam-valkey:6379/0
       HR_ONBOARDING_CACHE_TTL_SECONDS: "3600"
       HR_ONBOARDING_CACHE_CLIENT_NAME: hr-onboarding-voice-agent
     volumes:
