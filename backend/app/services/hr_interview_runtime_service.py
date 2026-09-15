@@ -18,6 +18,7 @@ from app.schemas.hr_interviews import (
     HrHumanInterviewEmailDraftRequest,
     HrHumanInterviewEmailDraftResponse,
     HrHumanInterviewResponse,
+    HrInterviewCandidateScorecardResponse,
     HrInterviewDetailResponse,
     HrInterviewInviteRequest,
     HrInterviewInviteResponse,
@@ -26,6 +27,8 @@ from app.schemas.hr_interviews import (
     HrInterviewPublicJoinResponse,
     HrInterviewRecordingResponse,
     HrInterviewSessionSummary,
+    HrInterviewShareResponse,
+    HrInterviewSharePublicResponse,
     HrInterviewTranscriptTurnResponse,
 )
 from app.services.email_service import GMAIL_SEND_URL, _build_mime_message, get_token_row, get_valid_access_token
@@ -612,6 +615,171 @@ def get_detail(*, business_id: str, session_id: str) -> HrInterviewDetailRespons
             for row in transcript_rows
         ],
         recordings=recordings,
+    )
+
+
+def _resolve_application_for_session(business_id: str, session_row: dict[str, Any]) -> dict[str, Any] | None:
+    """Best-effort candidate-application match for a session, same dual-key pattern used
+    throughout this module: prefer a real application_id, fall back to email."""
+    application_id = session_row.get("application_id")
+    if application_id:
+        result = (
+            supabase_admin.table("hr_job_applications")
+            .select("*")
+            .eq("business_id", business_id)
+            .eq("id", application_id)
+            .limit(1)
+            .execute()
+        )
+        if result.data:
+            return result.data[0]
+    email = (session_row.get("candidate_email") or "").strip()
+    if not email:
+        return None
+    result = (
+        supabase_admin.table("hr_job_applications")
+        .select("*")
+        .eq("business_id", business_id)
+        .ilike("candidate_email", email)
+        .order("submitted_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return result.data[0] if result.data else None
+
+
+def get_candidate_scorecard(*, business_id: str, session_id: str) -> HrInterviewCandidateScorecardResponse:
+    detail = get_detail(business_id=business_id, session_id=session_id)
+    session_row = (
+        supabase_admin.table("hr_interview_sessions")
+        .select("*")
+        .eq("business_id", business_id)
+        .eq("id", session_id)
+        .limit(1)
+        .execute()
+    ).data[0]
+
+    application = _resolve_application_for_session(business_id, session_row)
+    resume_years_experience = None
+    if application:
+        resume_score_rows = (
+            supabase_admin.table("hr_application_resume_scores")
+            .select("years_experience")
+            .eq("business_id", business_id)
+            .eq("application_id", application["id"])
+            .limit(1)
+            .execute()
+        ).data
+        if resume_score_rows:
+            resume_years_experience = resume_score_rows[0].get("years_experience")
+
+    percentile = None
+    if detail.session.outcome:
+        score_rows = (
+            supabase_admin.table("hr_interview_outcomes")
+            .select("total_score")
+            .eq("business_id", business_id)
+            .execute()
+        ).data or []
+        values = [float(row["total_score"]) for row in score_rows if row.get("total_score") is not None]
+        if values:
+            at_or_below = sum(1 for value in values if value <= detail.session.outcome.total_score)
+            percentile = round((at_or_below / len(values)) * 100, 1)
+
+    return HrInterviewCandidateScorecardResponse(
+        session=detail.session,
+        transcript=detail.transcript,
+        recordings=detail.recordings,
+        score_percentile=percentile,
+        application_id=application["id"] if application else None,
+        has_resume=bool(application and application.get("resume_storage_path")),
+        has_cover_letter=bool(application and application.get("cover_letter_storage_path")),
+        candidate_location=application.get("candidate_location") if application else None,
+        resume_years_experience=resume_years_experience,
+        candidate_status=application.get("status") if application else None,
+        candidate_stage=application.get("stage") if application else None,
+        # A candidate is only eligible for Final Round once SOME interview of theirs is
+        # complete. The one the recruiter is looking at right now being complete is the
+        # common case and sufficient here — this screen doesn't need to re-scan every
+        # other session for the candidate the way the Candidates-page eligibility check does.
+        eligible_for_final_round=bool(application) and session_row.get("status") in ("completed", "reviewed"),
+    )
+
+
+def create_share_link(*, business_id: str, session_id: str, user_id: str) -> HrInterviewShareResponse:
+    session_result = (
+        supabase_admin.table("hr_interview_sessions")
+        .select("id")
+        .eq("business_id", business_id)
+        .eq("id", session_id)
+        .limit(1)
+        .execute()
+    )
+    if not session_result.data:
+        raise HrInterviewNotFound("Interview session not found.")
+
+    token = secrets.token_urlsafe(32)
+    expires_at = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+    row = {
+        "business_id": business_id,
+        "session_id": session_id,
+        "token_hash": _hash_token(token),
+        "created_by": user_id,
+        "expires_at": expires_at,
+    }
+    existing = (
+        supabase_admin.table("hr_interview_share_links")
+        .select("id")
+        .eq("business_id", business_id)
+        .eq("session_id", session_id)
+        .limit(1)
+        .execute()
+    ).data
+    if existing:
+        supabase_admin.table("hr_interview_share_links").update(row).eq("id", existing[0]["id"]).execute()
+    else:
+        supabase_admin.table("hr_interview_share_links").insert(row).execute()
+
+    return HrInterviewShareResponse(
+        share_url=f"{_frontend_base_url()}/hr/interviews/share/{token}",
+        expires_at=expires_at,
+    )
+
+
+def get_share_link_public(token: str) -> HrInterviewSharePublicResponse:
+    result = (
+        supabase_admin.table("hr_interview_share_links")
+        .select("*")
+        .eq("token_hash", _hash_token(token))
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
+        raise HrInterviewNotFound("This share link is invalid.")
+    link = result.data[0]
+    expires_at = link.get("expires_at")
+    if expires_at and datetime.fromisoformat(expires_at.replace("Z", "+00:00")) < datetime.now(timezone.utc):
+        raise HrInterviewRuntimeError("This share link has expired.")
+
+    session_result = (
+        supabase_admin.table("hr_interview_sessions")
+        .select("*")
+        .eq("business_id", link["business_id"])
+        .eq("id", link["session_id"])
+        .limit(1)
+        .execute()
+    )
+    if not session_result.data:
+        raise HrInterviewNotFound("Interview session not found.")
+    session_row = session_result.data[0]
+    job_title = _get_job(link["business_id"], session_row["job_posting_id"]).get("title") or ""
+    return HrInterviewSharePublicResponse(
+        candidate_name=session_row.get("candidate_name") or "",
+        job_title=job_title,
+        interview_kind=session_row.get("interview_kind") or "ai_screen",
+        completed_at=session_row.get("completed_at"),
+        outcome=_outcome_for(session_row["id"], link["business_id"]),
+        expires_at=expires_at or "",
     )
 
 

@@ -8,8 +8,13 @@ table only. The page now has two views:
   strengths as tags, and resume/cover-letter links — modeled on the AIE-73 mockup but built
   entirely from real `hr_interview_sessions`/`hr_interview_outcomes` data, not placeholder
   content.
-- **All Candidates** — the original plain table (name/job/email/phone/status/actions), unchanged,
-  kept for triaging brand-new applicants who haven't been interviewed yet.
+- **All Candidates** — pre-interview applicant triage table. As of 2026-09-15 (AIE-74 rework, see
+  `hr-resume-scoring-and-archival.md`) this is no longer the original plain table: every row shows
+  an AI resume-vs-job-requirements score/band and AI summary, rows are selectable, and a toolbar
+  lets a recruiter bulk **Invite to Interview** (wired to the existing `POST /hr/interviews/invite`)
+  or bulk **Reject** (new `PATCH /hr/candidates/{id}/status`) the selection. The eye icon opens a
+  `ResumeScorecardDialog` (strengths / areas to explore / requirements checklist, sourced from
+  `hr_application_resume_scores`).
 
 ## Why not just match the mockup literally
 The attached mockup (`Candidates Screen.html`) shows fields the app has no real data for:

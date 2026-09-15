@@ -312,5 +312,55 @@ class HrInterviewRecordingDeleteResponse(BaseModel):
     deleted: bool
 
 
+class HrInterviewShareRequest(BaseModel):
+    business_id: str
+
+
+class HrInterviewShareResponse(BaseModel):
+    share_url: str
+    expires_at: str
+
+
+class HrInterviewSharePublicResponse(BaseModel):
+    candidate_name: str
+    job_title: str
+    interview_kind: InterviewSessionKind
+    completed_at: Optional[str] = None
+    outcome: Optional[HrInterviewOutcomeResponse] = None
+    expires_at: str
+
+
+class HrInterviewReportStats(BaseModel):
+    window_days: int
+    total_interviews: int
+    completed: int
+    pending: int
+    average_score: float
+    recommendation_counts: dict[str, int] = Field(default_factory=dict)
+    top_candidates: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class HrInterviewReportResponse(BaseModel):
+    model: str
+    generated_at: str
+    stats: HrInterviewReportStats
+    narrative: str
+
+
+class HrInterviewCandidateScorecardResponse(BaseModel):
+    session: HrInterviewSessionSummary
+    transcript: list[HrInterviewTranscriptTurnResponse] = Field(default_factory=list)
+    recordings: list[HrInterviewRecordingResponse] = Field(default_factory=list)
+    score_percentile: Optional[float] = None
+    application_id: Optional[str] = None
+    has_resume: bool = False
+    has_cover_letter: bool = False
+    candidate_location: Optional[str] = None
+    resume_years_experience: Optional[float] = None
+    candidate_status: Optional[str] = None
+    candidate_stage: Optional[str] = None
+    eligible_for_final_round: bool = False
+
+
 HrInterviewSessionSummary.model_rebuild()
 HrHumanInterviewResponse.model_rebuild()

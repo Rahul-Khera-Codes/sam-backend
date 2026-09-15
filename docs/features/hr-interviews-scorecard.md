@@ -1,5 +1,17 @@
 # HR Employee: Interviews Scorecard Redesign (AIE-74)
 
+> **Note (2026-09-15):** the original 9/8 pass below (styling the Interviews list into a
+> scorecard) was correct on its own terms but was rejected in QA on 9/14 — not for the styling,
+> but because it only addressed one piece of a 5-step pipeline the ticket actually needed
+> (resume-vs-JD scoring → select → AI interview invite → **this scorecard** → manual final round →
+> archive on close/hire). The scorecard/card work described below was kept as-is (it was the one
+> part not in dispute); the surrounding pipeline was built out in the same ticket. See
+> `hr-resume-scoring-and-archival.md` for the new pieces, and the "All Candidates" section of
+> `hr-candidates-screening-view.md` for the redesigned Candidates table these cards now get fed
+> from (select candidates → **Invite to Interview** → they land here). The Interviews *list page*
+> itself was further reworked the same day into a unified pipeline table + dedicated per-candidate
+> scorecard page — see `hr-interviews-pipeline-dashboard.md`.
+
 ## What it does
 Restyles the HR "Interviews" list from a dense table into a per-candidate scorecard (name,
 recommendation, role, AI-generated metric breakdown, summary, key highlights, actions), matching

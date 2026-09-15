@@ -10,7 +10,7 @@ import json
 import logging
 import uuid
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 from openai import AsyncOpenAI
 
 from app.core.config import settings
@@ -21,6 +21,7 @@ from app.schemas.hr import (
     HrParsedResumeResponse,
 )
 from app.services.hr_document_embedding_service import extract_pdf_text
+from app.services.hr_resume_scoring_service import score_application_resume_safe
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +136,7 @@ async def parse_resume(job_id: str, resume: UploadFile = File(...)) -> HrParsedR
 @router.post("/jobs/{job_id}/apply")
 async def submit_application(
     job_id: str,
+    background_tasks: BackgroundTasks,
     candidate_name: str = Form(...),
     candidate_email: str = Form(...),
     candidate_phone: str = Form(""),
@@ -217,6 +219,12 @@ async def submit_application(
             except Exception:
                 pass
         raise HTTPException(status_code=500, detail="Failed to save application")
+
+    background_tasks.add_task(
+        score_application_resume_safe,
+        business_id=job["business_id"],
+        application_id=inserted["id"],
+    )
 
     return HrJobApplicationSubmitResponse(
         id=inserted["id"],
