@@ -169,14 +169,24 @@ def require_role(*allowed_roles: str):
 
 
 def verify_platform_super_admin(user_id: str) -> None:
-    """Verify that the authenticated user has platform Super Admin privileges."""
+    """Verify that the authenticated user has platform Super Admin privileges.
+
+    Must check super_admin against the platform's own internal business
+    (businesses.type = 'platform'), not just "super_admin of any business" —
+    every tenant's business owner also holds role='super_admin' for their own
+    business, which would otherwise satisfy this check and expose Mission
+    Control's cross-tenant company list and impersonation endpoints to any
+    paying customer. Mirrors the is_platform_super_admin() SQL function used
+    for the equivalent RLS-side check.
+    """
     from app.core.supabase import supabase_admin
 
     role_row = (
         supabase_admin.table("user_roles")
-        .select("id")
+        .select("business_id, businesses!inner(type)")
         .eq("user_id", user_id)
         .eq("role", "super_admin")
+        .eq("businesses.type", "platform")
         .limit(1)
         .execute()
     )
