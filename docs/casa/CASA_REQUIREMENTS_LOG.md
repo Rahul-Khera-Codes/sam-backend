@@ -28,6 +28,8 @@ Repos involved: `ai-employees-app` (React/TS frontend + Supabase) and `sam-backe
 | 1.3.3 | OOB verifier securely random | Comment ready, no evidence needed | 2026-09-14 |
 | 1.3.4 | OOB verifier resistant to brute force | Comment ready; reuses the 1.1.1 rate-limits screenshot, different row | 2026-09-14 |
 | 2.1.1 | No passwords/session tokens in URL parameters | Verified clean (code + DAST scan); PKCE flow fix applied and deployed locally | 2026-09-14 |
+| 2.2.1 | Logout invalidates session/refresh tokens | Verified already correct (global-scope signOut), no fix needed | 2026-09-14 |
+| 2.2.2 | Password change terminates all other active sessions | Real gap found (no session revocation on password change/reset) — fixed and deployed locally | 2026-09-15 |
 
 ---
 
@@ -230,3 +232,48 @@ Different sub-item pattern from Domain 1 — asks for **actual DAST scan results
 **Evidence:** `docs/casa/evidence/zap-baseline-2026-09-14.html` (or a screenshot of its Alerts summary table).
 
 **Note:** this scan was run against the **local dev** frontend, not the production `portal.aiemployeesinc.com` deployment — the PKCE fix needs the same `make dev-down && make dev-up` treatment (or equivalent prod deploy step) on production before the fix is live there too.
+
+---
+
+### 2.2.1 — Users shall have the ability to logout; logout/session expiration shall invalidate all stateful session tokens, including refresh tokens
+**Domain:** 2 – Session Management
+
+Asks for code snippets, not a screenshot — same pattern as 2.2.2 below.
+
+**Investigation:** Checked every `supabase.auth.signOut(` call site in the app. There are exactly two: the real user-facing logout (`AuthContext.tsx`'s `signOut`, wired to the "Sign out" buttons in `SelectLocation.tsx`) and an unrelated auto-signout in `EmailConfirmed.tsx` after email confirmation. **Neither passes a `scope` argument**, so both default to Supabase's `'global'` scope — meaning logout already revokes the refresh token server-side via GoTrue's `/logout` endpoint, not just a local clear. Also confirmed the backend (`sam-backend/backend/app/core/auth.py`) does pure stateless JWT verification per request with no session table of its own — once the token is revoked/expired there's nothing left server-side to separately invalidate. No custom session/refresh-token store exists anywhere in the app (checked both repos).
+
+**Comment submitted:**
+> Users can log out via the Sign Out control, which calls `supabase.auth.signOut()`. This is invoked without an explicit scope, which defaults to Supabase Auth's 'global' scope — this revokes the refresh token server-side via the GoTrue /logout endpoint (not just a local session clear), invalidating the session everywhere it's active. The backend never maintains its own session or token state: it performs stateless JWT signature/expiry verification on every request, so once the refresh token is revoked and the short-lived access token subsequently expires, requests carrying it simply stop verifying — no separate backend-side invalidation step is needed. Session/access-token expiry (TTL) and refresh-token lifetime are configured at the Supabase Auth platform level.
+
+**Evidence:** Code snippets only (no screenshot bullet in this requirement) — the `AuthContext.signOut` function, the `SelectLocation.tsx` button wiring, and the backend's stateless `get_current_user` JWT check.
+
+**Code changes:** None — already correctly implemented.
+
+---
+
+## 2026-09-15
+
+### 2.2.2 — Terminate all other active sessions (including stateful refresh tokens) after a successful password change
+**Domain:** 2 – Session Management
+
+Also asks for code snippets. This is the companion to 2.2.1 — 2.2.1 checked "does logout kill the session," this one checks "does changing your password kill *every other* session so a compromised device can't outlive a password reset."
+
+**Investigation found a real, confirmed gap** (not just missing paperwork): neither password-change path revoked any other session.
+- In-app "change/set password" (Account Settings): on success, only cleared the form and showed a toast. No call to `signOut` of any scope.
+- Password reset/recovery link flow (`ResetPassword.tsx`): on success, only toasted and redirected to `/login`. Didn't even sign out the *current* session, let alone any others.
+- Confirmed via repo-wide search that `scope: 'others'`/`'global'` was never used anywhere, and there was no "sign out of all devices" feature to build on.
+- Practical impact: if an account is compromised and the legitimate owner resets their password to lock the attacker out, the attacker's existing session on another device stayed fully valid — defeating the point of the control.
+- Federated login note: Supabase stores Google-authenticated sessions in the same session store as password-based ones, so revoking sessions via signOut scope does cover sessions established through Google sign-in too. It does not revoke Google's own OAuth consent grant (a separate system Google controls) — but that's not what this control is checking for.
+
+**Fix applied:**
+- `ai-employees-app/src/contexts/AuthContext.tsx` — `updatePassword` now takes an optional `revokeOtherSessions: 'others' | 'global'` parameter (defaults to `'others'`) and, after a successful `updateUser({ password })`, calls `supabase.auth.signOut({ scope: revokeOtherSessions })`.
+- `ai-employees-app/src/pages/ResetPassword.tsx` — now calls `updatePassword(password, "global")` explicitly, since that flow already redirects to `/login` regardless, so signing out the current session too is correct.
+- Account Settings' call site (`AccountSettings.tsx`) needed no change — it already calls `updatePassword(newPassword)` with no second argument, so it now gets the `'others'` default automatically: every other device gets signed out, but the user isn't unexpectedly kicked out of the settings page they're actively using.
+- Verified: `npx tsc --noEmit` clean. Frontend Docker container rebuilt.
+
+**Comment submitted:**
+> After a successful password change (both the in-app "change password" flow and the password reset/recovery flow), the application now explicitly invalidates all other active sessions, including their refresh tokens. In-app password changes use Supabase Auth's 'others' sign-out scope, revoking every other session server-side while keeping the user's current session active. Password reset/recovery uses the 'global' scope, which also signs out the current session (consistent with that flow redirecting to the login page). Because Supabase Auth stores sessions established via federated login (e.g. Google) in the same session store as password-based sessions, this revocation is effective across federated login as well. Code snippets demonstrating this are attached below.
+
+**Evidence:** Code snippets only (no screenshot bullet) — the updated `updatePassword` function showing the `signOut({ scope })` call, and the two call sites (`AccountSettings.tsx` using the default `'others'`, `ResetPassword.tsx` passing `'global'` explicitly).
+
+**Note:** fix is deployed to local dev only so far — needs the same production deployment step as the other frontend fixes before the comment's claims are true in production.
