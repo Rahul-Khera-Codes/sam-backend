@@ -13,6 +13,7 @@ Repos involved: `ai-employees-app` (React/TS frontend + Supabase) and `sam-backe
 - **Supabase CLI auth:** `SUPABASE_ACCESS_TOKEN` is exported in `~/.zshrc` (loads for every new interactive terminal). This avoids the macOS Keychain password prompt that `supabase` CLI commands otherwise trigger when falling back to a stored `supabase login` credential. `supabase db push --linked` pushes to the linked project above.
 - **Local dev stack:** `ai-employees-app/docker/docker-compose.yml` (frontend only, `make dev-up`/`make dev-down` from `ai-employees-app/`) and `sam-backend/docker-compose.yml` (backend + agents + Valkey, plain `docker compose up/down` from `sam-backend/`).
 - **DAST scanning (OWASP ZAP):** run via the official `ghcr.io/zaproxy/zaproxy:stable` Docker image, `zap-baseline.py` script (passive scan + link-crawl only — no attack payloads, no form submission, safe against a real target). Target the frontend via `--network host` + `http://localhost:8080`, **not** the docker-network hostname (`sam-frontend:8080`) — Vite's dev server rejects unrecognized `Host` headers with a 403, which silently produces a near-empty scan if you don't catch it. Reports saved under `docs/casa/evidence/`.
+- **CASA portal comment field has a 1500-character limit.** Discovered on 3.1.1 when a full write-up got rejected. Keep comments for large/foundational requirements (Domain 3's access-control questions especially) tight — lead with the claim, cite mechanism names rather than full code, and push detail into the evidence screenshots instead of the comment text.
 - The requirement detail panels in the CASA portal follow a pattern: sub-items 2+ ("provide a written description...", "provide screenshots...") are conditioned on **"if a proprietary user authentication service is used by the application"**. Since this app uses Supabase Auth (external, hosted) for all standard login, those items are usually N/A — except where the app *does* have proprietary logic on top (e.g. the location-invitation activation-code flow, see 1.1.2).
 
 ## Requirement Status Index
@@ -36,7 +37,9 @@ Repos involved: `ai-employees-app` (React/TS frontend + Supabase) and `sam-backe
 | 2.3.3 | Session tokens used instead of static API secrets/keys | Verified — dynamic per-login JWTs via Supabase Auth, no static key auth path | 2026-09-15 |
 | 2.3.4 | Stateless tokens protected against tampering/replay/null-cipher/key-substitution | Verified — HS256 signature, algorithm explicitly pinned in verification code | 2026-09-15 |
 | 2.4.1 | Full session or re-auth/secondary verification before sensitive account changes | Real gap found (2FA disable + Gmail disconnect had no re-auth) — fixed and deployed locally | 2026-09-15 |
-| 3.1.1 | Least privilege access control enforced on a trusted service layer | **Two critical authorization vulnerabilities found** (privilege escalation to admin on any business; cross-tenant company-list leak) — fixed locally, **not yet deployed to production**. Comment/write-up pending until deployed. | 2026-09-15 |
+| 3.1.1 | Least privilege access control enforced on a trusted service layer | Four vulnerabilities found and fixed, **all confirmed/reported live in production**. Comment submitted (condensed to fit 1500-char portal limit). | 2026-09-15 |
+| 3.1.2 | Access-control data/attributes not end-user-manipulable unless authorized | Verified via RLS (user_roles, role/user_page_permissions admin-only writes) + directly cites the businesses.type fix from 3.1.1 as evidence | 2026-09-15 |
+| 3.1.3 | Access controls fail securely, including on exception | Verified — backend explicit-deny-on-no-match + uncaught exceptions propagate to 500 (never grants); RLS fail-closed by design; frontend fail-open caveat disclosed (non-authoritative, no real gap) | 2026-09-15 |
 
 ---
 
@@ -429,4 +432,55 @@ Asked specifically whether the same bug class (a "platform operator" check that'
 - Mission Control's nav item is visible to tenant super_admins (by design, per an explicit code comment in `AuthContext.tsx`), but every actual data endpoint correctly 403s them post-fix — cosmetic inconsistency, not an active vulnerability. Recommend tightening later, not urgent.
 - **Separate, unrelated real vulnerability found by accident while auditing this area:** `storage.objects` policies for the `call-recordings` bucket (`supabase/migrations/20260311000000_voice_agent_schema.sql:377-383`) don't check business ownership at all — any authenticated user can upload to or delete *any* tenant's call recordings, despite the policy names suggesting otherwise. This is a different bug class (missing tenant scoping on a storage bucket, not the platform-admin escalation pattern) — flagged but out of scope for this pass; needs its own follow-up.
 
-**Verification of the two new migrations:** SQL reviewed carefully against the exact original policy definitions (not guessed) before writing the revert/fix. `npx tsc --noEmit` clean after the `Legal.tsx` change. **Not yet applied anywhere** — per instruction, these migration files are ready for the user to review and deploy manually via `supabase db push`, alongside the edge function and backend deploys.
+**Verification of the two new migrations:** SQL reviewed carefully against the exact original policy definitions (not guessed) before writing the revert/fix. `npx tsc --noEmit` clean after the `Legal.tsx` change.
+
+## Deployment — all four fixes confirmed live (2026-09-15)
+
+Did not just take "it's deployed" at face value — independently verified each piece where tooling allowed:
+- **Both migrations** (`20260915120000`, `20260915120100`): confirmed via `supabase migration list --linked` (both show matching local/remote hashes), then independently re-queried the actual live RLS policy text on production via the Supabase Management API's SQL endpoint (`pg_policies`/`pg_policy` system catalogs) — the `businesses` INSERT/UPDATE policies and the `platform_legal_content` UPDATE policy exactly match what was written, and `is_any_super_admin` no longer exists as a function. Not just "migration ran," but "the actual policy in production is what we intended."
+- **Edge function** (`invite-location-admin`): initial check showed it had *not* actually been redeployed despite being reported as done (version 17, `updated_at` stale from 2026-04-29 — confirmed stale by comparing against `accept-invitation`, an untouched function showing the identical old timestamp). Deployed it directly (`supabase functions deploy invite-location-admin --project-ref hdnwxonrwcnaodjxipll`) and re-verified: version bumped 17→18, `updated_at` now 2026-09-15, entrypoint path updated to this machine — `accept-invitation` unchanged, confirming only the intended function redeployed.
+- **Backend** (`verify_platform_super_admin` in `auth.py`, on the production server `116.202.210.102`): user confirmed this was redeployed. No SSH/monitoring access to that server from this session, so this one is self-reported rather than independently verified the way the other three were — worth an actual functional test (e.g. confirm a real tenant super_admin's token now gets 403 from `/mission-control/companies`) if that certainty matters later.
+
+**All four fixes are now live.** The 3.1.1 (and 3.1.2/3.1.3) least-privilege comment can be submitted.
+
+**Comment actually submitted (condensed to fit the 1500-char portal limit — see Environment Notes):**
+> Authentication: Supabase Auth (external). Authorization: role-based (super_admin/admin/user) stored per-business in user_roles, kept separate from profiles to prevent self-escalation - roles are scoped per business, not global. Custom roles add granular per-page permissions on top. Least privilege is enforced on the trusted backend service layer, not just the UI: every sensitive route requires a valid session and checks the caller's role against the specific business_id/location_id via reusable dependencies (verify_business_access, require_role) - a user with no user_roles row for a business cannot reach its data regardless of what ID is supplied. Applied consistently across billing, settings, appointments, and team management. As a second layer, direct frontend-to-Supabase table reads are protected by Row-Level Security policies scoped identically, backed by SECURITY DEFINER helper functions. Platform-only tables (audit logs, impersonation) are inaccessible to any client at all. The frontend's canAccess() check is UX convenience only, not a security boundary. A dedicated review found and fixed two authorization gaps (invite pathway missing an inviter-membership check; platform-admin check not scoped to the platform business). Both fixed and confirmed live in production.
+
+**Evidence:** screenshots of `verify_business_access` (`auth.py`), a real call site (`billing.py`'s `get_subscription`), and the `businesses` RLS policy block from the migration.
+
+---
+
+### 3.1.2 — All user and data attributes and policy information used by access controls shall not be able to be manipulated by end users unless specifically authorized
+**Domain:** 3 – Access Control
+
+Same "single written description covers 3.1.1-3.1.3" note as 3.1.1. This one asks specifically: can end users tamper with the *data access-control decisions are based on* (their own role, permission flags, tenant-scoping attributes)? Directly provable using the fix just shipped for 3.1.1.
+
+**Verified:**
+- `user_roles` (which role a user holds per business) is a separate table from the user's own editable `profiles`, specifically to prevent self-escalation. Its RLS policy (`"Super admins can manage roles"`, `20251216222805...sql:499-502`) restricts INSERT/UPDATE/DELETE to that business's super_admin only.
+- `role_page_permissions`/`user_page_permissions` (custom-role and per-user permission flags) follow the same pattern — admin/super_admin-only writes via RLS, never editable by the permission's own subject.
+- `businesses.type` — used by `is_platform_super_admin` to distinguish the platform's own business from tenants — was found (during the 3.1.1 investigation) to be end-user-writable to *any* value including the reserved `'platform'` sentinel. This is a direct, concrete instance of exactly what this requirement prohibits. Already fixed and confirmed live (see 3.1.1's migration `20260915120000_lock_down_businesses_platform_type.sql`).
+
+**Comment submitted (1262 chars):**
+> Access-control data (roles, permission flags, tenant-scoping attributes) is not end-user-editable except where specifically authorized. user_roles (which role a user holds per business) is a table deliberately separate from the user's own editable profile, specifically to prevent self-escalation. Its RLS policy restricts INSERT/UPDATE/DELETE to that business's super_admin only - a regular user cannot grant themselves a higher role. role_page_permissions and user_page_permissions (custom-role and per-user permission flags) follow the same pattern: writable only by admin/super_admin of that business via RLS, never by the permission's own subject. businesses.type is used by platform-admin access-control checks (is_platform_super_admin) to distinguish the platform's own internal business from ordinary tenants. A review of this attribute found it was previously writable by any business owner to any value, including the reserved 'platform' sentinel, which would let a tenant grant themselves platform-operator access. This has been fixed via RLS: the value 'platform' is now blocked on both insert and update for all authenticated users, while the legitimate business-category use of that same field remains editable. Fix confirmed live in production.
+
+**Evidence:** screenshot of the `user_roles` RLS policy (`20251216222805...sql:~499`), and the whole `20260915120000_lock_down_businesses_platform_type.sql` migration file.
+
+**Code changes:** none new — this cites the fix already made and deployed under 3.1.1.
+
+---
+
+### 3.1.3 — Access controls shall fail securely, including when an exception occurs
+**Domain:** 3 – Access Control
+
+Last of the 3.1.1-3.1.3 trio. Asks specifically: on an unexpected error during an access-control check, does the system default to deny (fail closed) or accidentally default to allow (fail open)?
+
+**Verified by reading the actual code, not assumed:** `verify_business_access` (`auth.py:56-103`) — queries `user_roles`, then either raises `403` explicitly when no matching row is found, or (for an unexpected exception, e.g. a DB/network error beyond the one deliberate retry for a known transient `httpx.RemoteProtocolError`) lets the exception propagate uncaught — FastAPI converts that to a `500`, and the route handler never executes. There is no path where an error results in the request being allowed through. `require_role`/`require_business_access`/`verify_platform_super_admin` follow the identical pattern. Postgres RLS is fail-closed by design — a row is only returned/writable if a policy condition evaluates true; an evaluation error aborts the query rather than defaulting to visible.
+
+**Honest caveat disclosed rather than hidden:** the frontend's `canAccess()` UX helper (`useRolePermissions.ts:59-61`) does fall back to a permissive default on a fetch error — but since it's explicitly non-authoritative (see 3.1.1), this doesn't create a real gap: even if the UI shows a nav item it shouldn't, the backend/RLS layers behind it still independently deny the actual request.
+
+**Comment submitted (1009 chars):**
+> Access controls fail securely, including on exception, at every real enforcement layer. Backend: verify_business_access/require_role query user_roles, then either raise 403 explicitly on no match, or let any unexpected exception (DB/network error) propagate uncaught - FastAPI converts that to a 500 and the request handler never executes. There is no code path where an error results in access being granted; absence of a positive match always denies. Database: Postgres Row-Level Security is fail-closed by design - a row is only returned or writable if a policy's condition evaluates to true. If that evaluation errors, the query aborts rather than defaulting to visible. Frontend: the canAccess() UX helper falls back to a permissive default on a fetch error, but this only affects which nav items/pages are shown - it is not a security boundary. Even if it fails open, the actual API/RLS layers behind it still independently deny the request, so no unauthorized data access results from this fallback.
+
+**Evidence:** one screenshot — `verify_business_access` in `auth.py` (same location as 3.1.1's evidence).
+
+**Code changes:** none — already correctly implemented.
