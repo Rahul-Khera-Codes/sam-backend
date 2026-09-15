@@ -69,3 +69,12 @@ a real, persisted pipeline stage.
 - Any transition into the `onboarding` stage — the Onboarding page stays independent.
 - Fixing the interview-invite flow to carry a real `application_id` end-to-end (see linkage
   decision above).
+
+## Update (2026-09-15, AIE-74 rework)
+Per Sam's 9/14 spec, Final Round is explicitly the point where AI automation stops and a human
+takes over — `HrFinalRound.tsx` now shows a banner stating this. No new plumbing: the page was
+already a purely manual stage transition (see above), just undocumented as intentional in the UI.
+`stage` also gained a fourth value, `archived` (see `hr-resume-scoring-and-archival.md`) — a
+candidate can leave Final Round via "Move back to Interviewing" same as before, or via
+archival if their job closes or they're marked hired elsewhere in the pipeline; archived
+candidates drop out of this list's `stage=final_round` query same as any other stage change.

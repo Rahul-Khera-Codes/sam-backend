@@ -17,6 +17,7 @@ from app.schemas.hr_interviews import (
     HrInterviewAiSuggestResponse,
     HrInterviewBankDraftUpsertRequest,
     HrInterviewBankResponse,
+    HrInterviewCandidateScorecardResponse,
     HrInterviewCandidateSessionRequest,
     HrInterviewDetailResponse,
     HrInterviewInviteRequest,
@@ -30,10 +31,15 @@ from app.schemas.hr_interviews import (
     HrInterviewRecordingDeleteResponse,
     HrInterviewPublishRequest,
     HrInterviewPublishResponse,
+    HrInterviewReportResponse,
     HrInterviewSessionSummary,
+    HrInterviewShareRequest,
+    HrInterviewShareResponse,
+    HrInterviewSharePublicResponse,
     HrInterviewStatusUpdateRequest,
 )
 from app.services import livekit_service
+from app.services.hr_interview_report_service import generate_interview_report
 from app.services.hr_interview_bank_service import (
     InterviewBankNotFound,
     InterviewBankValidationError,
@@ -56,9 +62,12 @@ from app.services.hr_interview_runtime_service import (
     HrInterviewRuntimeError,
     create_ai_screen_invite,
     create_human_interview,
+    create_share_link,
     delete_recording,
+    get_candidate_scorecard,
     get_detail,
     generate_human_interview_email_draft,
+    get_share_link_public,
     list_pipeline,
     prepare_live_session,
     update_notes,
@@ -110,6 +119,20 @@ async def read_interview_pipeline(
         logger.warning("Interview pipeline load failed for business %s: %s", business_id, exc)
         _raise_domain_error(exc)
         raise
+
+
+@router.get("/interviews/report")
+async def read_interview_report(
+    business_id: str,
+    days: int = 30,
+    user_id: str = Depends(get_user_id),
+) -> HrInterviewReportResponse:
+    verify_business_access(user_id, business_id)
+    try:
+        return await generate_interview_report(business_id=business_id, days=days)
+    except Exception as exc:
+        logger.warning("Interview report generation failed for business %s: %s", business_id, exc)
+        raise HTTPException(status_code=502, detail="Could not generate the interview report right now.") from exc
 
 
 @router.post("/interviews/invite")
@@ -202,6 +225,43 @@ async def read_interview_detail(
     verify_business_access(user_id, business_id)
     try:
         return get_detail(business_id=business_id, session_id=session_id)
+    except Exception as exc:
+        _raise_domain_error(exc)
+        raise
+
+
+@router.get("/interviews/{session_id}/scorecard")
+async def read_interview_scorecard(
+    session_id: str,
+    business_id: str,
+    user_id: str = Depends(get_user_id),
+) -> HrInterviewCandidateScorecardResponse:
+    verify_business_access(user_id, business_id)
+    try:
+        return get_candidate_scorecard(business_id=business_id, session_id=session_id)
+    except Exception as exc:
+        _raise_domain_error(exc)
+        raise
+
+
+@router.post("/interviews/{session_id}/share")
+async def share_interview_scorecard(
+    session_id: str,
+    body: HrInterviewShareRequest,
+    user_id: str = Depends(get_user_id),
+) -> HrInterviewShareResponse:
+    verify_business_access(user_id, body.business_id)
+    try:
+        return create_share_link(business_id=body.business_id, session_id=session_id, user_id=user_id)
+    except Exception as exc:
+        _raise_domain_error(exc)
+        raise
+
+
+@router.get("/interviews/share/{token}")
+async def read_interview_share(token: str) -> HrInterviewSharePublicResponse:
+    try:
+        return get_share_link_public(token)
     except Exception as exc:
         _raise_domain_error(exc)
         raise

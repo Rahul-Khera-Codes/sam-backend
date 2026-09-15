@@ -83,13 +83,15 @@ class HrCandidateJobResponse(BaseModel):
     absolute_url: str = ""
 
 
-HrCandidateStage = Literal["applied", "interviewing", "final_round"]
+HrCandidateStage = Literal["applied", "interviewing", "final_round", "archived"]
+HrCandidateStatus = Literal["new", "reviewed", "rejected", "hired"]
 
 
 class HrCandidateResponse(BaseModel):
     id: str
     application_id: str
     candidate_id: str
+    job_posting_id: Optional[str] = None
     name: str
     title: str = ""
     company: str = ""
@@ -116,6 +118,14 @@ class HrCandidateResponse(BaseModel):
     has_resume: bool = False
     has_cover_letter: bool = False
     interview_session_id: Optional[str] = None
+    resume_score: Optional[float] = None
+    resume_summary: Optional[str] = None
+    resume_strengths: list[str] = Field(default_factory=list)
+    resume_concerns: list[str] = Field(default_factory=list)
+    resume_criterion_scores: list[dict[str, Any]] = Field(default_factory=list)
+    resume_current_title: Optional[str] = None
+    resume_current_company: Optional[str] = None
+    resume_years_experience: Optional[float] = None
 
 
 class HrCandidateFileUrlResponse(BaseModel):
@@ -130,6 +140,11 @@ class HrCandidatePromoteRequest(BaseModel):
 class HrCandidateStageUpdateRequest(BaseModel):
     business_id: str
     stage: HrCandidateStage
+
+
+class HrCandidateStatusUpdateRequest(BaseModel):
+    business_id: str
+    status: HrCandidateStatus
 
 
 class HrCandidateLookupResponse(BaseModel):

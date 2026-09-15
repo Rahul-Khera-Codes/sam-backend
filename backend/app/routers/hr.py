@@ -22,6 +22,7 @@ from app.schemas.hr import (
     HrCandidateResponse,
     HrCandidatesResponse,
     HrCandidateStageUpdateRequest,
+    HrCandidateStatusUpdateRequest,
     HrDashboardPostingResponse,
     HrDashboardStatCard,
     HrDraftAssistRequest,
@@ -971,6 +972,7 @@ def _list_interviewed_candidates(business_id: str) -> HrCandidatesResponse:
             supabase_admin.table("hr_job_applications")
             .select("*")
             .eq("business_id", business_id)
+            .neq("stage", "archived")
             .execute()
         ).data or []
         for row in app_rows:
@@ -1009,6 +1011,7 @@ def _candidate_response(
     completed_application_ids: set[str],
     completed_emails: set[str],
     interview_activity: dict[str, dict] | None = None,
+    resume_scores_by_application: dict[str, dict] | None = None,
 ) -> HrCandidateResponse:
     activity_entry = None
     if interview_activity:
@@ -1018,11 +1021,13 @@ def _candidate_response(
             if email:
                 activity_entry = interview_activity.get(email)
     outcome = (activity_entry or {}).get("outcome") or {}
+    resume_score = (resume_scores_by_application or {}).get(row["id"])
 
     return HrCandidateResponse(
         id=row["id"],
         application_id=row["id"],
         candidate_id=row["id"],
+        job_posting_id=row.get("job_posting_id"),
         name=row.get("candidate_name") or "",
         title=title,
         location=row.get("candidate_location") or "",
@@ -1048,6 +1053,14 @@ def _candidate_response(
         has_resume=bool(row.get("resume_storage_path")),
         has_cover_letter=bool(row.get("cover_letter_storage_path")),
         interview_session_id=(activity_entry or {}).get("id"),
+        resume_score=(resume_score or {}).get("total_score"),
+        resume_summary=(resume_score or {}).get("summary"),
+        resume_strengths=(resume_score or {}).get("strengths") or [],
+        resume_concerns=(resume_score or {}).get("concerns") or [],
+        resume_criterion_scores=(resume_score or {}).get("criterion_scores") or [],
+        resume_current_title=(resume_score or {}).get("current_title") or None,
+        resume_current_company=(resume_score or {}).get("current_company") or None,
+        resume_years_experience=(resume_score or {}).get("years_experience"),
     )
 
 
@@ -1056,6 +1069,7 @@ async def list_hr_candidates(
     business_id: str,
     stage: str | None = None,
     interviewed: bool = False,
+    job_posting_id: str | None = None,
     _: str = Depends(require_business_access()),
 ) -> HrCandidatesResponse:
     if interviewed:
@@ -1066,8 +1080,12 @@ async def list_hr_candidates(
         .select("*")
         .eq("business_id", business_id)
     )
+    if job_posting_id:
+        query = query.eq("job_posting_id", job_posting_id)
     if stage:
         query = query.eq("stage", stage)
+    else:
+        query = query.neq("stage", "archived")
     applications = query.order("submitted_at", desc=True).execute().data or []
 
     if not applications:
@@ -1086,6 +1104,18 @@ async def list_hr_candidates(
         ).data or []
         jobs_by_id = {job["id"]: job for job in job_rows}
 
+    resume_score_rows = (
+        supabase_admin.table("hr_application_resume_scores")
+        .select(
+            "application_id,total_score,summary,strengths,concerns,criterion_scores,"
+            "current_title,current_company,years_experience"
+        )
+        .eq("business_id", business_id)
+        .in_("application_id", [row["id"] for row in applications])
+        .execute()
+    ).data or []
+    resume_scores_by_application = {row["application_id"]: row for row in resume_score_rows}
+
     completed_application_ids, completed_emails = _completed_interview_keys(business_id)
     candidates = [
         _candidate_response(
@@ -1094,6 +1124,7 @@ async def list_hr_candidates(
             completed_application_ids,
             completed_emails,
             interview_activity,
+            resume_scores_by_application,
         )
         for row in applications
     ]
@@ -1194,6 +1225,53 @@ async def update_hr_candidate_stage(
         .execute()
     ).data or []
     title = job_rows[0].get("title", "") if job_rows else ""
+    interview_activity = _interview_activity_by_key(body.business_id)
+
+    return _candidate_response(row, title, completed_application_ids, completed_emails, interview_activity)
+
+
+@router.patch("/candidates/{application_id}/status")
+async def update_hr_candidate_status(
+    application_id: str,
+    body: HrCandidateStatusUpdateRequest,
+    user_id: str = Depends(get_user_id),
+) -> HrCandidateResponse:
+    verify_business_access(user_id, body.business_id)
+
+    existing = (
+        supabase_admin.table("hr_job_applications")
+        .select("*")
+        .eq("business_id", body.business_id)
+        .eq("id", application_id)
+        .limit(1)
+        .execute()
+    ).data
+    if not existing:
+        raise HTTPException(status_code=404, detail="Candidate application not found.")
+
+    updates: dict = {"status": body.status}
+    if body.status == "hired":
+        # A hired candidate's pipeline is done; retire them out of the active views.
+        updates["stage"] = "archived"
+    updated = (
+        supabase_admin.table("hr_job_applications")
+        .update(updates)
+        .eq("business_id", body.business_id)
+        .eq("id", application_id)
+        .select("*")
+        .execute()
+    ).data
+    row = updated[0]
+
+    job_rows = (
+        supabase_admin.table("hr_job_postings")
+        .select("id,title")
+        .eq("id", row["job_posting_id"])
+        .limit(1)
+        .execute()
+    ).data or []
+    title = job_rows[0].get("title", "") if job_rows else ""
+    completed_application_ids, completed_emails = _completed_interview_keys(body.business_id)
     interview_activity = _interview_activity_by_key(body.business_id)
 
     return _candidate_response(row, title, completed_application_ids, completed_emails, interview_activity)
@@ -1648,6 +1726,13 @@ async def update_hr_job(
     updated_row = updated.data[0] if updated.data else None
     if not updated_row:
         raise HTTPException(status_code=500, detail="Failed to update HR job posting.")
+
+    if status == "closed":
+        # Closing a job retires every candidate still active in its pipeline.
+        supabase_admin.table("hr_job_applications").update({"stage": "archived"}).eq(
+            "business_id", body.business_id
+        ).eq("job_posting_id", job_id).neq("stage", "archived").execute()
+
     return HrJobPostingResponse.model_validate(_native_job_to_response(updated_row))
 
 
