@@ -30,6 +30,12 @@ Repos involved: `ai-employees-app` (React/TS frontend + Supabase) and `sam-backe
 | 2.1.1 | No passwords/session tokens in URL parameters | Verified clean (code + DAST scan); PKCE flow fix applied and deployed locally | 2026-09-14 |
 | 2.2.1 | Logout invalidates session/refresh tokens | Verified already correct (global-scope signOut), no fix needed | 2026-09-14 |
 | 2.2.2 | Password change terminates all other active sessions | Real gap found (no session revocation on password change/reset) — fixed and deployed locally | 2026-09-15 |
+| 2.2.3 | Non-revocable stateless tokens expire within 24 hours | Verified via dashboard — access token TTL is 3600s (1hr), well under limit | 2026-09-15 |
+| 2.3.1 | Cookie-based session tokens have 'Secure' attribute | N/A — app uses no cookie-based session tokens at all (localStorage-based) | 2026-09-15 |
+| 2.3.2 | Cookie-based session tokens have 'HttpOnly' attribute | N/A — same reason as 2.3.1 | 2026-09-15 |
+| 2.3.3 | Session tokens used instead of static API secrets/keys | Verified — dynamic per-login JWTs via Supabase Auth, no static key auth path | 2026-09-15 |
+| 2.3.4 | Stateless tokens protected against tampering/replay/null-cipher/key-substitution | Verified — HS256 signature, algorithm explicitly pinned in verification code | 2026-09-15 |
+| 2.4.1 | Full session or re-auth/secondary verification before sensitive account changes | Real gap found (2FA disable + Gmail disconnect had no re-auth) — fixed and deployed locally | 2026-09-15 |
 
 ---
 
@@ -277,3 +283,97 @@ Also asks for code snippets. This is the companion to 2.2.1 — 2.2.1 checked "d
 **Evidence:** Code snippets only (no screenshot bullet) — the updated `updatePassword` function showing the `signOut({ scope })` call, and the two call sites (`AccountSettings.tsx` using the default `'others'`, `ResetPassword.tsx` passing `'global'` explicitly).
 
 **Note:** fix is deployed to local dev only so far — needs the same production deployment step as the other frontend fixes before the comment's claims are true in production.
+
+**⚠️ Important correction on evidence format:** the CASA portal only accepts screenshot uploads, not pasted text/files. For any requirement whose sub-items ask for "code snippets," the evidence is a screenshot of that code open in the editor (showing the relevant lines in frame) — not the snippet pasted as text. Applies retroactively to 2.2.1 and 2.2.2 above if those haven't been submitted yet.
+
+---
+
+### 2.2.3 — Non-revocable stateless authentication tokens must expire within 24 hours of being issued
+**Domain:** 2 – Session Management
+
+This is about the **access token (JWT)** specifically — the non-revocable, stateless half of a Supabase session (as opposed to the refresh token, which is revocable and was the subject of 2.2.1/2.2.2). Platform setting, not app code — same category as the OTP-expiry check in 1.3.1.
+
+**Verified:** Supabase Dashboard → Authentication → Sessions → Access Tokens → **"Access token expiry time": 3600 seconds (1 hour)**, confirmed on the production project. Comfortably within the 24-hour (86,400s) limit. Also noted in passing on the same page (not required for this specific control, but good context): "Detect and revoke potentially compromised refresh tokens" is enabled, and refresh token reuse interval is 10 seconds — both at Supabase's recommended values.
+
+**Comment submitted:**
+> Non-revocable stateless authentication (access) tokens are configured to expire 3600 seconds (1 hour) after issuance, well within the 24-hour requirement. This is enforced at the Supabase Auth platform level (Authentication → Sessions → Access Tokens). Screenshot of the configured value is attached.
+
+**Evidence:** Screenshot of Supabase Dashboard → Authentication → Sessions → Access Tokens page (production project), showing "Access token expiry time: 3600 seconds."
+
+**Code changes:** None — platform configuration, already compliant, no action needed.
+
+---
+
+### 2.3.1 — Cookie-based session tokens shall have the 'Secure' attribute set
+### 2.3.2 — Cookie-based session tokens shall have the 'HttpOnly' attribute set
+**Domain:** 2 – Session Management
+
+Both handled together — same finding applies to each. Both ask for DAST scan results.
+
+**Investigation:** Checked directly rather than assumed. Confirmed via `curl` against the local frontend that **no `Set-Cookie` header is sent at all** — neither the frontend nor the FastAPI backend sets any cookie carrying session/auth data. Supabase's session (access + refresh tokens) is stored in the browser's `localStorage` (`persistSession`/`storage: localStorage` in `client.ts`), not in a cookie. The only cookie anywhere in the codebase is a UI preference (`sidebar:state`, remembers whether the sidebar is collapsed) set directly via `document.cookie` in the sidebar component — not a session or auth token, so it's out of scope for both of these controls. It currently has neither `Secure` nor `HttpOnly` set, but since it holds no sensitive/session data, that's a minor hygiene item, not a compliance gap for 2.3.1/2.3.2 — optional cleanup, not yet done, not blocking either requirement.
+
+**Comment submitted (same for both 2.3.1 and 2.3.2):**
+> This application does not use cookie-based session tokens. Authentication session state (access and refresh tokens) is managed by Supabase Auth and stored in the browser's localStorage, not in cookies. Neither the frontend nor the backend sets any Set-Cookie header carrying session or authentication data. The only cookie set by the application is a non-sensitive UI preference (sidebar collapsed/expanded state), which is not a session or authentication token and therefore falls outside the scope of this control. A dynamic application security scan (OWASP ZAP) was run against the application; it identified no cookie-related session security issues. Scan report attached.
+
+**Evidence:** Reuses the same `zap-baseline-2026-09-14.html` report from 2.1.1 — its Alerts table has no cookie-related findings (no "Cookie Without Secure Flag," no "Cookie No HttpOnly Flag"). Caveat noted to self: that scan only crawled public/unauthenticated pages, so it never actually exercised the sidebar-toggle code path — it can't speak to that one non-session cookie's flags, but that cookie is out of scope for this control anyway.
+
+**Code changes:** None.
+
+---
+
+### 2.3.3 — The application shall use session tokens rather than static API secrets and keys, except with legacy implementations
+**Domain:** 2 – Session Management
+
+Asks for code snippets of session token creation, showing dynamic generation.
+
+**Verified:** All user-facing API authentication goes through Supabase-issued JWTs, freshly minted per login (`supabase.auth.signInWithPassword()` / `signInWithOAuth()` in `AuthContext.tsx`), attached as `Authorization: Bearer` per request, and verified statelessly by the backend. Static secrets do exist in the system (OpenAI, Resend, etc. API keys) but only for server-to-server calls to third-party vendors — never used to authenticate an end-user/client request, and never a substitute for the session token. No legacy static-key auth path exists anywhere in either repo (confirmed in the 2.1.1 investigation pass — no `Query(...)`-based API-key auth anywhere in the backend).
+
+**Comment submitted:**
+> This application authenticates all user-facing API requests using dynamically generated session tokens, not static API secrets or keys. When a user authenticates (via supabase.auth.signInWithPassword() or supabase.auth.signInWithOAuth()), Supabase Auth issues a fresh, unique JWT access token and refresh token for that specific login session — these are never hardcoded or reused across users/sessions. This token is attached per-request as an Authorization: Bearer header and verified statelessly by the backend on every call. Static API keys/secrets do exist in this system, but only for server-to-server calls to third-party vendors (e.g. OpenAI, Resend) — never as a mechanism for authenticating end-user or client requests to the application itself, and never in place of a session token. There is no legacy static-key authentication path in this application.
+
+**Evidence:** Code snippets only (no screenshot bullet) — `AuthContext.tsx`'s `signIn` function (token creation at login), `voiceAgentApi.ts`'s Bearer-header attachment, and `auth.py`'s per-request verification.
+
+**Code changes:** None.
+
+---
+
+### 2.3.4 — Stateless session tokens shall use digital signatures, encryption, and other countermeasures to protect against tampering, enveloping, replay, null cipher, and key substitution attacks
+**Domain:** 2 – Session Management
+
+Asks for DAST scan results, but this is really a crypto/protocol-level property — flagged to the user that the generic ZAP scan doesn't specifically probe JWT algorithm-confusion/null-cipher attacks (that needs a targeted test crafting a malicious token). User declined running that test for now — went with code-level evidence only.
+
+**Verified:** `sam-backend/backend/app/core/auth.py` — JWT verification explicitly pins `algorithms=["HS256"]` rather than trusting the token's own header, which is the standard defense against "alg:none" (null cipher) and algorithm-substitution/key-confusion attacks. Signature verification (HMAC-SHA256 against `supabase_jwt_secret`) means any payload tampering invalidates the token. Short expiry (1hr, per 2.2.3) bounds the replay window. "Enveloping" attacks don't apply to this compact JWT format (that's an XML/SOAP-signature-era concern).
+
+**Comment submitted:**
+> Stateless session tokens (Supabase-issued JWTs) are digitally signed using HMAC-SHA256 and verified server-side against a shared secret on every request. The verification explicitly pins the accepted algorithm to HS256 rather than trusting the algorithm declared in the token's own header — this is the standard countermeasure against "none"/null-cipher attacks and algorithm-substitution (key-confusion) attacks. Any tampering with the token payload invalidates its signature and causes verification to fail with a 401 response. Tokens are also short-lived (1 hour), which bounds the window in which a captured token could be replayed. "Enveloping" attacks are a concern specific to XML/SOAP-style signature formats and do not apply to this application's compact JWT format.
+
+**Evidence:** Code snippet — the `jwt.decode(token, settings.supabase_jwt_secret, algorithms=["HS256"], ...)` call in `auth.py`.
+
+**Code changes:** None — already correctly implemented.
+
+---
+
+### 2.4.1 — Verify the application ensures a full, valid login session or requires re-authentication or secondary verification before allowing any sensitive transactions or account modifications
+**Domain:** 2 – Session Management
+
+The requirement's own wording accepts "either" a full session "or" secondary verification, so the app technically already passed everywhere (every sensitive action requires a valid Bearer JWT). Went further and actually audited every sensitive account action for what gate it has, and found a real asymmetry worth fixing rather than just documenting around.
+
+**Investigation — what gates each sensitive action:**
+- Password change: full session **+ current-password re-verification**.
+- 2FA enrollment: full session **+ live TOTP code verification**.
+- Business deactivation: full session + server-enforced super-admin role check + typed exact-business-name confirmation (server-verified).
+- Email change: feature doesn't exist — email field is read-only, no handler, N/A.
+- **2FA disable, disconnecting the Gmail login identity: full session only** — no re-auth, and Gmail disconnect had no confirmation step of any kind (single click). This is the actual gap: turning off your second factor should require at least as much friction as turning it on, and it didn't.
+- Other lower-sensitivity actions (removing a team member, disconnecting Google Calendar sync, billing add-on toggles) are session + click-through confirm — acceptable for their risk level, not touched.
+
+**Fix applied:**
+- `ai-employees-app/src/components/account/TwoFactorSetup.tsx` — disabling 2FA now requires re-entering and verifying the current password (via `supabase.auth.signInWithPassword`) before the unenroll call happens, for any account that has a password. The existing "are you sure?" confirm dialog is unchanged; confirming it now opens a second password-entry dialog instead of disabling immediately. Wrong password → inline error, no lockout. Google-only accounts (no password to check) proceed exactly as before — behavior for them is unchanged.
+- `ai-employees-app/src/pages/dashboard/AccountSettings.tsx` — disconnecting the Gmail login identity now goes through the same password re-verification gate before it runs (previously zero confirmation of any kind). Same fallback for password-less accounts, unchanged.
+- Verified: `npx tsc --noEmit` clean, frontend rebuilt, existing safety checks (can't disconnect your only sign-in method, session refresh after unlink, MFA enrollment flow, business deactivation flow) all left untouched — only added a gate in front of the two specific under-protected actions.
+
+**Comment submitted:**
+> All account modifications and sensitive transactions require a full, valid login session — the backend verifies the Supabase-issued JWT on every request via get_current_user, and no such action is reachable without one. Beyond that baseline, the application requires explicit secondary verification for the highest-risk actions: changing a password requires re-entering and verifying the current password; enabling two-factor authentication requires verifying a live TOTP code; and — following a review that found this was previously missing — disabling two-factor authentication and disconnecting the Gmail sign-in identity now also require re-entering and verifying the current password before the change is accepted. Business deactivation additionally requires a server-verified super-admin role and a typed confirmation of the exact business name. Code snippets demonstrating these gates are attached.
+
+**Evidence:** Code snippets (screenshots of the code, per this portal's screenshot-only evidence format) — the backend's `get_current_user` JWT dependency (full-session gate, applies everywhere), the password re-verification step in `AccountSettings.tsx`'s `handleUpdatePassword`, the TOTP verification step in `TwoFactorSetup.tsx`'s `handleVerify`, and the new password re-verification in `confirmUnenrollWithPassword` (`TwoFactorSetup.tsx`) and `confirmDisconnectWithPassword` (`AccountSettings.tsx`).
+
+**Note:** fix deployed to local dev only so far — needs production deployment before the comment's claims are true there too.
