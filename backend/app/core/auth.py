@@ -168,8 +168,9 @@ def require_role(*allowed_roles: str):
     return _check
 
 
-def verify_platform_super_admin(user_id: str) -> None:
-    """Verify that the authenticated user has platform Super Admin privileges.
+def verify_platform_super_admin(user_id: str, aal: str | None = None) -> None:
+    """Verify that the authenticated user has platform Super Admin privileges
+    AND completed MFA for this session.
 
     Must check super_admin against the platform's own internal business
     (businesses.type = 'platform'), not just "super_admin of any business" —
@@ -178,6 +179,12 @@ def verify_platform_super_admin(user_id: str) -> None:
     Control's cross-tenant company list and impersonation endpoints to any
     paying customer. Mirrors the is_platform_super_admin() SQL function used
     for the equivalent RLS-side check.
+
+    Administrative interfaces require MFA, not just a password — Supabase
+    marks a session 'aal2' once the user has verified a second factor for
+    that session (vs. 'aal1', password only). A distinct "MFA_REQUIRED" detail
+    (rather than the generic 403) lets the frontend show a mandatory 2FA setup
+    screen instead of a plain access-denied error.
     """
     from app.core.supabase import supabase_admin
 
@@ -196,8 +203,17 @@ def verify_platform_super_admin(user_id: str) -> None:
             detail="Mission Control requires Super Admin access",
         )
 
+    if aal != "aal2":
+        raise HTTPException(
+            status_code=403,
+            detail="MFA_REQUIRED",
+        )
 
-def require_platform_super_admin(user_id: str = Depends(get_user_id)) -> str:
-    """FastAPI dependency that returns the actor user id after Super Admin validation."""
-    verify_platform_super_admin(user_id)
+
+def require_platform_super_admin(current_user: dict = Depends(get_current_user)) -> str:
+    """FastAPI dependency that returns the actor user id after Super Admin + MFA validation."""
+    user_id = current_user.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Token missing user ID")
+    verify_platform_super_admin(user_id, aal=current_user.get("aal"))
     return user_id
