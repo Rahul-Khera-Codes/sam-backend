@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from constants import GOOGLE_TOKEN_URL, GOOGLE_CALENDAR_BASE
+from token_crypto import decrypt_oauth_token, encrypt_oauth_token
 
 logger = logging.getLogger("voice-agent")
 
@@ -49,6 +50,8 @@ async def _gcal_get_valid_token(supabase, staff_id: str) -> str | None:
         if not data:
             return None
         row = data[0]
+        row["access_token"] = decrypt_oauth_token(row.get("access_token"))
+        row["refresh_token"] = decrypt_oauth_token(row.get("refresh_token"))
 
         expiry_raw = row.get("token_expiry")
         if expiry_raw:
@@ -66,7 +69,7 @@ async def _gcal_get_valid_token(supabase, staff_id: str) -> str | None:
                     return None
                 new_expiry = datetime.now(timezone.utc) + timedelta(seconds=refreshed.get("expires_in", 3600) - 60)
                 supabase.table("google_calendar_tokens").update({
-                    "access_token": refreshed["access_token"],
+                    "access_token": encrypt_oauth_token(refreshed["access_token"]),
                     "token_expiry": new_expiry.isoformat(),
                 }).eq("id", row["id"]).execute()
                 return refreshed["access_token"]

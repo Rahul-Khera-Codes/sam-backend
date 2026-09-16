@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 from constants import GOOGLE_TOKEN_URL, GMAIL_SEND_URL
 from supabase_helpers import _fmt_time_12h
+from token_crypto import decrypt_oauth_token, encrypt_oauth_token
 
 logger = logging.getLogger("voice-agent")
 
@@ -34,6 +35,8 @@ async def _gmail_get_valid_token(
         if not data:
             return None, ""
         row = data[0]
+        row["access_token"] = decrypt_oauth_token(row.get("access_token"))
+        row["refresh_token"] = decrypt_oauth_token(row.get("refresh_token"))
 
         expiry_raw = row.get("token_expiry")
         if expiry_raw:
@@ -67,7 +70,7 @@ async def _gmail_get_valid_token(
                     refreshed = resp.json()
                 new_expiry = datetime.now(timezone.utc) + timedelta(seconds=refreshed.get("expires_in", 3600) - 60)
                 supabase.table("gmail_tokens").update({
-                    "access_token": refreshed["access_token"],
+                    "access_token": encrypt_oauth_token(refreshed["access_token"]),
                     "token_expiry": new_expiry.isoformat(),
                 }).eq("id", row["id"]).execute()
                 return refreshed["access_token"], row.get("google_email", "")

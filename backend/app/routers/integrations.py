@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from app.core.auth import get_current_user, get_user_id, verify_business_access
 from app.core.config import settings
 from app.core.supabase import supabase_admin
+from app.core.token_crypto import encrypt_oauth_token
 from app.services import google_calendar_service as gcal
 
 logger = logging.getLogger(__name__)
@@ -130,8 +131,8 @@ async def oauth_callback(
         "staff_id": user_id,
         "business_id": business_id,
         "google_email": google_email,
-        "access_token": token_data["access_token"],
-        "refresh_token": token_data["refresh_token"],
+        "access_token": encrypt_oauth_token(token_data["access_token"]),
+        "refresh_token": encrypt_oauth_token(token_data["refresh_token"]),
         "token_expiry": token_expiry.isoformat(),
     }
 

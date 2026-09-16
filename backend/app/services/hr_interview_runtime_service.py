@@ -31,6 +31,7 @@ from app.schemas.hr_interviews import (
     HrInterviewSharePublicResponse,
     HrInterviewTranscriptTurnResponse,
 )
+from app.core.token_crypto import decrypt_oauth_token
 from app.services.email_service import GMAIL_SEND_URL, _build_mime_message, get_token_row, get_valid_access_token
 
 HUMAN_INTERVIEW_DRAFT_MODEL = "gpt-4o-mini"
@@ -94,7 +95,12 @@ def _get_any_gmail_token_row(business_id: str) -> dict[str, Any] | None:
         .limit(1)
         .execute()
     )
-    return result.data[0] if result.data else None
+    if not result.data:
+        return None
+    fallback_row = result.data[0]
+    fallback_row["access_token"] = decrypt_oauth_token(fallback_row.get("access_token"))
+    fallback_row["refresh_token"] = decrypt_oauth_token(fallback_row.get("refresh_token"))
+    return fallback_row
 
 
 async def _resolve_gmail_sender_email(access_token: str) -> str:

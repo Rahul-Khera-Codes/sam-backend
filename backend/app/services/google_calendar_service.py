@@ -17,6 +17,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
+from app.core.token_crypto import decrypt_oauth_token, encrypt_oauth_token
+
 logger = logging.getLogger(__name__)
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -185,7 +187,7 @@ async def _get_valid_access_token(
             )
             new_expiry = token_expiry_from_response(refreshed)
             supabase.table("google_calendar_tokens").update({
-                "access_token": refreshed["access_token"],
+                "access_token": encrypt_oauth_token(refreshed["access_token"]),
                 "token_expiry": new_expiry.isoformat(),
             }).eq("id", token_row["id"]).execute()
             return refreshed["access_token"]
@@ -366,7 +368,12 @@ def get_token_row(supabase, staff_id: str) -> Optional[dict]:
             .execute()
         )
         data = getattr(r, "data", None) or []
-        return data[0] if data else None
+        if not data:
+            return None
+        row = data[0]
+        row["access_token"] = decrypt_oauth_token(row.get("access_token"))
+        row["refresh_token"] = decrypt_oauth_token(row.get("refresh_token"))
+        return row
     except Exception as e:
         logger.warning("Failed to fetch Google token row for staff %s: %s", staff_id, e)
         return None
