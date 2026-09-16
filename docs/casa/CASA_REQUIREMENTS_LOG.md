@@ -50,6 +50,7 @@ Repos involved: `ai-employees-app` (React/TS frontend + Supabase) and `sam-backe
 | 4.1.1 | TLS enforced, defaults to 1.2+, Qualys SSL Labs B or higher | Verified — real Qualys scan of portal.aiemployeesinc.com returned **Grade A**, only TLS 1.2/1.3 enabled, no known vulnerabilities | 2026-09-16 |
 | 4.1.2 | Trusted TLS certificates; self-signed/internal CAs restricted if used | Verified — cert is publicly issued by Let's Encrypt (not self-signed), full trust path validates, 0 chain issues; self-signed CA clause N/A | 2026-09-16 |
 | 4.1.3 | No weak cryptography meaningfully impacting confidentiality/integrity | **Gap found and fixed**: Google Calendar/Gmail/Outlook OAuth tokens were plaintext (marketing tokens were already encrypted) — now encrypted (Fernet) across both backend AND the separate agent codebase. Fixed locally, **not yet deployed to production** | 2026-09-16 |
+| 4.1.4 | Crypto modules fail securely; no padding oracle | Verified — only Fernet decryption involves CBC mode at all; generic InvalidToken on any failure reason, decryption never processes attacker-supplied input (DB-stored values only) | 2026-09-16 |
 
 ---
 
@@ -683,3 +684,23 @@ Full inventory of every real cryptographic operation in the application's own co
 **Evidence:** screenshot of `sam-backend/backend/app/core/token_crypto.py` (Fernet encrypt/decrypt + legacy-plaintext-fallback logic).
 
 **Note:** fix is local-dev only so far — needs production deployment of **both** the backend and the agent (plus confirming `MARKETING_TOKEN_ENCRYPTION_KEY` is available in the agent's production environment) before the comment's claims are true there too. This one has more moving parts than most fixes this session — worth double-checking all pieces landed together.
+
+**Follow-up:** user asked where to source `MARKETING_TOKEN_ENCRYPTION_KEY` for production, initially thinking it was missing from `backend/.env` locally. Re-verified directly — it's genuinely present (`backend/.env:118`), just possibly confused with `.env.example` (which has no entry for it at all — a real documentation gap, not yet fixed). Since this key already powers the pre-existing marketing/social OAuth feature, production almost certainly already has it set; if so, reuse that same value for the agent's production env too — the same key must be shared across both services, exactly as set up locally (`agent/.env.local`).
+
+---
+
+### 4.1.4 — All cryptographic modules shall fail securely; errors handled in a way that does not enable Padding Oracle attacks
+**Domain:** 4 – Communications
+
+Direct follow-up to 4.1.3 — same six operations, now checking specifically whether any failure path could leak a padding oracle.
+
+**Verified:** only one of the six operations (Fernet decryption of OAuth tokens, `token_crypto.py`) involves CBC-mode decryption at all — a structural precondition for a padding oracle to be possible in the first place. The other five (Supabase JWT / LiveKit token HMAC verification, SHA-256 hashing for invite tokens and cache/audit fingerprints, PKCE code challenges) have no padding scheme to attack — HMAC verification and one-way hashing are immune by construction, not just by careful error handling.
+
+For the one real case: Fernet is specifically engineered against padding oracle attacks (encrypt-then-MAC — verifies the HMAC before ever attempting to decrypt/unpad) and raises a single generic `InvalidToken` for any failure reason (bad signature, bad padding, expired token) — the caller cannot distinguish why it failed. Confirmed both call sites preserve this: `token_crypto.py` falls back to treating the value as legacy plaintext (no error surfaced at all), and `marketing_social_service.py` raises one generic 500 with no detail. Also structurally important: decryption in this app only ever processes our own DB-stored ciphertext — there's no endpoint that accepts attacker-supplied ciphertext for decryption, so there's no oracle exposed to probe in the first place, independent of the generic-error property.
+
+**Comment submitted (1262 chars):**
+> Of the cryptographic operations identified for 4.1.3, only one (Fernet decryption of stored OAuth tokens) involves CBC-mode decryption at all - a precondition for a padding oracle to even be possible. The others (JWT/HMAC-SHA256 verification, SHA-256 hashing, PKCE challenges) are structurally immune: HMAC verification and one-way hashing have no padding scheme to attack. Fernet (used for OAuth token encryption/decryption in token_crypto.py) is specifically designed against padding oracle attacks: it verifies the HMAC before attempting to decrypt/unpad, and raises a single generic InvalidToken exception regardless of whether the failure was a bad signature, bad padding, or expired token - callers cannot distinguish the failure reason. Both call sites handle this generically: token_crypto.py falls back to treating the value as an already-decrypted legacy string (no distinguishing error surfaced), and marketing_social_service.py raises one generic 500 error with no detail on the specific cause. Critically, decryption in this application only ever processes our own database-stored ciphertext, never attacker-supplied input via any endpoint - there is no exposed decryption oracle for an attacker to probe with crafted ciphertext in the first place.
+
+**Evidence:** screenshot of `token_crypto.py`'s `decrypt_oauth_token` function — shows the single generic `except InvalidToken` handler with no branching on failure reason.
+
+**Code changes:** none new — this cites the 4.1.3 fix's existing error-handling design.
