@@ -100,9 +100,20 @@ class GmailCallbackRequest(BaseModel):
 
 
 @router.post("/callback")
-async def oauth_callback(body: GmailCallbackRequest):
+async def oauth_callback(
+    body: GmailCallbackRequest,
+    caller_user_id: str = Depends(get_user_id),
+):
+    """
+    Requires the caller's own session and re-verifies it against both the
+    supplied business_id and the state the flow was originally issued for —
+    without this, state alone is just an unsigned JSON blob an attacker could
+    forge to link their own Gmail account to an arbitrary victim business.
+    """
     if not settings.google_client_id:
         raise HTTPException(status_code=501, detail="Gmail not configured.")
+
+    verify_business_access(caller_user_id, body.business_id)
 
     try:
         state = json.loads(body.state)
@@ -111,6 +122,9 @@ async def oauth_callback(body: GmailCallbackRequest):
         initiating_user_id = state.get("user_id")
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid state parameter.")
+
+    if business_id != body.business_id or initiating_user_id != caller_user_id:
+        raise HTTPException(status_code=400, detail="State does not match the authenticated request.")
 
     try:
         token_data = await gmail.exchange_code_for_tokens(

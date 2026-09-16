@@ -40,6 +40,11 @@ Repos involved: `ai-employees-app` (React/TS frontend + Supabase) and `sam-backe
 | 3.1.1 | Least privilege access control enforced on a trusted service layer | Four vulnerabilities found and fixed, **all confirmed/reported live in production**. Comment submitted (condensed to fit 1500-char portal limit). | 2026-09-15 |
 | 3.1.2 | Access-control data/attributes not end-user-manipulable unless authorized | Verified via RLS (user_roles, role/user_page_permissions admin-only writes) + directly cites the businesses.type fix from 3.1.1 as evidence | 2026-09-15 |
 | 3.1.3 | Access controls fail securely, including on exception | Verified — backend explicit-deny-on-no-match + uncaught exceptions propagate to 500 (never grants); RLS fail-closed by design; frontend fail-open caveat disclosed (non-authoritative, no real gap) | 2026-09-15 |
+| 3.1.4 | Sensitive resources protected against IDOR | Verified clean — two consistent ownership-verification patterns across all record-scoped endpoints, UUIDs, RLS defense-in-depth. 5 low-severity hardening items found (not exploitable), deferred to a later pass per instruction | 2026-09-16 |
+| 3.1.5 | Anti-CSRF for authenticated functionality + anti-automation for unauthenticated | Verified — Bearer-token architecture (no cookies) removes CSRF attack surface by design; ZAP scan confirms no CSRF findings; one known pre-existing gap disclosed (HR job-application anti-automation) | 2026-09-16 |
+| 3.1.6 | Directory browsing disabled unless deliberately desired | Verified — nginx.conf never sets autoindex (default off); ZAP scan's Directory Browsing check passed | 2026-09-16 |
+| 3.2.1 | Only secure/recommended OAuth 2.0 flows (Auth Code / Auth Code+PKCE), no Implicit/ROPC | Verified — Supabase Google sign-in uses PKCE (per the 2.1.1 fix); all business integrations use standard Authorization Code Flow; no Implicit/ROPC anywhere in either repo | 2026-09-16 |
+| 3.2.2 | redirect_uri/state validated to prevent open redirect and CSRF | **Critical gap found**: Google Calendar/Gmail/Outlook OAuth callbacks had zero auth check, unsigned/unverified state — fixed locally, **not yet deployed to production** | 2026-09-16 |
 
 ---
 
@@ -484,3 +489,103 @@ Last of the 3.1.1-3.1.3 trio. Asks specifically: on an unexpected error during a
 **Evidence:** one screenshot — `verify_business_access` in `auth.py` (same location as 3.1.1's evidence).
 
 **Code changes:** none — already correctly implemented.
+
+---
+
+## 2026-09-16
+
+### 3.1.4 — Sensitive resources shall be protected against Insecure Direct Object Reference (IDOR) attacks
+**Domain:** 3 – Access Control
+
+Wants (1) a list of APIs where a user-supplied record ID/parameter flows in, and (2) a written description of how IDOR is prevented. The classic failure mode this checks for: an endpoint verifies the caller belongs to *some* business, then trusts a separately-supplied record ID (e.g. `appointment_id`) without confirming that specific record actually belongs to that business — letting a legitimate user of Business A read/edit/delete a record belonging to Business B just by guessing or obtaining its ID.
+
+**Thorough audit across ~45 endpoints in `sam-backend/backend/app/routers/*.py`** (appointments, calls/recordings/transcripts, customers, HR jobs/candidates/interviews, billing/payments, team roles, forwarding rules, custom schedules, phone numbers, sales/marketing). Result: **no exploitable IDOR found.** Two patterns used consistently, both correct:
+- **Pattern A ("verify then re-filter"):** `verify_business_access(user_id, business_id)` on the caller-supplied `business_id`, then the actual query filters by **both** `.eq("id", record_id)` and `.eq("business_id", business_id)` using that same verified value — e.g. `appointments.py`'s `update_appointment_status`.
+- **Pattern B ("look up first, verify from the record"):** the record is fetched by ID alone, its *own* `business_id` column is read from the row, and only then is the caller's membership in *that* business checked — never trusting a client-supplied `business_id` for authorization at all. Stronger of the two. E.g. `calls.py`'s `_verify_call_access`, `roles.py`'s `_get_role`.
+- All primary keys are non-enumerable UUIDs (`gen_random_uuid()`), not sequential integers — checked every migration, no `SERIAL`/`BIGSERIAL` anywhere.
+- Frontend-direct-to-Supabase tables (appointments, calls, recordings, transcripts, customers) carry RLS policies scoping every row to `get_user_business_ids(auth.uid())` independently — real defense-in-depth, not just backend-only.
+- Mission Control's cross-tenant capability (any business, by design for platform admins) is correctly gated by the now-fixed `verify_platform_super_admin` — not an IDOR, an intentional and properly-scoped exception.
+
+**5 low-severity hardening items found, not currently exploitable — deferred to a later pass per instruction:** `booking_service.py` (`update_appointment` line ~798, `cancel_appointment` line ~918), `competitor_agent.py` (`update_competitor`), `forwarding.py` (`update_rule`), `custom_schedules.py` (`update_custom_schedule`) — each does a business_id-verified SELECT first, but the actual UPDATE/DELETE statement filters by record ID alone. Not exploitable today (the ID can't change between the check and the write within one request), but a future refactor removing the "redundant-looking" SELECT would silently reintroduce a real IDOR. Left as-is for now.
+
+**Comment submitted (1312 chars):**
+> User-supplied record IDs flow into endpoints across appointments, calls/recordings/transcripts, customers, HR (jobs/candidates/interviews), billing/payments, team roles, call-forwarding rules, custom schedules, phone numbers, and sales/marketing modules - all under sam-backend/backend/app/routers/. IDOR is prevented via two patterns, applied consistently: (1) the caller's business_id is verified via verify_business_access before any query, and that same verified value - never a second user-supplied one - is used as an explicit filter alongside the record ID on the query; or (2) the record is looked up by ID first, its own business_id column is read from the row itself, and only then is the caller's membership in THAT business verified - never trusting a client-supplied business_id for authorization. All primary keys are non-enumerable UUIDs, not sequential integers. As defense-in-depth, tables read directly by the frontend (appointments, calls, recordings, transcripts, customers) carry Row-Level Security policies scoping every row to the caller's business independently of the backend. A review for this response found a few write statements relying on a preceding ownership-check read rather than repeating the filter on the write itself; not currently exploitable, being hardened regardless.
+
+**Evidence:** screenshot of `appointments.py`'s `update_appointment_status` (Pattern A) and `calls.py`'s `_verify_call_access` (Pattern B).
+
+**Code changes:** none yet — the 5 hardening items are confirmed deferred, not forgotten. Revisit in a later pass.
+
+---
+
+### 3.1.5 — Application shall enforce a strong anti-CSRF mechanism to protect authenticated functionality, and effective anti-automation/anti-CSRF protects unauthenticated functionality
+**Domain:** 3 – Access Control
+
+Asks for DAST scan results.
+
+**Verified:** the real protection here is architectural, not a bolted-on token. All authenticated API requests use a Bearer JWT sent explicitly via the `Authorization` header — never a cookie (confirmed back in 2.3.1/2.3.2, no `Set-Cookie` for session data anywhere). Classic CSRF depends on the browser automatically attaching ambient credentials (cookies) to a cross-origin request; with no session cookie, a malicious third-party page has no way to forge an authenticated request at all — it can't read the token out of `localStorage`, and nothing gets attached automatically. Reused the `zap-baseline-2026-09-14.html` report from 2.1.1 — no CSRF-related alert appears in its Alerts table, consistent with (though not the primary proof of) the architectural claim. Unauthenticated functionality (signup/login/password reset) is rate-limited at the Supabase Auth platform level (1.1.1).
+
+**One known, pre-existing gap surfaced and disclosed rather than hidden:** the public HR job-application endpoints have no rate limiting or CAPTCHA — already documented by the team in `sam-backend/docs/features/hr-job-postings-and-candidates.md` as "acceptable for initial rollout," not something found fresh in this review.
+
+**Comment submitted (1181 chars):**
+> CSRF is mitigated architecturally, not just by a bolted-on token. All authenticated API requests use a Bearer JWT sent explicitly in the Authorization header (never a cookie) - see 2.3.1/2.3.2. Classic CSRF relies on browsers automatically attaching ambient credentials (cookies) to cross-origin requests; since no session cookie exists here, a malicious third-party page cannot forge an authenticated request at all, since it has no way to read the token out of localStorage or make the browser attach it automatically. This removes the CSRF attack surface for authenticated functionality by design, rather than depending on a token that could be misconfigured or forgotten on a new endpoint. Unauthenticated functionality (signup, login, password reset) is rate-limited at the Supabase Auth platform level (see 1.1.1). A dynamic scan (OWASP ZAP) against the application's public pages found no anti-CSRF-token findings. One known, previously-documented exception: the public HR job-application endpoints currently have no rate limiting or CAPTCHA, accepted as a deliberate initial-rollout tradeoff (see docs/features/hr-job-postings-and-candidates.md) rather than an oversight.
+
+**Evidence:** reuse `zap-baseline-2026-09-14.html`'s Alerts table screenshot (from 2.1.1) — no CSRF alert present.
+
+**Code changes:** none.
+
+---
+
+### 3.1.6 — Directory browsing shall be disabled unless deliberately desired
+**Domain:** 3 – Access Control
+
+Asks for DAST scan results — same ZAP scan already covers this exact check.
+
+**Verified:** `ai-employees-app/nginx.conf` (the frontend's static file server) never sets the `autoindex` directive. Nginx's own default for `autoindex` is `off`, so directory listings are disabled unless explicitly turned on — this config doesn't. All requests fall through to the SPA's `index.html` via `try_files $uri $uri/ /index.html` rather than an auto-generated listing. The existing `zap-baseline-2026-09-14.html` scan's "Directory Browsing" check [10033] passed with no findings.
+
+**Comment submitted (542 chars):**
+> Directory browsing is disabled. The frontend is served by nginx (ai-employees-app/nginx.conf), which never sets the autoindex directive - nginx's default for autoindex is "off", so directory listings are disabled unless explicitly turned on, which this config does not do. All requests fall through to the SPA's index.html via try_files rather than an auto-generated file listing. A dynamic application security scan (OWASP ZAP) was run against the application and its "Directory Browsing" check passed with no findings. Scan report attached.
+
+**Evidence:** reuse `zap-baseline-2026-09-14.html`'s Alerts table screenshot; optionally also `nginx.conf` in full (short file, no `autoindex` directive present).
+
+**Code changes:** none — already correctly configured.
+
+---
+
+### 3.2.1 — Application shall implement only secure and recommended OAuth 2.0 flows, avoiding deprecated flows (Implicit, Resource Owner Password Credentials)
+**Domain:** 3 – Access Control
+
+Two distinct OAuth 2.0 surfaces in this app, both checked directly in code rather than assumed:
+- **Supabase Auth's Google sign-in** (public/browser client) — already on Authorization Code Flow with PKCE (`flowType: 'pkce'`), the fix shipped back in 2.1.1.
+- **Business-level integrations** (Google Calendar, Gmail, Outlook, social/marketing connectors) — confidential server-side clients. Grepped every `response_type`/`grant_type` usage across `sam-backend/backend/app`: every single one is `response_type=code` at authorization and `grant_type=authorization_code`/`refresh_token` at token exchange/renewal (`google_calendar_service.py`, `email_service.py`, `outlook_email_service.py`, `marketing_social_service.py`) — the standard Authorization Code Flow, correct choice since these hold a `client_secret` server-side rather than in the browser.
+- Explicitly grepped for `response_type=token` (Implicit Flow) and `grant_type=password` (Resource Owner Password Credentials Flow) across both repos — zero matches anywhere.
+
+**Comment submitted (916 chars):**
+> The application uses OAuth 2.0 in two places, both on recommended flows only. Google sign-in via Supabase Auth (a public client, browser-based) uses the Authorization Code Flow with PKCE (flowType: 'pkce' in the Supabase client config) - the session token is never placed in the URL, only a one-time code exchanged server-side. Business-level integrations (Google Calendar, Gmail, Outlook, and social/marketing connectors for Instagram/LinkedIn) are confidential-client, server-side flows: response_type=code at authorization, grant_type=authorization_code at token exchange, and grant_type=refresh_token for renewal - the standard Authorization Code Flow, appropriate since the client_secret is held server-side, not in the browser. Checked explicitly across both repos: no response_type=token (Implicit Flow) and no grant_type=password (Resource Owner Password Credentials Flow) appear anywhere in the codebase.
+
+**Evidence:** screenshots of `ai-employees-app/src/integrations/supabase/client.ts` (`flowType: 'pkce'`) and `sam-backend/backend/app/services/google_calendar_service.py` (`response_type=code` / `grant_type: "authorization_code"`).
+
+**Code changes:** none — already correctly implemented (PKCE part already shipped under 2.1.1).
+
+---
+
+### 3.2.2 — Application shall securely validate redirect_uri and state during OAuth 2.0 authorization to prevent open redirect and CSRF vulnerabilities
+**Domain:** 3 – Access Control
+
+**redirect_uri: clean across all integrations.** Always a fixed server-side config value (`settings.google_redirect_uri`, `settings.gmail_redirect_uri`, `settings.outlook_redirect_uri`, or one of two hardcoded local/production constants for the marketing connectors, chosen by request Origin) — never derived from user/request input, so no redirect_uri allow-list bypass is possible. No backend open-redirect either: `return_to` rides inside `state` but is never consumed to issue a server-side `RedirectResponse` anywhere (confirmed via repo-wide grep) — that's a frontend client-side concern, outside this backend's control surface.
+
+**state: CRITICAL gap found and fixed.** Audited all six OAuth flows (Google Calendar, Gmail, Outlook, X, Instagram, LinkedIn):
+- **Google Calendar, Gmail, Outlook — real, exploitable vulnerability.** Their callback endpoints (`POST /integrations/{google,gmail,outlook}/callback`) had **no authentication requirement at all**. `state` was plain unsigned JSON (`{"user_id":..., "business_id":...}`), never verified against anything issued/stored server-side. The `business_id` field on the request model, which the code comments claimed was "used to validate against the state," was **dead code — never actually read**. Concrete attack: complete Google/Microsoft's OAuth consent with your own account, get a valid `code`, then POST directly to the callback (no login required) with a crafted `state` naming any victim's `business_id` — the attacker's own OAuth tokens get saved as that business's calendar/email integration, silently rerouting that business's appointments/email to the attacker.
+- **X, Instagram, LinkedIn — already correct.** These callbacks already required `Depends(get_user_id)` + `verify_business_access`, and the service layer already cross-checked the decoded state's `business_id` against the authenticated request (`marketing_social_service.py`). `state` itself is still unsigned base64/JSON here too, but the auth layer wrapped around it closes the practical gap.
+
+**Fix applied** (mirrors the already-correct marketing-connector pattern) to `sam-backend/backend/app/routers/integrations.py`, `gmail_integrations.py`, `outlook_integrations.py`: each callback now requires `caller_user_id: str = Depends(get_user_id)`, calls `verify_business_access(caller_user_id, body.business_id)`, and rejects with 400 if the decoded `state`'s `business_id`/`user_id` doesn't match the authenticated caller. Confirmed the frontend already sends these requests via `fetchWithAuth` (Bearer token included) for all three — **zero frontend changes needed**, this is a pure backend tightening with no legitimate-user impact.
+
+**Verified:** `python3 -m py_compile` clean on all three files; Docker Desktop had stopped running and needed restarting before the rebuild; backend Docker rebuilt, all containers healthy, no startup errors, `/docs` responds 200.
+
+**Comment submitted (1153 chars):**
+> redirect_uri is always a fixed server-side config value (never derived from user/request input) across all OAuth integrations - Google Calendar, Gmail, Outlook, and social/marketing connectors. No redirect_uri allow-list bypass is possible. No backend open-redirect exists: a post-OAuth return_to value is carried in state but never used to issue a server-side redirect. state validation was audited and a real gap was found and fixed: the Google Calendar, Gmail, and Outlook callback endpoints previously accepted an unauthenticated POST with an unsigned state blob, with no check that the caller was actually logged in as the user named in that state - allowing an attacker to link their own OAuth account to an arbitrary victim business_id. This has been fixed: all three callbacks now require a valid session (verify_business_access on the caller's own business_id) and reject if the decoded state's user_id/business_id does not match the authenticated caller. The marketing/social connectors (X, Instagram, LinkedIn) already had this same auth-plus-cross-check pattern in place. Fix implemented and verified locally; pending production deployment.
+
+**Evidence:** screenshot of the fixed `oauth_callback` in `integrations.py` (Google Calendar) showing the new `Depends(get_user_id)` + `verify_business_access` + state cross-check together.
+
+**Residual, not yet done:** `state` itself remains unsigned JSON/base64 everywhere (not HMAC-signed) — the fix relies on the wrapping auth check rather than making `state` itself tamper-proof. Offered to harden this further (sign/HMAC state across all six flows); user has not yet decided whether to do this now or defer.
+
+**Note:** fix is local-dev only so far — needs production backend deployment before the comment's claims are true there too.
