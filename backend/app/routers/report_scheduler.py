@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.core.auth import get_current_user, get_user_id, verify_business_access
 from app.core.config import settings
 from app.core.supabase import supabase_admin
+from app.core.token_crypto import decrypt_oauth_token, encrypt_oauth_token
 from app.schemas.report_scheduler import (
     CreateScheduleRequest,
     PreviewResponse,
@@ -139,7 +140,10 @@ async def _get_business_gmail_token_row(business_id: str) -> dict | None:
     if not rows:
         return None
     business_wide = [r for r in rows if r.get("location_id") is None]
-    return business_wide[0] if business_wide else rows[0]
+    row = business_wide[0] if business_wide else rows[0]
+    row["access_token"] = decrypt_oauth_token(row.get("access_token"))
+    row["refresh_token"] = decrypt_oauth_token(row.get("refresh_token"))
+    return row
 
 
 async def _get_business_gmail_access_token(business_id: str) -> tuple[str, str] | tuple[None, None]:
@@ -157,7 +161,7 @@ async def _get_business_gmail_access_token(business_id: str) -> tuple[str, str] 
             )
             new_expiry = email_service.token_expiry_from_response(refreshed)
             supabase_admin.table("gmail_tokens").update(
-                {"access_token": refreshed["access_token"], "token_expiry": new_expiry.isoformat()}
+                {"access_token": encrypt_oauth_token(refreshed["access_token"]), "token_expiry": new_expiry.isoformat()}
             ).eq("id", row["id"]).execute()
             return refreshed["access_token"], row["google_email"]
         except Exception as e:

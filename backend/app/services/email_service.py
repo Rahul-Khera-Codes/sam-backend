@@ -20,6 +20,8 @@ from urllib.parse import urlencode
 
 import httpx
 
+from app.core.token_crypto import decrypt_oauth_token, encrypt_oauth_token
+
 logger = logging.getLogger(__name__)
 
 GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
@@ -149,6 +151,14 @@ async def has_gmail_send_scope(access_token: str, scope_string: str | None = Non
 
 # ── Token row helpers ─────────────────────────────────────────────────────────
 
+def _decrypt_row_tokens(row: Optional[dict]) -> Optional[dict]:
+    if not row:
+        return row
+    row["access_token"] = decrypt_oauth_token(row.get("access_token"))
+    row["refresh_token"] = decrypt_oauth_token(row.get("refresh_token"))
+    return row
+
+
 def get_token_row(
     supabase, business_id: str, location_id: Optional[str] = None
 ) -> Optional[dict]:
@@ -164,7 +174,7 @@ def get_token_row(
         query = query.is_("location_id", "null")
     result = query.limit(1).execute()
     if result.data:
-        return result.data[0]
+        return _decrypt_row_tokens(result.data[0])
     if location_id:
         fallback = (
             supabase.table("gmail_tokens")
@@ -174,7 +184,7 @@ def get_token_row(
             .limit(1)
             .execute()
         )
-        return fallback.data[0] if fallback.data else None
+        return _decrypt_row_tokens(fallback.data[0]) if fallback.data else None
     return None
 
 
@@ -197,7 +207,7 @@ async def get_valid_access_token(
             )
             new_expiry = token_expiry_from_response(refreshed)
             supabase.table("gmail_tokens").update({
-                "access_token": refreshed["access_token"],
+                "access_token": encrypt_oauth_token(refreshed["access_token"]),
                 "token_expiry": new_expiry.isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }).eq("id", row["id"]).execute()

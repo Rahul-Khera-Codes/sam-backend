@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from app.core.auth import get_current_user, get_user_id, verify_business_access
 from app.core.config import settings
 from app.core.supabase import supabase_admin
+from app.core.token_crypto import decrypt_oauth_token, encrypt_oauth_token
 from app.services import email_service as gmail
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,14 @@ def _apply_location_filter(query, location_id: Optional[str]):
     return query.is_("location_id", "null")
 
 
+def _decrypt_row_tokens(row: Optional[dict]) -> Optional[dict]:
+    if not row:
+        return row
+    row["access_token"] = decrypt_oauth_token(row.get("access_token"))
+    row["refresh_token"] = decrypt_oauth_token(row.get("refresh_token"))
+    return row
+
+
 def _get_token_row_for_location(business_id: str, location_id: Optional[str]) -> Optional[dict]:
     """Fetch gmail token row scoped to (business_id, location_id)."""
     query = (
@@ -41,7 +50,7 @@ def _get_token_row_for_location(business_id: str, location_id: Optional[str]) ->
     )
     query = _apply_location_filter(query, location_id)
     result = query.limit(1).execute()
-    return result.data[0] if result.data else None
+    return _decrypt_row_tokens(result.data[0]) if result.data else None
 
 
 def _get_business_token_row(business_id: str) -> Optional[dict]:
@@ -53,7 +62,7 @@ def _get_business_token_row(business_id: str) -> Optional[dict]:
         .limit(1)
         .execute()
     )
-    return result.data[0] if result.data else None
+    return _decrypt_row_tokens(result.data[0]) if result.data else None
 
 
 # ── GET /integrations/gmail/auth-url ─────────────────────────────────────────
@@ -205,8 +214,8 @@ async def oauth_callback(
     row = {
         "business_id": business_id,
         "google_email": google_email,
-        "access_token": token_data["access_token"],
-        "refresh_token": token_data["refresh_token"],
+        "access_token": encrypt_oauth_token(token_data["access_token"]),
+        "refresh_token": encrypt_oauth_token(token_data["refresh_token"]),
         "token_expiry": token_expiry.isoformat(),
     }
     if location_id:
