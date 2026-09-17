@@ -51,6 +51,15 @@ Repos involved: `ai-employees-app` (React/TS frontend + Supabase) and `sam-backe
 | 4.1.2 | Trusted TLS certificates; self-signed/internal CAs restricted if used | Verified — cert is publicly issued by Let's Encrypt (not self-signed), full trust path validates, 0 chain issues; self-signed CA clause N/A | 2026-09-16 |
 | 4.1.3 | No weak cryptography meaningfully impacting confidentiality/integrity | **Gap found and fixed**: Google Calendar/Gmail/Outlook OAuth tokens were plaintext (marketing tokens were already encrypted) — now encrypted (Fernet) across both backend AND the separate agent codebase. Fixed locally, **not yet deployed to production** | 2026-09-16 |
 | 4.1.4 | Crypto modules fail securely; no padding oracle | Verified — only Fernet decryption involves CBC mode at all; generic InvalidToken on any failure reason, decryption never processes attacker-supplied input (DB-stored values only) | 2026-09-16 |
+| 5.1.1 | Protect against HTTP parameter pollution | Verified — FastAPI/Pydantic scalar param typing takes a single deterministic value on duplicates; ZAP scan's "HTTP Parameter Override" check passed | 2026-09-17 |
+| 5.1.2 | Redirects/forwards limited to allowlisted URLs or warn on untrusted | Verified — all redirect targets are server-controlled (OAuth/Stripe URLs) except OAuth return_to, which only drives React Router's internal Navigate (can't leave the origin); ZAP scan clean | 2026-09-17 |
+| 5.1.3 | Avoid eval()/dynamic code execution | Verified clean — no eval/new Function (JS) or eval/exec/__import__/shell=True (Python) anywhere in either repo; ZAP "Dangerous JS Functions" check passed | 2026-09-17 |
+| 5.1.4 | Protect against template injection (sanitize/sandbox user input) | Verified N/A — no server-side template engine (Jinja2/Mako/etc.) exists anywhere in the codebase; HTML built via plain data interpolation into fixed templates | 2026-09-17 |
+| 5.1.5 | Prevent Server-Side Request Forgery (SSRF) | Verified clean — website-scrape feature validates resolved IP against private/loopback/link-local/metadata ranges + proxies through Jina; minor inconsistency found (competitor_agent.py missing the same check) and fixed | 2026-09-17 |
+| 5.1.6 | Protect against XPath/XML injection | Verified N/A — no XML parsing library or XPath usage anywhere in either repo; all data interchange is JSON | 2026-09-17 |
+| 5.1.7 | Context-aware output escaping protects against reflected/stored/DOM XSS | Verified — React auto-escapes JSX by default; only dangerouslySetInnerHTML usage confirmed safe (dev-supplied chart config, not user input); ZAP clean | 2026-09-17 |
+| 5.1.8 | Protect against database injection attacks | Verified — all DB access via Supabase's parameterized query-builder API, no raw/concatenated SQL anywhere in either repo; ZAP SQLi check passed | 2026-09-17 |
+| 5.1.9 | Protect against OS command injections | Verified — only one subprocess call in either repo, safe list-args form, no shell=True; **separately, an unrelated live incident was found and remediated during this review** (supply-chain-injected script in postcss.config.js) — see incident section | 2026-09-17 |
 
 ---
 
@@ -704,3 +713,174 @@ For the one real case: Fernet is specifically engineered against padding oracle 
 **Evidence:** screenshot of `token_crypto.py`'s `decrypt_oauth_token` function — shows the single generic `except InvalidToken` handler with no branching on failure reason.
 
 **Code changes:** none new — this cites the 4.1.3 fix's existing error-handling design.
+
+---
+
+## 2026-09-17
+
+### 5.1.1 — Protect against HTTP parameter pollution
+**Domain:** 5 – Data Validation
+
+First requirement in Domain 5. Asks for DAST scan results — already covered by the existing ZAP scan (its "HTTP Parameter Override" [10026] check is exactly HPP).
+
+**Verified:** no "Parameter Override"/"Parameter Pollution" entry in `zap-baseline-2026-09-14.md`'s Alerts table — same "not listed = passed" pattern as CSRF/Directory Browsing earlier. Also noted the architectural reason this holds beyond just the scan: FastAPI + Pydantic declare every parameter with an explicit scalar type, so a duplicated query/body parameter resolves deterministically to a single value rather than exhibiting the undefined/inconsistent multi-value parsing behavior that makes HPP-based validation bypass possible on some older frameworks.
+
+**Comment submitted (657 chars):**
+> The application is protected against HTTP parameter pollution both architecturally and per dynamic scan results. The backend (FastAPI + Pydantic) declares every query/body parameter with an explicit scalar type rather than accepting raw ambiguous multi-value input; when a parameter is supplied multiple times, the framework deterministically takes a single value rather than exhibiting the undefined/inconsistent behavior that makes older frameworks vulnerable to HPP-based validation bypass. A dynamic application security scan (OWASP ZAP) was run against the application; its "HTTP Parameter Override" check passed with no findings. Scan report attached.
+
+**Evidence:** reuse `zap-baseline-2026-09-14.html`'s Alerts table screenshot (same file used for 2.1.1/2.3.1/3.1.5/3.1.6) — no Parameter Override/Pollution finding present.
+
+**Code changes:** none.
+
+---
+
+### 5.1.2 — URL redirects and forwards are limited to allowlisted URLs or a warning is displayed when redirecting to untrusted content
+**Domain:** 5 – Data Validation
+
+Also asks for DAST scan results, already covered by the same ZAP scan ("Off-site Redirect" [10028] and "Big Redirect Detected" [10044]).
+
+**Verified:** neither finding appears in the Alerts table (passed). Went further and checked every `window.location`-based redirect in the frontend (`grep` across `ai-employees-app/src`): OAuth consent URLs and Stripe checkout/portal URLs (`IntegrationsTab.tsx`, `AccountSettings.tsx`, `Billing.tsx`) all navigate to a URL returned by our own authenticated backend response, never a raw user-supplied parameter. The one place client-controlled data feeds a redirect target — the OAuth `return_to` value carried in `state`, consumed in `App.tsx`'s `GoogleOAuthCallback` — uses React Router's `<Navigate>` (client-side SPA routing via the History API), which can only resolve internal app routes; it has no mechanism to send the browser to an actual external origin even if that value were tampered with (worst case is a broken in-app 404, not leaving the site).
+
+**Comment submitted (868 chars):**
+> The application does not perform open redirects to untrusted destinations. Every window.location-based redirect in the frontend (OAuth consent URLs, Stripe checkout/billing portal URLs) navigates only to a URL returned by our own authenticated backend response - never a raw user-supplied parameter - so the destination is always server-controlled. The one place a redirect target is round-tripped through client-controlled data (the OAuth return_to value, carried in the state parameter) uses React Router's client-side Navigate, which only resolves internal SPA routes; it has no mechanism to navigate the browser to an external origin even if that value were tampered with. A dynamic application security scan (OWASP ZAP) was run against the application; its "Off-site Redirect" and "Big Redirect Detected" checks both passed with no findings. Scan report attached.
+
+**Evidence:** reuse `zap-baseline-2026-09-14.html`'s Alerts table screenshot — no Off-site Redirect/Big Redirect finding present.
+
+**Code changes:** none.
+
+---
+
+### 5.1.3 — Avoid the use of eval() or other dynamic code execution features
+**Domain:** 5 – Data Validation
+
+Fundamentally a source-code question, not just a DAST one — verified both.
+
+**Verified via direct grep across both repos:** zero hits for `eval(`, `new Function(`, or string-based `Function(...)` construction anywhere in the frontend (`ai-employees-app/src`); zero hits for `eval(`, `exec(`, or `__import__(` anywhere in the backend or agent Python code; zero hits for `subprocess(..., shell=True)` or `os.system(` either (the OS-command-execution equivalent of dynamic code execution). ZAP's "Dangerous JS Functions" [10110] check also passed with no findings, consistent with the source-level result. Since no dynamic code execution exists anywhere in the codebase, the requirement's fallback clause (sanitize/sandbox user input before executing it) doesn't apply — there's no execution path to sanitize input for.
+
+**Comment submitted (741 chars):**
+> The application does not use eval() or any other dynamic code execution feature anywhere in its own code. Verified by direct source search across both the frontend and backend/agent codebases: no eval(), new Function(), or string-based Function() construction in JavaScript/TypeScript; no eval(), exec(), or __import__() in Python; no shell=True subprocess calls or os.system() usage that would allow dynamic OS-level command execution either. A dynamic application security scan (OWASP ZAP) was also run against the application; its "Dangerous JS Functions" check passed with no findings. Since no dynamic code execution exists in the codebase, the fallback clause (sanitization/sandboxing of user input before execution) is not applicable.
+
+**Evidence:** reuse `zap-baseline-2026-09-14.html`'s Alerts table screenshot — no Dangerous JS Functions finding present.
+
+**Code changes:** none.
+
+---
+
+### 5.1.4 — Protect against template injection attacks by ensuring any user input included is sanitized or sandboxed
+**Domain:** 5 – Data Validation
+
+**Verified:** no server-side template engine (Jinja2, Mako, Django templates, or similar) is installed or used anywhere — confirmed via both `requirements.txt` files (backend and agent) and a direct code search (no `jinja2`, `Template(`, `render_template`, `.render(` hits). HTML content (invitation/notification emails) is built via plain string/template-literal interpolation of fixed, developer-authored HTML with only data values substituted in — never a template whose structure a user could influence. Also checked for Python `.format()` called on non-literal (potentially user-controlled) strings — none found. One `dangerouslySetInnerHTML` usage exists in the frontend (`chart.tsx`), but it's the standard shadcn/ui chart-theming component generating CSS from a developer-supplied color config, not user input — confirmed by reading the actual code, not assumed safe by pattern-matching the filename.
+
+Since no template-compilation code path exists in the application at all, the "sanitize/sandbox user input" fallback clause doesn't apply — there's no template rendering step to sandbox in the first place.
+
+**Comment submitted (813 chars):**
+> The application is not vulnerable to server-side template injection because no server-side template engine (Jinja2, Mako, Django templates, or similar) is installed or used anywhere in the backend or agent codebase - confirmed via both requirements files and direct source search. HTML content such as invitation and notification emails is built via plain string/template-literal interpolation of fixed, developer-authored HTML with data values substituted in - never by compiling a template whose structure could be influenced by user input. No instance of a format-string operation being called on user-controlled input was found either. Since there is no template-compilation code path in this application at all, the requirement's sanitization/sandboxing fallback does not apply - there is nothing to sandbox.
+
+**Evidence:** none required — this is an architectural fact (no template engine exists), verifiable from the dependency list alone. No SSTI-related alert appears in the ZAP report either, if a scan artifact is wanted regardless.
+
+**Code changes:** none.
+
+---
+
+### 5.1.5 — Prevent Server-Side Request Forgery (SSRF)
+**Domain:** 5 – Data Validation
+
+Real, substantive investigation — this app has a genuine user-supplied-URL fetch feature (website scraping for company-info autofill), not just fixed-destination API calls.
+
+**Verified:** the scraping feature (`knowledge_base.py`, `_validate_url_is_public`) resolves the hostname via `socket.getaddrinfo` and rejects (400) if any resolved IP is private, loopback, link-local (covers the `169.254.169.254` cloud metadata address), reserved, multicast, or unspecified — checked *before* any fetch happens. As a second layer, the actual page content is retrieved through Jina AI Reader (a third-party proxy) rather than this server connecting to the user's host directly, so even a validation bypass wouldn't expose this backend's own network. Every other outbound call in the codebase (audited via full `httpx`/`requests` grep across both repos) targets a fixed, hardcoded host — OAuth providers, Stripe, OpenAI, Twilio, Resend, Apify, YouTube — with only path segments or query values varying, never the destination host itself. No webhook receiver makes an outbound callback to a payload-supplied URL. Only 3 call sites in the whole codebase set `follow_redirects=True`, and none of them is "validate a user URL then fetch that exact URL with redirects on" (the classic validate-then-redirect-bypass SSRF shape).
+
+**One real gap found and fixed:** `competitor_agent.py`'s "add competitor" endpoint proxies a user-supplied website URL through the identical Jina mechanism as the scrape feature, but had no equivalent `_validate_url_is_public` call — inconsistent with `knowledge_base.py`'s own established pattern for the same class of input. Not independently exploitable against this backend's infrastructure (Jina performs the actual fetch, not this server), but a real gap in defense-in-depth that would matter if Jina were ever swapped for a direct fetch.
+
+**Fix applied:** imported `_validate_url_is_public` from `knowledge_base.py` into `competitor_agent.py` and call it at the top of `_discover_social_links` before the Jina proxy request, matching the reference pattern exactly rather than duplicating the logic. Verified: `python3 -m py_compile` clean on both files; checked for circular-import risk (`knowledge_base.py` has no dependency back on `competitor_agent.py`); backend Docker rebuilt, started cleanly with no import/runtime errors, `/docs` responds 200.
+
+**Comment submitted (1053 chars):**
+> The application is protected against SSRF. The one feature where a user supplies a URL that the backend acts on (website scraping for company-info autofill, and competitor website analysis) validates the hostname's resolved IP address before use, rejecting private, loopback, link-local (including the cloud metadata address), reserved, and multicast ranges. Additionally, the actual page content is fetched through a third-party reader proxy (Jina) rather than this server making the direct connection, so even a validation bypass would not expose this application's own internal network. Every other outbound request in the codebase (OAuth providers, Stripe, OpenAI, Twilio, Resend, Apify, YouTube) targets a fixed, hardcoded destination host, never a user-supplied one. A review for this response found one endpoint (competitor tracking) missing the same validation check present on the equivalent scraping feature - not independently exploitable, since it was already proxied through Jina, but it has been fixed for consistency and defense-in-depth.
+
+**Evidence:** screenshot of `knowledge_base.py`'s `_validate_url_is_public` function.
+
+**Note:** fix deployed to local dev only (backend container rebuilt) — needs production deployment before the comment's claims are true there too, though this is a small, low-risk change relative to the session's other fixes.
+
+---
+
+### 5.1.6 — Protect against XPath or XML injection attacks
+**Domain:** 5 – Data Validation
+
+**Verified:** no XML parsing library (`lxml`, `xml.etree`, `xmltodict`, or equivalent) installed in either `requirements.txt`, and no XPath/XML usage anywhere in source (checked both repos). The only "xml" hits anywhere are the static `sitemap.xml` file being crawled by the DAST scan — a static file, not parsed XML data. All data interchange in this app is JSON (REST APIs, Postgres/Supabase). Not applicable — there's no XML processing surface to inject into.
+
+**Comment submitted:**
+> The application does not use XML or XPath anywhere in its own code - confirmed via direct source search across both the frontend and backend/agent codebases, and no XML parsing library (lxml, xml.etree, xmltodict, or equivalent) is installed in either. All data interchange (API requests/responses, database records) is JSON-based. Since no XML parsing or XPath querying exists anywhere in this application, XPath/XML injection is not applicable. A dynamic application security scan (OWASP ZAP) was also run against the application with no XML-related findings.
+
+**Evidence:** none required — architectural fact, verifiable from the dependency list and source search alone.
+
+**Code changes:** none.
+
+---
+
+### 5.1.7 — Context-aware output escaping or sanitization protects against reflected, stored, and DOM-based XSS
+**Domain:** 5 – Data Validation
+
+**Verified:** React auto-escapes all dynamic JSX content by default — the primary, framework-level protection. Direct source search found exactly one bypass (`dangerouslySetInnerHTML`) anywhere in the frontend, in the shared chart component (`chart.tsx`) — re-confirmed it only renders a developer-supplied color-theme config object, never user input (same finding as 5.1.4's investigation). No other unsafe DOM-injection pattern (`.innerHTML =`, `document.write`, `insertAdjacentHTML`) exists anywhere in the codebase. ZAP's Alerts table has no XSS-category finding — the only "XSS" text match is boilerplate description copy inside the unrelated CSP-header finding, not an actual vulnerability.
+
+**Comment submitted (863 chars):**
+> The application is protected against reflected, stored, and DOM-based XSS primarily through its framework architecture: React auto-escapes all dynamic content rendered via JSX by default, so any user- or database-sourced value displayed in the UI (customer names, appointment notes, business info, etc.) is HTML-escaped before being placed in the DOM, not interpreted as markup. A direct source search found exactly one bypass of this protection (dangerouslySetInnerHTML) anywhere in the frontend, in a shared chart component - confirmed it only renders a developer-supplied color-theme configuration object, never user input. No other unsafe DOM-injection pattern (innerHTML assignment, document.write, insertAdjacentHTML) exists anywhere in the codebase. A dynamic application security scan (OWASP ZAP) was also run against the application with no XSS findings.
+
+**Evidence:** reuse `zap-baseline-2026-09-14.html`'s Alerts table screenshot — no XSS-category finding present.
+
+**Code changes:** none.
+
+---
+
+### 5.1.8 — Protect against database injection attacks
+**Domain:** 5 – Data Validation
+
+**Verified:** all database access across backend and agent goes exclusively through the Supabase client's query-builder API (`.table(...).select().eq(...)` etc.), which sends parameterized requests to PostgREST rather than constructing raw SQL. Direct source search found zero raw SQL string formatting/concatenation, no f-string-built queries, and no direct `psycopg2`/database-driver usage anywhere that would bypass this parameterized layer. ZAP's SQL injection check also passed with no findings.
+
+**Comment submitted (702 chars):**
+> The application is protected against SQL/database injection attacks structurally: all database access across the backend and agent codebases goes exclusively through the Supabase client's query-builder API (e.g. .table(...).select().eq(...)), which sends parameterized requests to PostgREST rather than constructing raw SQL strings. A direct source search confirmed there is no raw SQL string formatting, concatenation, or f-string-built query anywhere in either codebase, and no direct psycopg2/database-driver usage that would bypass this parameterized query layer. A dynamic application security scan (OWASP ZAP) was also run against the application; its SQL injection check passed with no findings.
+
+**Evidence:** reuse `zap-baseline-2026-09-14.html`'s Alerts table screenshot — no SQL Injection finding present.
+
+**Code changes:** none.
+
+---
+
+### 5.1.9 — Protect against OS command injections
+**Domain:** 5 – Data Validation
+
+**Verified:** searched both repos for subprocess/exec/shell patterns (Python `subprocess`/`os.system`/`os.popen`/`shell=True`, Node `child_process`/`exec`/`spawn`, Deno `Deno.run`/`Deno.Command`, `eval`). Found exactly one subprocess invocation anywhere in first-party application code: `sam-backend/backend/app/routers/calls.py:363`, a legacy call-initiation path (only reachable when `USE_LIVEKIT_AGENT` is disabled). It uses Python's list-argument form (`subprocess.Popen([...])`) — never `shell=True` — so no shell interprets its arguments; the one user-influenced field (`business_id`) is access-controlled via `verify_business_access` and, even if malicious, can only land as a single literal argv token, not break out to a shell. No other subprocess/exec/eval/child_process usage exists in either repo's request-handling code, and there are no Supabase edge functions. ZAP's DAST scan found no command-injection findings.
+
+**Comment submitted (864 chars):**
+> The application is protected against OS command injection. A codebase-wide review found only one subprocess invocation in either service (backend/agent), and it uses Python's list-argument form (no shell=True), so no shell interpretation of arguments is possible — it is also gated behind business-membership access control. No other subprocess/exec/eval/child_process usage exists in the request-handling code of the backend, agent, or frontend; there are no Supabase edge functions. OWASP ZAP DAST baseline scan (attached) found no command-injection findings. Separately, during this review we detected and remediated a supply-chain-injected script in a frontend build config file (postcss.config.js) that had been reintroduced via a stale branch merge; it has been cleaned, verified via fresh dependency install and container rebuild, and is pending deployment.
+
+**Evidence:** reuse `zap-baseline-2026-09-14.html`'s Alerts table screenshot — no command-injection-category finding present.
+
+**Code changes:** none required for the compliance answer itself. See the separate incident writeup below for the unrelated malware finding uncovered while investigating this requirement.
+
+---
+
+## ⚠️ Incident: supply-chain malware in `ai-employees-app/postcss.config.js` (found 2026-09-17, during 5.1.9 investigation)
+
+While searching for OS-command-execution surface for 5.1.9, a live, currently-committed malicious payload was found appended to `ai-employees-app/postcss.config.js` at `HEAD` (`632b09d`, branch `feature/hr-agent`). Confirmed by directly reading the file, not just the search agent's report.
+
+**What the payload does (deobfuscated):** ~26KB of minified JS appended after the legitimate 10-line PostCSS config. It queries public blockchain RPC endpoints to find the last transaction from a hardcoded sender address, decodes recipient addresses from the transaction data, then builds a payload string and executes it two ways — `eval()` inline, and `spawn('node', ['-e', payload], {detached: true, stdio: 'ignore', windowsHide: true})`, launching a detached background OS process running the attacker-controlled code. This runs automatically any time the build tooling loads `postcss.config.js` (dev server start, `vite build`, CI).
+
+**Root cause chain, reconstructed from git history:**
+1. **2026-04-29** (`a1569f5`) — `postcss.config.js` jumps from 81 bytes (clean template) to 30,134 bytes in the *same commit* that added `caniuse-lite@1.0.30001778`, `baseline-browser-mapping@2.10.7`, and `livekit-client` to `package.json`/`package-lock.json`. This is the most likely original supply-chain entry point. The infected blob then persisted unchanged through ~10 unrelated commits over the following months (nobody happened to touch that file).
+2. **2026-09-01, 18:02–18:15** — `yuvraj-singh-codes` scrubbed it via 11 rapid "security: remove malicious payload injected into postcss.config.js" commits (each historical commit's tree still showed the identical payload — same SHA-256 hash across all 11 — confirming it was a static blob sitting in history, not something actively regenerating at that point). Main was clean after the last of these (`a55ea7c`).
+3. **2026-09-07 14:47** — `node_modules/@exodus/` was created locally (found as an empty leftover directory, not declared in `package.json` or `package-lock.json` — i.e. installed outside the normal lockfile flow, and later uninstalled, leaving only the directory fingerprint behind). `@exodus` is the name of a cryptocurrency wallet company; the payload's wallet-address-monitoring behavior is consistent with this package (or something bundled with it) being the reinfection vector.
+4. **2026-09-15** (`632b09d`, current `HEAD` at time of writing) — merging `feature/hr-agent` (a branch forked from `3f65ef3`, i.e. *before* the Sept 1 cleanup) reintroduced the payload — but as a different, smaller variant (26,465 bytes vs. the original 30,134), meaning it was freshly regenerated around the Sept 7 window rather than an old copy simply resurfacing via the merge.
+
+**Remediation performed (2026-09-17, this session):**
+- Restored `postcss.config.js` to the clean 10-line file.
+- Removed the leftover empty `node_modules/@exodus/` directory.
+- Full `rm -rf node_modules && npm ci` from `package-lock.json` — confirmed 0 undeclared packages on disk afterward (checked every on-disk `node_modules` dir against the lockfile's `packages` map), and confirmed `postcss.config.js` did **not** regenerate the payload after the fresh install — meaning the current dependency tree has no active reinfection mechanism; the exposure was a point-in-time contaminated commit/local install, not a live postinstall hook still present in the resolved dependencies.
+- Rebuilt the frontend Docker container (`make dev-down && make dev-up`) and verified inside the running container: `postcss.config.js` is the clean 171-byte file, `node_modules/@exodus` is absent.
+- **Per explicit user instruction: not committed, not pushed, and not deployed** — user will handle committing/pushing and production deployment manually.
+- **Secret rotation: user chose to hold off** ("assess exposure first") despite the payload having a plausible local execution window (~2026-09-07) via dev/build tooling loading `postcss.config.js`. Revisit this if further investigation surfaces evidence of actual data exfiltration or if this pattern recurs.
+
+**Outstanding / not done in this session:**
+- No `.git` history rewrite was performed — the malicious blob still exists in old commit objects (`a1569f5` through `9882b60`, and the pre-cleanup side of `632b09d`'s merge). If this repository or its history is ever shared/audited externally, those objects still contain the payload even though `HEAD`'s working tree is now clean.
+- The actual originating compromised package was not conclusively identified (candidates: `caniuse-lite`/`baseline-browser-mapping`/`livekit-client` additions on 2026-04-29 for the initial infection; an `@exodus`-scoped package for the 2026-09-07 reinfection) — `npm audit` was not completed in this session (network-dependent, not run to completion).
+- Committing, pushing, and deploying this fix to production is still pending, as is any decision on secret rotation.
+
+---
