@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from app.core.auth import get_user_id, verify_business_access
 from app.core.config import settings
 from app.core.supabase import supabase_admin
+from app.routers.knowledge_base import _validate_url_is_public
 from app.schemas.competitor_agent import (
     AddCompetitorRequest,
     CompetitorListResponse,
@@ -163,6 +164,11 @@ def _head_and_tail(text: str, limit: int = 20_000) -> str:
 
 
 async def _discover_social_links(website_url: str) -> dict:
+    # Defense-in-depth, matching knowledge_base.py's convention for the same
+    # class of user-supplied website URL — not exploitable against our own
+    # infra today since Jina does the actual fetch, but keeps this endpoint
+    # consistent in case the proxy is ever swapped for a direct fetch later.
+    _validate_url_is_public(website_url)
     async with httpx.AsyncClient() as client:
         content = await _fetch_via_jina(website_url, client)
 
