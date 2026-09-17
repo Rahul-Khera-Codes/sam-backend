@@ -143,3 +143,46 @@ pass matches the reference layout with real data, no fabricated fields:
 - **View Job Details**: opens the existing public `/careers/jobs/{id}` page in a new tab (same
   data the mockup's button implies — title/department/location/responsibilities/qualifications/
   pay) rather than building a new internal job-detail route that didn't exist before.
+
+## Update (2026-09-17): client QA fixes (post 9/15 Ready-for-QA)
+Three fixes from Sam's 9/15 evening QA comments on AIE-74:
+
+- **Resume scores were uncalibrated ("everyone scores low even on a full match").** Root cause:
+  the scoring prompt (`hr_resume_scoring_service.py`) told the model to produce `total_score` but
+  never stated what numeric scale to use — the only signal was `"total_score": 0` in the example
+  JSON shape. The backend clamps the result into `[0, 100]` afterward but never rescales, so a
+  model returning e.g. `7` (as in "7/10") landed in the DB as `7`, not `70`. Fixed by adding an
+  explicit instruction (both the system message and the `requirements` list) that `total_score` is
+  a 0–100 integer, a full match should score 85+, and the model should use the whole range instead
+  of compressing toward the low end. The response-schema example was also changed from `0` to `82`
+  so the example itself doesn't anchor the model low.
+  - **Backfill**: existing `hr_application_resume_scores` rows predated this fix and were still on
+    the old uncalibrated scale. `scripts/rescore_hr_resume_applications.py` re-runs the (now-fixed)
+    scoring prompt for every existing row and overwrites it in place — dry-run by default, requires
+    `--apply` plus a typed confirmation to actually write. Run against the live DB on 2026-09-17
+    (2 rows existed at the time): `8.0 -> 85.0` and `10.0 -> 95.0`, confirming the old scores were
+    indeed on a compressed ~0-10 scale and the fix produces correctly-scaled results.
+- **Duplicate "match" wording in the resume scorecard dialog.** `scoreBand()` in `HrCandidates.tsx`
+  already returned `"Low Match"` as the low-score band label, and `ResumeScorecardDialog` appended
+  its own `" match"` suffix to every band's label — so a low score rendered "Low Match match"
+  while the other three bands rendered correctly ("Strong match", etc.). Fixed by renaming the
+  low-score band label from `"Low Match"` to `"Low"`, matching the other three bands
+  (`Exceptional`/`Strong`/`Average` — single words, no "Match"), so the dialog's `{band.label} match`
+  now renders consistently ("Low match", "Average match", ...) and the table row's bare
+  `{band.label}` also reads correctly on its own.
+- **"Interviews" tab removed from the Candidates page.** The Candidates page had a tab toggle
+  between "Interviewed" (see `hr-candidates-screening-view.md`) and "All Candidates". Sam asked to
+  drop that toggle and only show All Candidates. `HrCandidates.tsx`: removed the `view` state /
+  `Tabs` toggle and the `InterviewedCandidateCard` component entirely; the page now always renders
+  the job-scoped `AllCandidatesTable`. **This did not touch the separate top-level "Interviews"
+  sidebar page** (`/dashboard/hr/interviews`, `HrInterviews.tsx` — the Candidate Pipeline/report/
+  scorecard page documented in `hr-interviews-pipeline-dashboard.md`); Sam's mockup/comment was
+  about the in-page tab, not that sidebar item, which is unchanged and still reachable.
+- **Candidate invite email said "screening".** `hr_interview_runtime_service.py::_send_interview_invite_email`
+  — subject and both plain-text/HTML bodies said "AI screening interview"; changed to "AI interview"
+  in all 4 occurrences, matching the frontend's existing candidate-facing label
+  (`interviewKindLabel.ai_screen = "AI Interview"` in `HrCandidates.tsx`). Also caught and fixed the
+  same wording on the candidate-facing interview join page (`HrInterviewJoin.tsx`'s "Meet Emily"
+  greeting said "this structured screening interview" — now "this structured AI interview"), so the
+  wording is consistent end-to-end from email through to the join page. Verified no other
+  "screening" occurrences remain anywhere in either repo's candidate-facing code.

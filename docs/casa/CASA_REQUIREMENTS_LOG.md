@@ -60,6 +60,7 @@ Repos involved: `ai-employees-app` (React/TS frontend + Supabase) and `sam-backe
 | 5.1.7 | Context-aware output escaping protects against reflected/stored/DOM XSS | Verified — React auto-escapes JSX by default; only dangerouslySetInnerHTML usage confirmed safe (dev-supplied chart config, not user input); ZAP clean | 2026-09-17 |
 | 5.1.8 | Protect against database injection attacks | Verified — all DB access via Supabase's parameterized query-builder API, no raw/concatenated SQL anywhere in either repo; ZAP SQLi check passed | 2026-09-17 |
 | 5.1.9 | Protect against OS command injections | Verified — only one subprocess call in either repo, safe list-args form, no shell=True; **separately, an unrelated live incident was found and remediated during this review** (supply-chain-injected script in postcss.config.js) — see incident section | 2026-09-17 |
+| 5.1.10 | Protect against local/remote file inclusion (LFI/RFI) | Verified clean — all file/document handling goes through Supabase Storage's object API (no local filesystem reads driven by user input), no dynamic imports from request data, no template engine, no dynamic static-file mounts; ZAP scan clean | 2026-09-17 |
 
 ---
 
@@ -877,6 +878,8 @@ While searching for OS-command-execution surface for 5.1.9, a live, currently-co
 - Rebuilt the frontend Docker container (`make dev-down && make dev-up`) and verified inside the running container: `postcss.config.js` is the clean 171-byte file, `node_modules/@exodus` is absent.
 - **Per explicit user instruction: not committed, not pushed, and not deployed** — user will handle committing/pushing and production deployment manually.
 - **Secret rotation: user chose to hold off** ("assess exposure first") despite the payload having a plausible local execution window (~2026-09-07) via dev/build tooling loading `postcss.config.js`. Revisit this if further investigation surfaces evidence of actual data exfiltration or if this pattern recurs.
+
+**Correction to earlier requirements' comments:** several earlier 5.1.x comments (submitted for 5.1.4, 5.1.6, 5.1.9, possibly others) stated "there are no Supabase edge functions" in this repo. That's inaccurate — `ai-employees-app/supabase/functions/` contains two edge functions, `accept-invitation/index.ts` and `invite-location-admin/index.ts` (these were in fact discussed in detail earlier in this log, under 1.1.2 — the "no edge functions" phrasing in the 5.1.x comments was a shorthand slip, not a re-investigation). This doesn't change any of those requirements' underlying verdicts (template injection, XPath, OS command injection, LFI/RFI all remain N/A/clean even accounting for these two functions — checked directly during the 5.1.10 investigation, no file-inclusion pattern in either), but flagging it here in case the portal comments are revisited/audited later.
 
 **Outstanding / not done in this session:**
 - No `.git` history rewrite was performed — the malicious blob still exists in old commit objects (`a1569f5` through `9882b60`, and the pre-cleanup side of `632b09d`'s merge). If this repository or its history is ever shared/audited externally, those objects still contain the payload even though `HEAD`'s working tree is now clean.

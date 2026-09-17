@@ -1,20 +1,33 @@
 # HR Employee: Candidates screening view (AIE-73)
 
 ## What it does
-Redesigns the "Candidates" tab to surface real interview data instead of a plain applicant
-table only. The page now has two views:
-- **Interviewed** (default) — a card per candidate whose interview has actually started or
-  finished, showing AI score / recommendation, a per-criterion highlights grid, AI-identified
-  strengths as tags, and resume/cover-letter links — modeled on the AIE-73 mockup but built
-  entirely from real `hr_interview_sessions`/`hr_interview_outcomes` data, not placeholder
-  content.
-- **All Candidates** — pre-interview applicant triage table. As of 2026-09-15 (AIE-74 rework, see
-  `hr-resume-scoring-and-archival.md`) this is no longer the original plain table: every row shows
-  an AI resume-vs-job-requirements score/band and AI summary, rows are selectable, and a toolbar
-  lets a recruiter bulk **Invite to Interview** (wired to the existing `POST /hr/interviews/invite`)
-  or bulk **Reject** (new `PATCH /hr/candidates/{id}/status`) the selection. The eye icon opens a
-  `ResumeScorecardDialog` (strengths / areas to explore / requirements checklist, sourced from
-  `hr_application_resume_scores`).
+Redesigns the "Candidates" page to surface real interview data instead of a plain applicant
+table only.
+
+**Update (2026-09-17):** originally shipped as two views — see "Interviewed view (removed
+2026-09-17)" below — but Sam's 9/15 QA comment asked to drop the tab toggle and only show All
+Candidates, so the page no longer has a tab switcher; it always renders the view described next.
+
+- **All Candidates** (the only view now) — pre-interview applicant triage table. As of 2026-09-15
+  (AIE-74 rework, see `hr-resume-scoring-and-archival.md`) this is no longer the original plain
+  table: every row shows an AI resume-vs-job-requirements score/band and AI summary, rows are
+  selectable, and a toolbar lets a recruiter bulk **Invite to Interview** (wired to the existing
+  `POST /hr/interviews/invite`) or bulk **Reject** (new `PATCH /hr/candidates/{id}/status`) the
+  selection. The eye icon opens a `ResumeScorecardDialog` (strengths / areas to explore /
+  requirements checklist, sourced from `hr_application_resume_scores`).
+
+### Interviewed view (removed 2026-09-17)
+Previously a second tab showed a card per candidate whose interview had actually started or
+finished (AI score/recommendation, per-criterion highlights grid, strength tags, resume/cover-
+letter links) — the `InterviewedCandidateCard` component and the `view`/`Tabs` toggle in
+`HrCandidates.tsx`. Removed per Sam's QA comment on AIE-74. The backing data path
+(`GET /hr/candidates?interviewed=true`, `_list_interviewed_candidates` in `hr.py`) and the
+promote-from-interview endpoint below are untouched — only the frontend tab and card component
+were deleted, since nothing else in the codebase consumed them (verified: `InterviewedCandidateCard`,
+`CandidatesView`, and the `interviewed=true` call from this page had no other callers). **Not to be
+confused with** the separate top-level "Interviews" sidebar page (`/dashboard/hr/interviews`,
+`HrInterviews.tsx`, documented in `hr-interviews-pipeline-dashboard.md`) — that page is unrelated
+and unaffected by this change.
 
 ## Why not just match the mockup literally
 The attached mockup (`Candidates Screen.html`) shows fields the app has no real data for:
@@ -113,13 +126,12 @@ is picked by status rank (`reviewed` > `completed` > `in_progress`), tie-broken 
   `interview_session_id`; `getHrCandidates` gained an `interviewed?: boolean` param; new
   `getHrCandidateResumeUrl`/`getHrCandidateCoverLetterUrl`/`promoteHrCandidateFromInterview`
   functions.
-- `src/pages/dashboard/hr/HrCandidates.tsx` — rewritten with an "Interviewed" / "All Candidates"
-  tab toggle (default: Interviewed). The All Candidates tab is the original table, untouched. The
-  Interviewed tab renders `InterviewedCandidateCard` per candidate (score box, highlights grid,
-  strength tags, resume/cover-letter buttons gated on `has_resume`/`has_cover_letter`).
-  "Move to Final Round" now branches: candidates with a real `application_id` use the existing
+- `src/pages/dashboard/hr/HrCandidates.tsx` — (as of 2026-09-17, see the Interviewed-view-removed
+  note above, this page no longer has a tab toggle — it always renders All Candidates)
+  `moveToFinalRound` still branches: candidates with a real `application_id` use the existing
   `updateHrCandidateStage` path unchanged; `prospect` candidates (completed/reviewed interview,
-  no application) use `promoteHrCandidateFromInterview` keyed by `interview_session_id` instead.
+  no application) use `promoteHrCandidateFromInterview` keyed by `interview_session_id` instead —
+  that logic lives in the page regardless of which view calls it.
 
 ## Decisions / tradeoffs
 - **In-progress interviews count as "taken".** Chosen so a recruiter watching a live AI screen
@@ -127,9 +139,11 @@ is picked by status rank (`reviewed` > `completed` > `in_progress`), tie-broken 
   show "Interview in progress" instead of a score.
 - **No new columns/migration.** Everything is computed live from existing tables, consistent with
   how `eligible_for_final_round` and the dashboard stats already work.
-- **Kept the old table as a second tab instead of replacing it.** The Candidates page was also the
-  only place recruiters could see brand-new, not-yet-interviewed applicants; removing that
-  entirely would have been a workflow regression beyond what was asked.
+- **Kept the old table as a second tab instead of replacing it (superseded 2026-09-17).** The
+  Candidates page was also the only place recruiters could see brand-new, not-yet-interviewed
+  applicants; removing that entirely would have been a workflow regression beyond what was asked.
+  Sam later asked to drop the tab anyway (see the removal note above) — the All Candidates table
+  already surfaces every application regardless of interview status, so nothing was lost.
 
 ## Error handling: no more raw "Failed to fetch"
 Every fetch/API call in this flow (Candidates page, Interviews page, and the public candidate-

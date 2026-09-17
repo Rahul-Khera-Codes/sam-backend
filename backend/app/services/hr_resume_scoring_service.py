@@ -89,6 +89,11 @@ async def generate_and_store_resume_score(
         },
         "resume_text": resume_text[:12000],
         "requirements": [
+            "total_score MUST be an integer from 0 to 100, where 100 means the resume fully "
+            "demonstrates every stated requirement and qualification, 0 means it demonstrates none. "
+            "A resume that clearly meets all or nearly all of the job's requirements should score "
+            "in the 85-100 range. Do not compress scores toward the low end of the scale — use the "
+            "full 0-100 range based on actual requirement coverage.",
             "Score only how well the resume matches this job's stated requirements and qualifications.",
             "Use evidence from the resume text. Do not infer protected characteristics.",
             "The score is advisory only and requires human review.",
@@ -97,7 +102,7 @@ async def generate_and_store_resume_score(
             "demonstrates each one (met: true/false), and brief evidence for that judgment.",
         ],
         "response_schema": {
-            "total_score": 0,
+            "total_score": 82,
             "summary": "",
             "strengths": [],
             "concerns": [],
@@ -127,6 +132,9 @@ async def generate_and_store_resume_score(
                 "role": "system",
                 "content": (
                     "You screen job applicant resumes against a job's stated requirements. "
+                    "total_score is a 0-100 integer: 100 is a full match on every stated "
+                    "requirement, 0 is no match at all. Use the whole range - a resume that "
+                    "clearly meets the requirements should score high (85+), not low. "
                     "Return JSON only. All scoring is advisory and human-reviewed."
                 ),
             },
