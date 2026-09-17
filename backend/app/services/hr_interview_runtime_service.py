@@ -272,18 +272,18 @@ async def _send_interview_invite_email(
                 pass
     if not access_token or not sender:
         return "failed", "Connected Gmail sender was found, but its token could not be refreshed. Disconnect and reconnect Gmail from Business Settings."
-    subject = f"AI screening interview for {job_title}"
+    subject = f"AI interview for {job_title}"
     plain = (
         f"Hi {candidate_name},\n\n"
-        f"You have been invited to complete an AI screening interview for {job_title}.\n\n"
+        f"You have been invited to complete an AI interview for {job_title}.\n\n"
         f"Start your interview here:\n{join_url}\n\n"
         "Please use a quiet place and allow microphone access. Your audio will be recorded for recruiter review.\n"
     )
     html = f"""
     <div style="font-family:Arial,sans-serif;line-height:1.6;color:#0f172a">
-      <h2>AI screening interview</h2>
+      <h2>AI interview</h2>
       <p>Hi {candidate_name},</p>
-      <p>You have been invited to complete an AI screening interview for <strong>{job_title}</strong>.</p>
+      <p>You have been invited to complete an AI interview for <strong>{job_title}</strong>.</p>
       <p><a href="{join_url}" style="display:inline-block;background:#2563eb;color:#fff;padding:12px 18px;border-radius:8px;text-decoration:none">Start interview</a></p>
       <p>Please use a quiet place and allow microphone access. Your audio will be recorded for recruiter review.</p>
     </div>
