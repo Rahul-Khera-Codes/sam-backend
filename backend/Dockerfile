@@ -8,6 +8,7 @@ ARG GUARDRAILS_HUB_INSTALL_TIMEOUT_SECONDS=90
 # Install dependencies
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip && \
     pip install -r requirements.txt
 
 # Cacheable Guardrails validator layer. This runs at image build time, before app
