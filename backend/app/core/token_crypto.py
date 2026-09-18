@@ -1,4 +1,4 @@
-"""Shared encryption for OAuth integration tokens stored at rest (Google
+`"""Shared encryption for OAuth integration tokens stored at rest (Google
 Calendar, Gmail, Outlook access/refresh tokens) — these are confidential
 credentials granting calendar/email read-write access, not just opaque IDs.
 

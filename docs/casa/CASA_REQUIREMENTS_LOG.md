@@ -63,7 +63,12 @@ Repos involved: `ai-employees-app` (React/TS frontend + Supabase) and `sam-backe
 | 5.1.10 | Protect against local/remote file inclusion (LFI/RFI) | Verified clean — all file/document handling goes through Supabase Storage's object API (no local filesystem reads driven by user input), no dynamic imports from request data, no template engine, no dynamic static-file mounts; ZAP scan clean | 2026-09-17 |
 | 5.2.1 | Protect against malicious file uploads (expected file types + no direct execution) | **Real gap found and fixed**: avatar/logo uploads went straight from browser to public Supabase Storage buckets with zero server-side type validation — attacker-controlled Content-Type on a public, inline-served bucket = stored-XSS-via-direct-link. Fixed with new backend-validated upload endpoints + storage-layer MIME/size allowlists. **Deployed to production and verified live** | 2026-09-18 |
 | 6.1.1 | No known exploitable vulnerabilities in software components (dependency scan) | Ran npm audit (frontend) + pip-audit (backend+agent, live containers). Frontend: 22→4 found (18 fixed via `npm audit fix`, no breaking changes; 4 remaining need major bumps, deferred). Backend: fixed python-jose/python-dotenv/setuptools/pip (4 packages, no conflicts); 11 remaining need coordinated major-version bumps (FastAPI+Starlette, pypdf, pillow, transformers, litellm, click blocked by guardrails-ai, ecdsa/pyasn1 no compatible fix, httpx2 via langsmith) — all deferred with documented reasoning. Fixed items rebuilt, verified live locally | 2026-09-18 |
-| 6.2.1 | Disable debug modes in production environments | **Real gap found and fixed**: production ran uvicorn with `--reload` (a dev-only flag) because prod used the same docker-compose.yml as local dev, with no separate prod command. Fixed via a gitignored docker-compose.override.yml (local-dev-only, auto-layered) + a clean base file (prod-safe by default). Verified locally; **not yet deployed to production** | 2026-09-18 |
+| 6.2.1 | Disable debug modes in production environments | **Real gap found and fixed**: production ran uvicorn with `--reload` (a dev-only flag) because prod used the same docker-compose.yml as local dev, with no separate prod command. Fixed via a gitignored docker-compose.override.yml (local-dev-only, auto-layered) + a clean base file (prod-safe by default). **User reports deployed; production verification via `docker inspect` still pending confirmation** | 2026-09-18 |
+| 6.3.1 | Origin header shall not be used for authentication/access-control decisions | Verified clean — Referer never read anywhere; Origin only used for CORS config and one cosmetic OAuth-redirect-URI choice made *after* real Bearer-token auth + business-membership checks are already enforced | 2026-09-18 |
+| 6.4.1 | App shall not be susceptible to subdomain takeovers | Verified via live DNS lookups on every subdomain referenced in either repo (portal/api/www/send/resend._domainkey/requests/app) — all resolve to controlled or legitimately-active infrastructure, none dangling. One account-governance note (requests. verified under an unrecognized Resend account) disclosed but not a live takeover risk | 2026-09-18 |
+| 6.5.1 | App shall not log credentials/payment details; session tokens only hashed in logs | Verified clean — no request/response-logging middleware exists; every token/password-adjacent log statement logs metadata only, never a secret value; billing logs only event type/IDs/status, never card details; login produces no backend log entry at all (Supabase-Auth-only). Evidence samples (Supabase Auth log, Stripe webhook + matching backend log line) still to be captured by user | 2026-09-18 |
+| 6.6.1 | Browser storage is securely cleared during logout | Verified clean — full storage inventory done; the only two sensitive entries (Supabase session token, support/wishlist draft) are both explicitly cleared on signOut(); only non-sensitive UI prefs (location UUID, checklist/avatar flags, sidebar cookie) persist. Minor non-blocking note: selectedLocationId isn't cleared on logout (UX/hygiene item, no PII) | 2026-09-18 |
+| 6.7.1 | App shall securely store access tokens/API keys/server-side secrets | Verified clean — no hardcoded secrets anywhere, secrets loaded from env with no real-value fallbacks, .env excluded from Docker build context, OAuth tokens (calendar/email + marketing X/Instagram/LinkedIn) encrypted at rest, frontend bundle only ever has the public anon key. One real gap found and fixed: `ai-employees-app/.env` was tracked in git (no secret ever leaked — verified every historical version) — now gitignored and untracked | 2026-09-18 |
 
 ---
 
@@ -988,6 +993,127 @@ Deferred to a dedicated pass per user decision — major version bumps need thei
 
 **Evidence:** screenshot of the two `docker compose config` command outputs side by side (with-override showing `--reload`, base-file-only not showing it) — directly demonstrates the fix mechanism. Alternatively/additionally, a screenshot of `main.py`'s `FastAPI(...)` instantiation showing no `debug=` argument.
 
-**Note:** fix is verified locally only — **do not submit this comment until the updated `docker-compose.yml` is actually deployed and restarted on the production server** (`116.202.210.102`). Since `docker-compose.override.yml` is gitignored by design, a normal `git pull && docker compose up -d`/`restart sam-backend` on that server will automatically pick up the fixed base command with no extra steps — but the deploy still needs to happen before this claim is true in production.
+**Note:** fix is verified locally only — **do not submit this comment until the updated `docker-compose.yml` is actually deployed and restarted on the production server** (`116.202.210.102`). Since `docker-compose.override.yml` is gitignored by design, a normal `git pull && docker compose up -d`/`restart sam-backend` on that server will automatically pick up the fixed base command with no extra steps — but the deploy still needs to happen before this claim is true in production. User reported deploying this on 2026-09-18; gave them the exact `docker ps` + `docker inspect ... --format '{{.Config.Cmd}}'` verification steps to run themselves (no SSH access from this session) and to screenshot the result as evidence — confirmation not yet received back as of this writing.
+
+---
+
+### 6.3.1 — The origin header shall not be used for authentication of access control decisions
+**Domain:** 6 – Configuration
+
+**Verified clean.** Searched both repos for every place the `Origin`/`Referer` header is read, categorizing each as CORS config (expected/fine) vs. an actual access-control decision (would be a real gap):
+- `Referer` is never read anywhere in either repo.
+- `Origin` is read in two contexts only: (1) standard CORS middleware config (`backend/app/main.py`'s `CORSMiddleware`, and static `Access-Control-Allow-Origin: "*"` response headers in the two Supabase edge functions `accept-invitation`/`invite-location-admin` — these reflect a fixed wildcard, don't even read the incoming header); (2) one non-security use in `marketing_integrations.py`/`marketing_social_service.py`'s `_is_local_origin`/`_redirect_uri_for_provider` — Origin is read only to pick between a local-dev vs. production OAuth redirect URI string, and only *after* real authentication (`get_user_id`, Bearer token) and authorization (`verify_business_access`) have already independently gated the route. Forging the Origin header there would at worst hand back the wrong redirect URI variant — it grants no access and bypasses no check.
+- No `nginx.conf` exists in `sam-backend` at all, so no `$http_origin`-based access logic to check there either.
+
+**Comment submitted (919 chars):**
+> The application does not use the Origin or Referer header for authentication or access-control decisions. The Referer header is never read anywhere in the codebase. The Origin header is read in exactly two contexts: (1) standard CORS middleware configuration (FastAPI CORSMiddleware, and static Access-Control-Allow-Origin response headers in two Supabase edge functions) - a browser-enforced mechanism, not an authentication check; and (2) one non-security use in the marketing social-integration OAuth routes, where Origin is read only to choose between a local-dev and production redirect URI string after real authentication (Bearer token) and authorization (business-membership check) have already been independently enforced. All access-control decisions in this application are made exclusively via verified session tokens and explicit role/business-membership checks, never by trusting a client-supplied header.
+
+**Evidence:** screenshot of `marketing_social_service.py`'s `_is_local_origin`/`_redirect_uri_for_provider` functions alongside the `get_user_id`/`verify_business_access` calls in `marketing_integrations.py` — shows the Origin read happens only for redirect-URI selection, after auth/authorization is already independently enforced.
+
+**Code changes:** none.
+
+---
+
+### 6.4.1 — The application shall not be susceptible to subdomain takeovers
+**Domain:** 6 – Configuration
+
+**Investigation:** first found every subdomain of `aiemployeesinc.com` referenced anywhere in either repo (code, `.env`/`.env.example`, deployment docs, feature docs) via a codebase search, then ran live `dig` lookups (CNAME/A/TXT/MX) against each one — actual DNS state, not just what the code claims.
+
+**Subdomains found and checked:**
+- `portal.aiemployeesinc.com` — A record → `187.77.198.89`. The known production frontend/reverse-proxy host (already confirmed via the 4.1.1 Qualys/SSL check). Target of every current OAuth redirect URI (Google, X, Instagram, LinkedIn marketing integrations). Controlled, active.
+- `api.aiemployeesinc.com` — A record → `187.77.198.89` (same IP as `portal.`). Referenced in exactly one place in either repo: a stale code comment in `MarketingProductLibrary.tsx` about nginx `client_max_body_size` — inconsistent with the fact that no `nginx.conf` exists in `sam-backend` and the only SSL scan ever run targeted `portal.`, suggesting the backend is actually reverse-proxied under `portal.`, not a separate `api.` host. Not a security gap (the record still points to a controlled IP), but flagged as a minor doc/comment-accuracy item, not fixed in this pass — out of scope for this control.
+- `app.aiemployeesinc.com` — **no DNS record at all** (checked CNAME/A/TXT/MX, all empty). This was a May-2026 planning-era candidate subdomain (`docs/CLIENT_COMMS_LOG.md`, `docs/ISSUES_2026-05-15.md`, marked "❌ Not started" at the time) before the team settled on `portal.` instead. Since it was never actually provisioned (or was already cleaned up), there's no dangling record — nothing exists to hijack.
+- `www.aiemployeesinc.com` — CNAME → root domain (`aiemployeesinc.com` → `195.35.39.174`). Controlled, active.
+- `send.aiemployeesinc.com` — MX → `feedback-smtp.us-east-1.amazonses.com`, SPF TXT → `include:amazonses.com`. Active AWS SES bounce-handling record, consistent with Resend's email infrastructure (Resend operates atop SES for many customers).
+- `resend._domainkey.aiemployeesinc.com` — TXT (DKIM public key), valid and present. Not a CNAME, no takeover surface.
+- `requests.aiemployeesinc.com` — CNAME → `links1.resend-dns.com` → CloudFront (`dnimfezcq57tg.cloudfront.net`, resolving to real, live CloudFront IPs `99.86.30.x`). This is Resend's own shared, actively-operated link-tracking infrastructure — **not dangling**, since the target is live and responding, not an unclaimed resource. However, `docs/features/support-wishlist-email.md` had already flagged (before this session) that this subdomain was verified inside Resend's dashboard under a *different* Resend account than the one whose API key is actually in `backend/.env`, and this was never reconciled. This is a real, disclosed account-governance loose end — worth someone confirming which Resend account genuinely owns this domain verification — but it is not itself a live DNS takeover vulnerability today, since the CNAME target is Resend's permanent shared infrastructure, not a per-account resource that would 404/NXDOMAIN if the "wrong" account were ever cancelled.
+
+**No subdomain anywhere** points to a decommissioned S3 bucket, Heroku app, Netlify/Vercel site, GitHub Pages, Azure endpoint, or any other classic dangling-CNAME takeover target — none of these services are referenced in either repo's DNS-adjacent config at all.
+
+**Comment submitted (1113 chars):**
+> The application is not susceptible to subdomain takeover. DNS was checked for every subdomain of aiemployeesinc.com referenced anywhere in the codebase or deployment docs: portal (A record, controlled server), api (A record, same controlled server), www (CNAME to the root domain), send (MX to AWS SES bounce handling), and resend._domainkey (DKIM TXT) all resolve to active, organization-controlled or legitimately-active third-party infrastructure. One historical planning-stage subdomain (app.aiemployeesinc.com) was found referenced in old deployment docs but has no DNS record at all - it was never provisioned, so there is nothing to hijack. A requests.aiemployeesinc.com subdomain CNAMEs to Resend's live link-tracking infrastructure (an active, resolving third-party service, not a dangling/unclaimed resource); an unrelated internal note about which Resend account originally verified it has been flagged separately for account-governance cleanup, but does not constitute a takeover risk since the DNS target is live. No subdomain anywhere points to a decommissioned or non-existent third-party resource.
+
+**Evidence:** screenshot of a terminal running `dig +short CNAME/A` against each subdomain (`aiemployeesinc.com`, `portal.`, `api.`, `app.`, `www.`, `send.`, `requests.`) showing live/controlled resolution or no record at all — directly demonstrates the requirement's literal ask.
+
+**Code changes:** none. **Outstanding (not part of this control's fix, disclosed for completeness):** the `requests.aiemployeesinc.com` / Resend account-ownership ambiguity noted above predates this session and remains unresolved — a business/ops task (confirming with Resend support which account legitimately owns the domain verification), not a code or DNS-config fix. The stale `api.aiemployeesinc.com` code comment in `MarketingProductLibrary.tsx` was also not corrected in this pass.
+
+---
+
+### 6.5.1 — The application shall not log credentials or payment details; session tokens shall only be stored in logs in an irreversible, hashed form
+**Domain:** 6 – Configuration
+
+**Verified clean** across both repos:
+- **No request/response-logging middleware exists anywhere** — `main.py` registers only `CORSMiddleware`; no `@app.middleware("http")`/`BaseHTTPMiddleware` anywhere in either repo. The only two places a raw request body is read at all are the Stripe (`billing.py:249`) and LiveKit (`calls.py:555-556`) webhook handlers, and both feed it straight into signature verification — never into a log call.
+- **Every token/password/secret-adjacent `logger.*`/`print()` call reviewed** (OAuth refresh failures for Google Calendar/Gmail/Outlook, JWT decode failures in `auth.py`, HR-interview invite tokens, Fernet encrypt/decrypt modules) logs only metadata (status codes, provider error strings, user/business IDs) — never the literal secret value. `token_crypto.py` (both backend and agent copies) has zero logging calls at all.
+- **Billing (`billing.py`, the only Stripe integration point)** — its 8 log statements log only event-type strings, business/customer/subscription IDs, and status strings (e.g. `"Stripe webhook received: %s"`, `"Subscription upserted for business %s: %s"`) — never a full Stripe object, `payment_method`, card brand/last-4, or CVV.
+- **uvicorn access log** is unmodified default (method/path/status only) — no `--log-config` override, no custom access-log format anywhere.
+- **Frontend** — zero `console.*` calls anywhere near password/token/card keywords in `Login.tsx`, `Signup.tsx`, `ResetPassword.tsx`, `AuthContext.tsx`, or any billing/payment component.
+- **No APM/error-tracking SDK** (Sentry, Datadog, LogRocket, Bugsnag, etc.) exists in either `package.json` or any `requirements.txt` that could capture request bodies on error.
+- **Footnote, not a violation:** `sam-backend/scripts/setup_sip_trunks.py` `print()`s newly-generated SIP/Twilio credentials to the operator's terminal during one-time manual infra setup — this is a manually-run script, never executed by the running application, so it doesn't violate "the application shall not log credentials." Noted for completeness only.
+- **Why there's no "login log sample" from the backend:** login is 100% delegated to Supabase Auth (GoTrue) — the browser's Supabase SDK talks directly to Supabase, never through this app's backend, so the backend produces zero log output corresponding to a login event. The backend's only later interaction with the resulting session token is a stateless JWT check (`auth.py`'s `get_current_user`) that doesn't log on success and never logs the token value on failure (only a generic exception string).
+
+**Comment submitted (988 chars):**
+> The application does not log credentials, session tokens in reversible form, or payment details. User login is handled entirely by Supabase Auth (GoTrue); the backend never receives the raw password, so no backend log entry corresponds to a login event. The backend's only interaction with the resulting session token is a stateless JWT signature/expiry check that does not log on success and never logs the token value on failure (only a generic error string). No request/response-logging middleware exists anywhere in the codebase - the only two places a raw request body is read are Stripe and LiveKit webhook signature verification, and neither is ever logged. Payment handling (Stripe) logs only event type, business/customer IDs, and subscription status strings - never a full Stripe object, card number, brand, or CVV. No error-tracking/APM SDK (Sentry, Datadog, etc.) is present that could capture sensitive request data. Log samples for both login and payment flows are attached.
+
+**Evidence — two samples requested by the requirement, both still to be captured by the user (guidance given, not yet in hand):**
+1. **Login sample:** Supabase Dashboard → Logs → Auth Logs, screenshot a `login`/`token_refreshed` event entry — shows event type/user ID/IP/timestamp, no password.
+2. **Payment sample:** Stripe Dashboard → Developers → Webhooks → endpoint → a real past delivery, paired with the matching backend log line (`docker logs sam-backend-sam-backend-1 | grep -iE "Stripe webhook received|Subscription upserted|Invoice payment"` on the production server) — shows only event type/business ID/status, no card details. (No real webhook had fired yet in the freshly-rebuilt local container to pull a sample from directly, and Stripe CLI isn't installed locally to safely trigger a test event without touching production.)
+
+**Code changes:** none.
+
+---
+
+### 6.6.1 — Browser storage is securely cleared during logout
+**Domain:** 6 – Configuration
+
+**Investigation:** full inventory of every `localStorage`/`sessionStorage`/cookie/IndexedDB write in `ai-employees-app/src`, cross-referenced against the actual `signOut` implementation (`AuthContext.tsx`), tracing into `@supabase/auth-js`'s `GoTrueClient.signOut()`/`_removeSession()` to confirm what it actually removes rather than assuming.
+
+**Storage inventory:**
+| Key/mechanism | Holds | Sensitive? | Cleared on logout? |
+|---|---|---|---|
+| `sb-hdnwxonrwcnaodjxipll-auth-token` (+ `-code-verifier`/`-user`), localStorage | Supabase JWT access/refresh tokens, user id/email | **Yes** | **Yes** — `supabase.auth.signOut()` default `scope: 'global'` calls `_removeSession()`, which deletes all three keys |
+| `support-draft:<userId>:support`/`:wishlist`, sessionStorage | User-typed in-progress form draft text | Low-moderate (user's own contact info, not credentials) | **Yes** — explicit `clearSupportDrafts(user?.id)` call precedes `signOut()` in `AuthContext.tsx` |
+| `selectedLocationId`, localStorage | Location UUID only | No | No — persists (see note below) |
+| `checklist_voice_chosen`, `checklist_greeting_reviewed`, localStorage | Boolean UI flags | No | No — persists |
+| `hr-john-avatar-enabled/available`, `executive-avatar-enabled/available`, localStorage | Boolean UI/feature flags | No | No — persists |
+| `sidebar:state`, cookie (7-day max-age) | Sidebar collapsed/expanded boolean | No | No — persists |
+| IndexedDB | Not used anywhere | N/A | N/A |
+| React Query cache | In-memory only, no persister configured | N/A | N/A (wiped on reload/tab close regardless) |
+
+**Verdict:** the only two storage entries holding anything sensitive (the Supabase session token and the support-draft text) are both explicitly and reliably cleared on logout. Everything left behind is non-sensitive UI-preference state with no PII, credentials, or business/customer data.
+
+**Minor note, not treated as a gap (no PII involved):** logout doesn't clear `selectedLocationId`, so a second user logging into the same browser afterward could briefly see the prior user's last-selected location before picking their own. Flagged for awareness, not fixed — it's a UX/authorization-hygiene item, not a confidentiality finding under this control.
+
+**Comment submitted (967 chars):**
+> No confidential data or authentication material persists in browser storage after logout. A full inventory of the app's browser storage found two entries containing sensitive data: the Supabase session (JWT access/refresh tokens, in localStorage) and a transient support/wishlist form draft (user-typed text, in sessionStorage). Both are explicitly cleared on logout - the session token via supabase.auth.signOut(), which removes its localStorage entries by default, and the draft via an explicit clearSupportDrafts() call that runs before signOut. The only browser storage that persists after logout is non-sensitive UI preference state: a selected-location UUID, boolean feature/checklist flags, and a sidebar-collapsed cookie - none of which contain PII, credentials, or business/customer data. The app does not use IndexedDB, and its in-memory query cache is not persisted to browser storage at all, so it is cleared on page reload/tab close regardless of logout.
+
+**Evidence:** no scan/screenshot required by this sub-item (written description only). Optional supporting screenshot: browser DevTools → Application → Local/Session Storage, before vs. after clicking "Sign Out" — showing the Supabase auth-token entry disappears while non-sensitive keys remain.
+
+**Code changes:** none.
+
+---
+
+### 6.7.1 — The application shall securely store access tokens, API keys, and other server-side secrets
+**Domain:** 6 – Configuration
+
+**Investigation covered 7 angles, all clean except one real (low-severity) hygiene gap:**
+1. **No hardcoded secrets in source** — repo-wide search for Stripe/AWS key prefixes, generic `secret = "<literal>"` patterns, hardcoded JWT-looking strings, and real values assigned to known secret env-var names — zero hits in either repo. Every `*_secret`/`*_key`/`*_token` variable found is a name loaded from env, not a literal value.
+2. **Env loading pattern** — `backend/app/core/config.py`'s pydantic-settings `Settings` class: every secret field has either no default (app refuses to start if missing) or `""` — never a real fallback secret. Agent service (`os.getenv` throughout) same pattern.
+3. **`.env` gitignored + git history** — `sam-backend`: `.env` correctly gitignored, never committed (`git log --all -- '**/.env'` empty). **`ai-employees-app`: real gap found** — `.env` was tracked in git (missing from `.gitignore`, committed in 2 historical commits). Read every historical version directly: only ever contained the Supabase **anon/publishable** key + URL (both designed to be public) and a localhost API URL — never a real server-side secret, so nothing sensitive actually leaked. Still a process gap since any future edit risked committing a real one.
+4. **OAuth calendar/email token encryption** — re-confirmed the 4.1.3 Fernet fix is still in place (`google_calendar_service.py`, `email_service.py`, `outlook_integrations.py`, and the agent's `gcal_helpers.py`/`gmail_helpers.py`).
+5. **Marketing (X/Instagram/LinkedIn) OAuth tokens** — also encrypted at rest (`marketing_social_service.py`, `encrypted_access_token`/`encrypted_refresh_token` columns), and actually **stricter** than the calendar/email path: `_decrypt_token` raises a 500 on `InvalidToken` instead of falling back to plaintext — no legacy-plaintext-row fallback exists here.
+6. **Docker build-context exposure** — `.dockerignore` excludes `.env`/`.env.local` from both backend and agent build contexts, so `COPY . .` never picks them up; runtime secrets are injected only via `docker-compose.yml`'s `env_file:`. The one build-time secret (`GUARDRAILS_TOKEN`) correctly uses BuildKit's `--mount=type=secret`, not an `ARG`/`ENV` (which would persist in an image layer).
+7. **Frontend never embeds backend secrets** — every `VITE_`-prefixed variable in `src/` is either the Supabase anon key (intentionally public) or a non-secret API base URL. Zero occurrences of `service_role`/`SERVICE_ROLE` anywhere in `src/`.
+
+**Fix applied (per user decision — "fix now"):**
+- `ai-employees-app/.gitignore` — added `.env`.
+- `git rm --cached .env` — untracked the file (kept on disk, unmodified); `git check-ignore -v .env` confirms the new rule is active. **Staged, not committed** — per repo convention, committing is the user's call.
+
+**Comment submitted (1272 chars):**
+> The application securely stores server-side secrets. All API keys, OAuth client secrets, database/service-role keys, and signing secrets are loaded exclusively from environment variables (pydantic-settings on the backend, os.getenv on the agent) with no hardcoded fallback values that are real secrets - required secrets have no default at all, so the app refuses to start if missing. A repo-wide search found zero hardcoded secret values in source code. .env files are excluded from the Docker build context (.dockerignore) and injected only into the running container's environment via docker-compose, never baked into an image layer; one build-time secret (GUARDRAILS_TOKEN) uses Docker BuildKit's --mount=type=secret rather than an ARG. OAuth access/refresh tokens (Google Calendar, Gmail, Outlook, and the X/Instagram/LinkedIn marketing integrations) are encrypted at rest via Fernet before being stored in the database. The frontend bundle only ever contains the Supabase anon/publishable key, which is designed to be public. One hygiene gap was found and fixed: ai-employees-app/.env was tracked in git (missing from .gitignore) - verified every historical version contained only the public anon key/URL, never a real secret - now added to .gitignore and untracked.
+
+**Evidence:** screenshot of `backend/app/core/config.py`'s `Settings` class (secrets required, no real-value fallbacks) alongside `token_crypto.py`'s encrypt/decrypt functions — or a screenshot of `git check-ignore -v .env` confirming the fix.
+
+**Note:** the `git rm --cached` is staged locally, not committed/pushed — needs the user to commit before this is reflected in the actual repo history going forward (the file was already in history from 2 prior commits regardless; this only stops future commits from including it).
 
 ---
