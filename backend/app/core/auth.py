@@ -1,8 +1,8 @@
 import logging
 
+import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import jwt, JWTError
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ def get_current_user(
         )
         return payload
 
-    except JWTError as e:
+    except jwt.InvalidTokenError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid or expired token: {str(e)}",

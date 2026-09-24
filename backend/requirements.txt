@@ -1,12 +1,14 @@
-fastapi==0.111.0          # latest: 0.135.1 — upgrade needs starlette compat check (pulls in starlette>=0.38, current pin requires <0.38 — CASA 6.1.1 dependency-scan gap, deferred)
+fastapi==0.135.0          # CASA 6.1.1: was 0.111.0 (starlette<0.38.0), then 0.118.0 (starlette<0.49.0 — still left 6 newer starlette CVEs unresolved, fixed in 0.49.1-1.3.1). 0.135.0 is the earliest release with an unbounded starlette>=0.46.0 floor, letting pip resolve the latest patched starlette.
 uvicorn[standard]==0.29.0
+python-multipart>=0.0.18   # CASA 6.1.1 fallout: newer FastAPI (0.118.0) no longer transitively pulls this in for Form()/File() endpoints, and requires >=0.0.18 itself.
 python-dotenv==1.2.2      # CASA 6.1.1: was 1.0.1 (PYSEC-2026-2270)
 pydantic>=2.10,<3
 pydantic-settings>=2.6,<3
 
 # Supabase (2.28+ uses realtime 2.x, compatible with websockets>=13 for openai[realtime])
 supabase>=2.28.0
-python-jose[cryptography]==3.4.0   # CASA 6.1.1: was 3.3.0 (CVE-2024-33663 alg confusion, CVE-2024-33664 JWT-bomb DoS)
+PyJWT==2.15.0   # CASA 6.1.1: replaces python-jose entirely (was 3.3.0->3.4.0, itself still blocking pyasn1's fix via a <0.5.0 cap, and pulling ecdsa which has NO fix available upstream at all). PyJWT is actively maintained and drops the ecdsa/pyasn1/cryptography dependency chain entirely for our HS256-only usage (cryptography is only needed for its optional "crypto" extra, used for RS/ES algorithms we don't use). Verified empirically inside the container: jwt.decode(...) with the same algorithms=["HS256"], options={"verify_aud": False} signature behaves identically (same call in auth.py — without verify_aud=False it correctly rejects Supabase's "aud" claim, confirming this option is required, not optional), and expired/tampered/wrong-secret tokens are all caught by the single jwt.InvalidTokenError, matching jose.JWTError's catch-all behavior. Only import site in either service is app/core/auth.py.
+pyasn1>=0.6.3,<0.7.0   # CASA 6.1.1: was resolving to 0.4.8 (recursion-DoS, PYSEC-2026-2263) via python-jose's now-removed <0.5.0 cap — still pulled in transitively by google-auth's rsa/pyasn1-modules, which both allow >=0.6.1.
 
 # LiveKit (verified: all livekit_service.py imports work on 1.x — agent container runs 1.1.0)
 livekit==1.1.2
@@ -20,35 +22,15 @@ openai[realtime]>=2.22.0
 tiktoken>=0.13.0
 langsmith>=0.3.16
 numpy>=1.24.0
-langchain-text-splitters==0.3.11
-sentence-transformers==5.1.2
+langchain-text-splitters>=1.1.2   # CASA 6.1.1: was 0.3.11 (PYSEC-2026-77). Usage here is only RecursiveCharacterTextSplitter(chunk_size=, chunk_overlap=, length_function=, separators=, is_separator_regex=) — the package's core, most stable constructor API.
+sentence-transformers>=5.7.0     # CASA 6.1.1: was 5.1.2, pulled transformers 4.57.6 (5 CVEs) transitively. 5.7.0 officially supports transformers v5 (5.2.1+ added support); usage here is only CrossEncoder(...).predict(), a stable top-level API unaffected by the v5 changes.
+transformers>=5.10.0             # CASA 6.1.1: explicit floor (was transitive-only at 4.57.6) — 5.10.0 covers all the CVEs found (fix versions ranged 5.0.0–5.10.0). Not a direct import anywhere in this codebase.
 redis==7.0.1
-guardrails-ai==0.10.2
-# guardrails-ai pins click<=8.2.0, which blocks fixing click's CASA 6.1.1 finding
-# (PYSEC-2026-2132) without upgrading guardrails-ai itself — deferred, tracked in
-# docs/casa/CASA_REQUIREMENTS_LOG.md.
-#
-# litellm's CASA 6.1.1 finding (13 CVEs, resolves to 1.83.0 transitively via
-# guardrails-ai) is ALSO deferred: every fixed release (1.83.7+) hard-pins
-# httpx==0.28.1, which conflicts with this file's httpx==0.27.0 pin below
-# (itself shared by fastapi/openai/supabase) — bumping httpx is a coordinated,
-# broader change, tracked alongside the fastapi/starlette deferral above.
+guardrails-ai==0.11.0      # CASA 6.1.1: was 0.10.2, which pinned click<=8.2.0 (blocked the click fix) — 0.11.0 relaxes to click<9.0.0, litellm<2.0.0,>=1.82.5, pip>=26.1.2, all compatible with the pins below.
+click>=8.3.3               # CASA 6.1.1: was resolving to 8.2.0 (PYSEC-2026-2132) — unblocked by the guardrails-ai bump above.
+litellm==1.84.0            # CASA 6.1.1: was resolving to 1.83.0 transitively (13 CVEs) — unblocked now that httpx is 0.28.1 (litellm 1.83.7+ hard-pins httpx==0.28.1) and guardrails-ai 0.11.0 allows <2.0.0.
+httpx2>=2.11.0             # CASA 6.1.1: transitive via langsmith (request-smuggling + SOCKS5-over-wss CVEs) — unblocked now that anyio is >=4.10 (below).
 setuptools>=83.0.0         # CASA 6.1.1: transitive via torch/sentence-transformers, was resolving to 79.0.1 (PYSEC-2026-3447)
-# Two more CASA 6.1.1 findings surfaced only after this file's other fixes were
-# rebuilt (pinned-floor transitive deps drift forward on every fresh install,
-# with no lockfile to keep them reproducible) — both deferred rather than
-# force-fixed, since each pulled a cascading incompatible-version chain:
-#   - pyasn1 0.4.8 (recursion-DoS, PYSEC-2026-2263, fixed in 0.6.3): blocked by
-#     python-jose==3.4.0's hard cap pyasn1<0.5.0. Not considered exploitable
-#     here — auth is HS256-only (see auth.py), so the ASN.1/key-parsing code
-#     paths pyasn1 backs (RSA/ECDSA key import for google-auth, python-jose's
-#     asymmetric algorithms) are never exercised on attacker-controlled input.
-#   - httpx2 2.6.0, pulled in by langsmith (request-smuggling + SOCKS5-over-wss
-#     plaintext CVEs, fixed in 2.10.0/2.11.0): blocked because the fix requires
-#     anyio>=4.10, but anyio==4.3.0 is pinned below for LiveKit/FastAPI/httpx
-#     compatibility — bumping anyio is itself a coordinated, broader change.
-#     langsmith is only used for observability tracing, not on any
-#     request-handling path with attacker-controlled HTTP framing.
 
 # AWS S3 (optional - for recordings if not using Supabase Storage)
 boto3==1.34.110
@@ -59,16 +41,16 @@ google-auth-oauthlib==1.2.0
 google-api-python-client==2.127.0
 
 # HTTP
-httpx==0.27.0
-pypdf>=5.0.0,<6
-pillow>=10.0.0,<12
+httpx==0.28.1              # CASA 6.1.1: was 0.27.0 — bumped to unblock litellm's fix (every fixed litellm release hard-pins httpx==0.28.1). Verified compatible with installed openai (2.54.0, requires httpx>=0.23,<1), supabase/postgrest (require httpx>=0.26,<0.29). livekit/livekit-api/twilio have no httpx constraint at all.
+pypdf>=6.16.1,<7    # CASA 6.1.1: was >=5.0.0,<6 (41 CVEs on 5.9.0). Usage here is only PdfReader(...).pages[...].extract_text() — a stable, unchanged API across the 5->6 migration (the breaking renames, create_viewer_preference/compress_content_stream, are PdfWriter-only and never used in this codebase).
+pillow>=12.3.0,<13  # CASA 6.1.1: was >=10.0.0,<12 (18 CVEs on 11.3.0). Usage here is only Image.open()/.verify()/.convert()/.save() — none of the 12.0 removed APIs (ImageMath.eval, ImageCms internals, raise_oserror) are used anywhere in this codebase.
 
 # Website scraper (knowledge base auto-populate)
 beautifulsoup4==4.12.3
 defusedxml==0.7.1
 
 # Async
-anyio==4.3.0
+anyio>=4.10,<5             # CASA 6.1.1: was 4.3.0 — bumped to unblock httpx2's fix (requires anyio>=4.10). Verified compatible with starlette (anyio<5,>=3.4.0) and httpx (anyio, no ceiling).
 
 twilio==9.10.4
 stripe>=11.0.0
