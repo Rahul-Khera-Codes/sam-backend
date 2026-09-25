@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     # Microsoft OAuth (Outlook email integration — Azure AD app "AI Employees - Outlook Integration")
     microsoft_client_id: str = ""
     microsoft_client_secret: str = ""
-    outlook_redirect_uri: str = "http://localhost:5173/integrations/outlook/callback"
+    outlook_redirect_uri: str = "https://portal.aiemployeesinc.com/integrations/outlook/callback"
 
     # Twilio / SIP
     twilio_account_sid: str = ""
