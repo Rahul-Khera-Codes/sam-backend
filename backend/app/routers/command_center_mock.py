@@ -6,7 +6,9 @@ from datetime import datetime, timedelta, timezone
 from math import cos, sin
 from uuid import uuid4
 
-from fastapi import APIRouter, Body, Query
+from fastapi import APIRouter, Body, Depends, Query
+
+from app.core.auth import require_platform_super_admin
 
 router = APIRouter(tags=["command-center-mock"])
 
@@ -239,17 +241,26 @@ def _monday_kickoff() -> dict:
 
 
 @router.get("/sales-command-center/dashboard")
-async def get_sales_command_center_dashboard(business_id: str | None = Query(default=None)):
+async def get_sales_command_center_dashboard(
+    business_id: str | None = Query(default=None),
+    actor_user_id: str = Depends(require_platform_super_admin),
+):
     return _sales_dashboard()
 
 
 @router.get("/sales-command-center/monday-kickoff")
-async def get_sales_command_center_monday_kickoff(business_id: str | None = Query(default=None)):
+async def get_sales_command_center_monday_kickoff(
+    business_id: str | None = Query(default=None),
+    actor_user_id: str = Depends(require_platform_super_admin),
+):
     return _monday_kickoff()
 
 
 @router.post("/sales-command-center/monday-kickoff/report")
-async def generate_monday_kickoff_report(payload: dict | None = Body(default=None)):
+async def generate_monday_kickoff_report(
+    payload: dict | None = Body(default=None),
+    actor_user_id: str = Depends(require_platform_super_admin),
+):
     return {
         "id": f"mock-report-{uuid4()}",
         "status": "generated",
