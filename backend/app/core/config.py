@@ -1,6 +1,6 @@
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import List
+from typing import List, Optional
 
 
 class Settings(BaseSettings):
@@ -81,12 +81,33 @@ class Settings(BaseSettings):
     stripe_webhook_secret: str = ""
     stripe_starter_price_id: str = ""
     stripe_growth_price_id: str = ""
-    stripe_pro_price_id: str = ""
     stripe_enterprise_price_id: str = ""
     stripe_exec_agent_price_id: str = ""
     # Free during beta — flip on once Sam names a price and is ready to enforce.
     # See docs/adr/0001-billing-addon-access-gating.md
     exec_agent_addon_enforced: bool = False
+    # Minute caps per plan — tunable via .env without a code change/redeploy.
+    # Mirrors the price-id-via-settings pattern above. See docs/features/billing-pricing-page.md.
+    plan_starter_minute_limit: int = 800
+    plan_growth_minute_limit: int = 1500
+    # None = unlimited — Enterprise has no hard cap, distinct from "not configured" (which
+    # would be 0 on the other plans). _plan_by_price_id/get_subscription pass this through as-is.
+    plan_enterprise_minute_limit: Optional[int] = None
+    plan_trial_minute_limit: int = 60
+    trial_period_days: int = 14
+    # Days a past_due subscription gets before gated dashboard actions
+    # (Marketing/Sales/HR — see billing_gate.py) start blocking. Phone calls
+    # are never gated, regardless of this setting.
+    subscription_grace_period_days: int = 5
+
+    # PLAN_ENTERPRISE_MINUTE_LIMIT="" in .env (set but left blank, meaning
+    # "use the default unlimited") would otherwise fail int parsing — pydantic
+    # only applies the None default when the var is absent entirely, not when
+    # it's present-but-empty. Treat blank the same as absent.
+    @field_validator("plan_enterprise_minute_limit", mode="before")
+    @classmethod
+    def _blank_means_unset(cls, v):
+        return None if v == "" else v
     
     billing_success_url: str = "http://localhost:8080/dashboard/settings/billing?success=true"
     billing_cancel_url: str = "http://localhost:8080/dashboard/settings/billing"

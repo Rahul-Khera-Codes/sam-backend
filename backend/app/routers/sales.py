@@ -20,6 +20,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from app.core.auth import get_user_id, verify_business_access
+from app.core.billing_gate import require_plan_feature
 from app.core.config import settings
 from app.core.supabase import supabase_admin
 from app.schemas.sales import (
@@ -124,6 +125,7 @@ async def create_lead_lookup(
     user_id: str = Depends(get_user_id),
 ):
     verify_business_access(user_id, body.business_id)
+    require_plan_feature(body.business_id, "sales")
 
     if not settings.apify_api_token:
         raise HTTPException(status_code=503, detail="Apify is not configured yet.")

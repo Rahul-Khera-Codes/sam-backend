@@ -13,6 +13,7 @@ import uuid
 from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
 from openai import AsyncOpenAI
 
+from app.core.billing_gate import require_plan_feature
 from app.core.config import settings
 from app.core.supabase import supabase_admin
 from app.schemas.hr import (
@@ -145,6 +146,7 @@ async def submit_application(
     cover_letter: UploadFile | None = File(None),
 ) -> HrJobApplicationSubmitResponse:
     job = _fetch_job_accepting_applications(job_id)
+    require_plan_feature(job["business_id"], "hr")
     _validate_pdf_upload(resume)
 
     resume_bytes = await resume.read()

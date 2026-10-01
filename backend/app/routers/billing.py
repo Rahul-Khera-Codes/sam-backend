@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from fastapi.responses import JSONResponse
 
 from app.core.auth import get_user_id, verify_business_access
+from app.core.billing_gate import get_access_status, is_platform_admin_business
 from app.core.config import settings
 from app.core.supabase import supabase_admin
 from app.schemas.billing import (
@@ -22,24 +23,29 @@ from app.schemas.billing import (
     CreateCheckoutSessionResponse,
     CustomerPortalResponse,
     ExecutiveAgentAddonResponse,
+    ChangePlanRequest,
+    ChangePlanResponse,
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
+# Minute limits are read from Settings (not a literal here) so they're tunable
+# via .env without a code change — see docs/features/billing-pricing-page.md.
+# Enterprise is a fixed $999/mo self-serve plan with plan_enterprise_minute_limit=None
+# (unlimited) by default — same mechanics as Starter/Growth otherwise.
 PLAN_KEY_MAP = {
-    "starter":      ("stripe_starter_price_id",    "Starter",      200),
-    "growth":       ("stripe_growth_price_id",     "Growth",       600),
-    "professional": ("stripe_pro_price_id",        "Professional", 1500),
-    "enterprise":   ("stripe_enterprise_price_id", "Enterprise",   4000),
+    "starter":    ("stripe_starter_price_id",    "Starter",    "plan_starter_minute_limit"),
+    "growth":     ("stripe_growth_price_id",     "Growth",     "plan_growth_minute_limit"),
+    "enterprise": ("stripe_enterprise_price_id", "Enterprise", "plan_enterprise_minute_limit"),
 }
 
 
 def _plan_by_price_id(price_id: str) -> dict:
-    for plan_key, (attr, name, limit) in PLAN_KEY_MAP.items():
+    for plan_key, (attr, name, limit_attr) in PLAN_KEY_MAP.items():
         if getattr(settings, attr, "") == price_id:
-            return {"name": name, "minute_limit": limit}
+            return {"name": name, "minute_limit": getattr(settings, limit_attr, 0)}
     return {}
 
 
@@ -90,9 +96,36 @@ async def get_subscription(
     verify_business_access(user_id, business_id)
     biz = _get_business(business_id)
 
-    if not biz.get("stripe_subscription_id"):
-        return SubscriptionResponse(has_subscription=False)
+    if is_platform_admin_business(business_id):
+        # Platform staff's own testing/demo business — always free Enterprise,
+        # regardless of whatever (if anything) is actually in Stripe for it.
+        # Shown as Enterprise/active/unlimited so the Billing page UI matches
+        # what billing_gate actually grants, rather than looking "unsubscribed"
+        # while every feature silently works.
+        minutes_used = _count_minutes_in_period(
+            business_id, biz.get("subscription_period_start"), biz.get("subscription_period_end")
+        )
+        return SubscriptionResponse(
+            has_subscription=True,
+            status="active",
+            plan_name="Enterprise",
+            price_id=biz.get("stripe_price_id"),
+            minute_limit=None,
+            minutes_used=minutes_used,
+            period_start=biz.get("subscription_period_start"),
+            period_end=biz.get("subscription_period_end"),
+            executive_agent_addon_enabled=bool(biz.get("stripe_exec_agent_item_id")),
+            executive_agent_addon_required=settings.exec_agent_addon_enforced,
+            access_status="ok",
+            grace_days_remaining=None,
+            is_trial=False,
+        )
 
+    if not biz.get("stripe_subscription_id"):
+        return SubscriptionResponse(has_subscription=False, access_status="blocked")
+
+    access_status, grace_days_remaining = get_access_status(business_id)
+    status = biz.get("stripe_subscription_status")
     plan_info = _plan_by_price_id(biz.get("stripe_price_id") or "")
     minutes_used = _count_minutes_in_period(
         business_id,
@@ -100,12 +133,23 @@ async def get_subscription(
         biz.get("subscription_period_end"),
     )
 
+    # Trial rides on the real Starter price (see create_checkout_session), so
+    # _plan_by_price_id alone would report "Starter" + Starter's full minute
+    # limit during a trial. Override at read time — no extra write path, no
+    # stale-state window once Stripe flips trialing -> active.
+    is_trial = status == "trialing"
+    plan_name = "Free Trial" if is_trial else plan_info.get("name")
+    minute_limit = (
+        settings.plan_trial_minute_limit if is_trial
+        else (biz.get("subscription_call_limit") or plan_info.get("minute_limit"))
+    )
+
     return SubscriptionResponse(
         has_subscription=True,
-        status=biz.get("stripe_subscription_status"),
-        plan_name=plan_info.get("name"),
+        status=status,
+        plan_name=plan_name,
         price_id=biz.get("stripe_price_id"),
-        minute_limit=biz.get("subscription_call_limit") or plan_info.get("minute_limit"),
+        minute_limit=minute_limit,
         minutes_used=minutes_used,
         period_start=biz.get("subscription_period_start"),
         period_end=biz.get("subscription_period_end"),
@@ -114,6 +158,12 @@ async def get_subscription(
         # enforcement switch instead of guessing (ADR 0001) — both driven by
         # the same settings.exec_agent_addon_enforced flag.
         executive_agent_addon_required=settings.exec_agent_addon_enforced,
+        access_status=access_status,
+        grace_days_remaining=grace_days_remaining,
+        is_trial=is_trial,
+        # For a trialing subscription, current_period_end IS the trial end
+        # (the first "period" is the trial) — no separate Stripe field needed.
+        trial_end=biz.get("subscription_period_end") if is_trial else None,
     )
 
 
@@ -127,16 +177,29 @@ async def create_checkout_session(
     verify_business_access(user_id, body.business_id)
 
     plan_key = body.plan.lower()
-    if plan_key not in PLAN_KEY_MAP:
-        raise HTTPException(status_code=400, detail="Invalid plan. Must be starter, growth, professional, or enterprise.")
+    # Trial rides on the real Starter price with trial_period_days attached —
+    # not a separate $0 product — so it auto-converts to paid Starter when the
+    # trial ends, with no extra webhook/sync logic needed for that transition.
+    is_trial = plan_key == "trial"
+    lookup_key = "starter" if is_trial else plan_key
+    if lookup_key not in PLAN_KEY_MAP:
+        raise HTTPException(status_code=400, detail="Invalid plan. Must be starter, growth, enterprise, or trial.")
 
-    price_attr, plan_name, _minute_limit = PLAN_KEY_MAP[plan_key]
+    price_attr, plan_name, _minute_limit_attr = PLAN_KEY_MAP[lookup_key]
     price_id = getattr(settings, price_attr, "")
     if not price_id:
         raise HTTPException(status_code=503, detail=f"Stripe price ID for {plan_name} is not configured")
 
     _init_stripe()
     biz = _get_business(body.business_id)
+
+    if is_trial and biz.get("stripe_customer_id"):
+        # A Stripe customer only ever gets linked once a checkout actually
+        # completes (see _handle_checkout_completed) — so this blocks repeat
+        # trials for a business that already subscribed (and possibly
+        # canceled) before, not first-time signups.
+        raise HTTPException(status_code=400, detail="Free trial already used for this business.")
+
     customer_id = biz.get("stripe_customer_id") or None
 
     session = stripe.checkout.Session.create(
@@ -147,6 +210,7 @@ async def create_checkout_session(
         cancel_url=settings.billing_cancel_url,
         metadata={"business_id": body.business_id},
         **({"customer": customer_id} if customer_id else {}),
+        **({"subscription_data": {"trial_period_days": settings.trial_period_days}} if is_trial else {}),
     )
 
     return CreateCheckoutSessionResponse(checkout_url=session.url)
@@ -175,6 +239,72 @@ async def customer_portal(
         return_url=settings.billing_cancel_url,
     )
     return CustomerPortalResponse(portal_url=session.url)
+
+
+# ── POST /billing/change-plan ────────────────────────────────────────────────
+# Existing subscriber switching between Starter/Growth/Enterprise via
+# Stripe::Subscription.modify with proration. Deliberately does NOT write to
+# `businesses` itself: Subscription.modify
+# fires customer.subscription.updated, and the existing webhook handler
+# (_handle_subscription_upsert below) already re-syncs the row from that event —
+# duplicating that sync here would be two write paths for the same data.
+# See docs/features/billing-pricing-page.md for the webhook-ordering caveat this
+# implies for callers (a GET /subscription right after this may briefly be stale).
+
+@router.post("/change-plan", response_model=ChangePlanResponse)
+async def change_plan(
+    body: ChangePlanRequest,
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, body.business_id)
+    biz = _get_business(body.business_id)
+
+    sub_id = biz.get("stripe_subscription_id")
+    if not sub_id or biz.get("stripe_subscription_status") in (None, "canceled"):
+        raise HTTPException(status_code=400, detail="No active subscription to change. Subscribe to a plan first.")
+
+    target_key = body.plan.lower()
+    if target_key not in PLAN_KEY_MAP:
+        raise HTTPException(status_code=400, detail="Invalid target plan. Must be starter, growth, or enterprise.")
+
+    price_attr, plan_name, _minute_limit_attr = PLAN_KEY_MAP[target_key]
+    new_price_id = getattr(settings, price_attr, "")
+    if not new_price_id:
+        raise HTTPException(status_code=503, detail=f"Stripe price ID for {plan_name} is not configured")
+
+    current_price_id = biz.get("stripe_price_id")
+    if current_price_id == new_price_id:
+        raise HTTPException(status_code=400, detail=f"Already on the {plan_name} plan.")
+
+    _init_stripe()
+    try:
+        sub = stripe.Subscription.retrieve(sub_id)
+    except stripe.InvalidRequestError:
+        raise HTTPException(status_code=404, detail="Stripe subscription not found")
+
+    items_data = sub["items"]["data"]
+    if not items_data:
+        raise HTTPException(status_code=500, detail="Subscription has no base plan item to modify")
+
+    # Match the base-plan item by its current price (robust against item
+    # ordering); fall back to the first item, which is the only ordering
+    # that's ever existed so far (base item created at checkout time, the
+    # exec-agent add-on item always created after, as a second item).
+    base_item = next(
+        (it for it in items_data if it.get("price", {}).get("id") == current_price_id),
+        items_data[0],
+    )
+
+    try:
+        stripe.Subscription.modify(
+            sub_id,
+            items=[{"id": base_item["id"], "price": new_price_id}],
+            proration_behavior="create_prorations",
+        )
+    except stripe.InvalidRequestError as e:
+        raise HTTPException(status_code=400, detail=f"Stripe rejected the plan change: {e.user_message or str(e)}")
+
+    return ChangePlanResponse(status="ok", price_id=new_price_id)
 
 
 # ── Executive Agent add-on ───────────────────────────────────────────────────
@@ -336,12 +466,28 @@ def _handle_subscription_upsert(sub) -> None:
     if plan_info.get("minute_limit"):
         update["subscription_call_limit"] = plan_info["minute_limit"]
 
-    r = supabase_admin.table("businesses").select("id").eq("stripe_customer_id", customer_id).limit(1).execute()
+    r = (
+        supabase_admin.table("businesses")
+        .select("id,subscription_past_due_since")
+        .eq("stripe_customer_id", customer_id)
+        .limit(1)
+        .execute()
+    )
     if not r.data:
         logger.warning("No business found for Stripe customer %s", customer_id)
         return
 
     business_id = r.data[0]["id"]
+    new_status = _attr(sub, "status")
+    if new_status == "past_due":
+        # Stamp only the first time we see it go past_due — a webhook retry
+        # or an unrelated update while still past_due must not reset the
+        # grace-period clock (see app/core/billing_gate.py).
+        if not r.data[0].get("subscription_past_due_since"):
+            update["subscription_past_due_since"] = datetime.now(timezone.utc).isoformat()
+    else:
+        update["subscription_past_due_since"] = None
+
     supabase_admin.table("businesses").update(update).eq("id", business_id).execute()
     logger.info("Subscription upserted for business %s: %s", business_id, _attr(sub, "status"))
 
@@ -361,6 +507,7 @@ def _handle_subscription_deleted(sub) -> None:
         "subscription_call_limit": None,
         "subscription_period_start": None,
         "subscription_period_end": None,
+        "subscription_past_due_since": None,
         # Canceling the base subscription cancels every item on it, including
         # the exec-agent add-on — clear our record so it doesn't go stale.
         "stripe_exec_agent_item_id": None,

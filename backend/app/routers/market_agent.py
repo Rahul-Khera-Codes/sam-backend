@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from openai import AsyncOpenAI
 
 from app.core.auth import get_user_id, verify_business_access
+from app.core.billing_gate import require_plan_feature
 from app.core.config import settings
 from app.core.supabase import supabase_admin
 from app.routers.analytics import get_summary as get_analytics_summary
@@ -399,6 +400,7 @@ async def trigger_refresh(
     user_id: str = Depends(get_user_id),
 ):
     verify_business_access(user_id, business_id)
+    require_plan_feature(business_id, "sales")
 
     if not settings.exa_api_key:
         raise HTTPException(status_code=503, detail="Exa.ai is not configured yet.")
