@@ -119,6 +119,7 @@ async def get_subscription(
             access_status="ok",
             grace_days_remaining=None,
             is_trial=False,
+            is_platform_admin=True,
         )
 
     if not biz.get("stripe_subscription_id"):

@@ -21,6 +21,11 @@ class SubscriptionResponse(BaseModel):
     # this independently rather than trusting a value the client could send back.
     access_status: str = "ok"
     grace_days_remaining: Optional[int] = None
+    # True for platform-staff accounts getting the free Enterprise exemption
+    # (see billing_gate.is_platform_admin_business) — no real Stripe customer
+    # exists behind these, so the frontend must hide "Manage Plan" (it would
+    # always 400) rather than route them into create-checkout-session/change-plan.
+    is_platform_admin: bool = False
 
 
 class CreateCheckoutSessionRequest(BaseModel):
