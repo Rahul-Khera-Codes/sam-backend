@@ -7,6 +7,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.auth import get_user_id, verify_business_access
+from app.core.billing_gate import require_plan_feature
 from app.core.config import settings
 from app.schemas.hr_interviews import (
     HrHumanInterviewUpsertRequest,
@@ -90,6 +91,11 @@ def _require_interview_admin(user_id: str, business_id: str) -> None:
 
 
 def _raise_domain_error(exc: Exception) -> None:
+    if isinstance(exc, HTTPException):
+        # Already a deliberate HTTP error (e.g. require_plan_feature's
+        # 402) — re-raise as-is rather than letting it fall through to the
+        # generic 502 below, which would mask the real status/detail.
+        raise exc
     if isinstance(exc, InterviewBankNotFound):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if isinstance(exc, InterviewComplianceError):
@@ -304,6 +310,7 @@ async def create_public_interview_live_session(
 ) -> HrInterviewLiveSessionResponse:
     try:
         join_info = validate_public_join_token(token)
+        require_plan_feature(join_info.business_id, "hr")
         room_name = f"hr-interview-{join_info.session_id[:8]}-{uuid.uuid4().hex[:8]}"
         await livekit_service.create_room(room_name)
         session_row = prepare_live_session(token, room_name=room_name)

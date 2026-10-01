@@ -22,6 +22,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from app.core.auth import get_user_id, verify_business_access
+from app.core.billing_gate import require_plan_feature
 from app.core.config import settings
 from app.core.supabase import supabase_admin
 from app.routers.knowledge_base import _validate_url_is_public
@@ -484,6 +485,7 @@ async def generate_competitor_report(
         raise HTTPException(status_code=404, detail="Competitor not found.")
     competitor = comp_result.data[0]
     verify_business_access(user_id, competitor["business_id"])
+    require_plan_feature(competitor["business_id"], "sales")
 
     if not settings.apify_api_token or not settings.apify_webhook_base_url:
         raise HTTPException(status_code=503, detail="Apify is not configured yet.")

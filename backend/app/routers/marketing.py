@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile
 
 from app.core.auth import get_user_id, verify_business_access
+from app.core.billing_gate import require_plan_feature
 from app.schemas.marketing import (
     MarketingAssetResponse,
     MarketingCampaignCreateRequest,
@@ -232,6 +233,7 @@ async def create_marketing_scheduled_post(
     user_id: str = Depends(get_user_id),
 ):
     verify_business_access(user_id, business_id)
+    require_plan_feature(business_id, "marketing")
     return create_scheduled_post(business_id, user_id, body)
 
 
@@ -242,6 +244,7 @@ async def publish_marketing_post_now(
     user_id: str = Depends(get_user_id),
 ):
     verify_business_access(user_id, business_id)
+    require_plan_feature(business_id, "marketing")
     scheduled_post = create_scheduled_post(
         business_id,
         user_id,
