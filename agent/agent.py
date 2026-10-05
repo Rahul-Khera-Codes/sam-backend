@@ -733,6 +733,11 @@ class Assistant(Agent):
                 )
 
         try:
+            # Normalize before storing so the reminder/reschedule scheduler — which
+            # dials appointments.client_phone directly — never gets a malformed,
+            # as-transcribed number (AIE-83). Matches what _resolve_or_create_customer
+            # already does for customers.phone, keeping both fields in sync.
+            client_phone = _normalize_phone_e164(client_phone) or client_phone
             booking_location_id_final = (loc["id"] if loc else None) or self._location_id
             customer_id = _resolve_or_create_customer(
                 self._supabase, self._business_id, booking_location_id_final,
@@ -1817,6 +1822,24 @@ async def voice_agent(ctx: agents.JobContext):
         from livekit.agents.utils.participant import wait_for_participant_attribute
 
         _SIP_ANSWER_TIMEOUT_S = 45
+        # AIE-83: wait_for_participant_attribute below only resolves on the
+        # attribute reaching "active" or on participant/room disconnect — any
+        # other terminal SIP status (busy, failed, rejected) that doesn't also
+        # remove the participant is otherwise invisible, and a timeout gives no
+        # clue which case occurred. Track every status transition independently
+        # so the timeout branch below can log what actually happened.
+        _last_sip_status = (getattr(participant, "attributes", {}) or {}).get("sip.callStatus", "")
+
+        def _on_sip_attrs_changed(changed_attrs: dict, p) -> None:
+            nonlocal _last_sip_status
+            if p.identity == participant.identity and "sip.callStatus" in changed_attrs:
+                _last_sip_status = changed_attrs["sip.callStatus"]
+                logger.info(
+                    "Outbound SIP call status changed — call_id=%s status=%s",
+                    call_id, _last_sip_status,
+                )
+
+        ctx.room.on("participant_attributes_changed", _on_sip_attrs_changed)
         try:
             await asyncio.wait_for(
                 wait_for_participant_attribute(
@@ -1830,8 +1853,9 @@ async def voice_agent(ctx: agents.JobContext):
             logger.info("Outbound SIP call answered — proceeding (call_id=%s)", call_id)
         except (asyncio.TimeoutError, RuntimeError) as e:
             logger.info(
-                "Outbound SIP call not answered (%s) — marking missed, call_id=%s",
-                e, call_id,
+                "Outbound SIP call not answered (%s) — marking missed, call_id=%s, "
+                "last_sip_status=%s",
+                e, call_id, _last_sip_status or "unknown",
             )
             if call_id:
                 if supabase is None:
@@ -1844,6 +1868,7 @@ async def voice_agent(ctx: agents.JobContext):
                             "duration_seconds": int(
                                 (datetime.now(timezone.utc) - call_start_time).total_seconds()
                             ),
+                            "miss_reason": _last_sip_status or "no_status_received",
                         }).eq("id", call_id).execute()
                     except Exception as write_err:
                         logger.warning(
@@ -1851,6 +1876,8 @@ async def voice_agent(ctx: agents.JobContext):
                         )
             await ctx.room.disconnect()
             return
+        finally:
+            ctx.room.off("participant_attributes_changed", _on_sip_attrs_changed)
 
     # ── Create call record for SIP calls (no backend /calls/initiate was called) ─
     if is_sip_call and not call_id and business_id:

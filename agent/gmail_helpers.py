@@ -21,8 +21,9 @@ async def _gmail_get_valid_token(
 ) -> tuple[str | None, str]:
     """
     Return (access_token, sender_email) for the business+location Gmail account.
-    Refreshes the token if expired. No fallback — if the location has no token,
-    returns (None, "") and the caller should skip sending.
+    Refreshes the token if expired. Falls back to the business-wide
+    (location_id IS NULL) token when the location has no token of its own,
+    matching gmail_integrations.py's status-check fallback.
     """
     try:
         query = supabase.table("gmail_tokens").select("*").eq("business_id", business_id)
@@ -32,6 +33,14 @@ async def _gmail_get_valid_token(
             query = query.is_("location_id", "null")
         r = query.limit(1).execute()
         data = getattr(r, "data", None) or []
+        if not data and location_id:
+            r = (
+                supabase.table("gmail_tokens").select("*")
+                .eq("business_id", business_id)
+                .is_("location_id", "null")
+                .limit(1).execute()
+            )
+            data = getattr(r, "data", None) or []
         if not data:
             return None, ""
         row = data[0]
