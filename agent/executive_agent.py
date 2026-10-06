@@ -9,7 +9,8 @@ Tools available:
   Gmail  — list_emails, read_email, draft_reply (preview → approve → send)
   Calendar — get_schedule, find_free_slots, create_calendar_event (preview → approve)
   Appointments — list_appointments, reschedule_appointment, cancel_appointment
-  Customers — search_customers, get_customer (contact info, do-not-contact, appointment history)
+  Customers — search_customers, get_customer (contact info, do-not-contact, appointment history),
+              prepare_bulk_customer_email / send_bulk_customer_email (email the whole list at once)
 """
 
 import asyncio
@@ -25,7 +26,7 @@ from livekit.plugins import openai, liveavatar
 
 import httpx as _httpx
 from constants import GOOGLE_TOKEN_URL, GOOGLE_CALENDAR_BASE, GMAIL_SEND_URL
-from gmail_helpers import _gmail_get_valid_token
+from gmail_helpers import _gmail_get_valid_token, _gmail_connection_diagnostic
 from gcal_helpers import _gcal_get_valid_token, _gcal_refresh_token
 from supabase_helpers import (
     _get_supabase,
@@ -208,7 +209,7 @@ You are Remi, the personal executive assistant for {business_name}. You work dir
 - Gmail: read and summarise recent emails, draft replies, send (with approval).
 - Google Calendar: show the schedule, find free slots, create events.
 - Appointments: view, reschedule, or cancel customer bookings.
-- Customers: search the customer list by name, email, or phone; look up a customer's contact info, do-not-contact status, notes, and appointment history.
+- Customers: search the customer list by name, email, or phone; look up a customer's contact info, do-not-contact status, notes, and appointment history; email one customer, or email every qualifying customer in the list at once.
 - Documents: attach owner-selected PDFs to emails, list Remi context documents, and search those PDFs for conversation context.
 
 ## How to behave
@@ -216,6 +217,7 @@ You are Remi, the personal executive assistant for {business_name}. You work dir
 - ANSWER GENERAL AND PERSONAL QUESTIONS DIRECTLY. Your name is Remi — if asked who you are or your name, say "I'm Remi, your assistant for {business_name}." Do NOT turn casual or identity questions into a task, and never say you don't have a name.
 - Only use a tool when the owner actually wants an email, calendar, or appointment action. Never assume a message is a scheduling/appointment request unless they clearly ask for one.
 - If the owner asks about a customer, or wants to retrieve a customer's info or email them, call `search_customers` first to find them (or `get_customer` if you already have their id from a prior search). Use the email address it returns for `draft_email`/`send_email_draft` — never guess or invent a customer's email address. If the customer is marked do-not-contact, tell the owner clearly and get explicit confirmation before drafting anything to them.
+- If the owner wants to email EVERY customer (or "everyone in the list", "all my customers") rather than one person, use `prepare_bulk_customer_email` — never loop `draft_email` per customer. It shows the owner how many customers will receive it before anything sends. Only call `send_bulk_customer_email` after the owner explicitly confirms that preview.
 - Always confirm before sending emails or creating calendar events — draft first, show the preview, then wait for "yes, go ahead".
 - If an email draft is already shown and the owner asks for changes, call `update_email_draft` with the revised recipient, subject, or full body as needed. Do not merely say the changes are complete.
 - When a tool shows a card on screen (emails, schedule), the details are visible to the owner — give a brief one-line summary and ask what they'd like to do; do NOT read every item aloud.
@@ -258,6 +260,7 @@ class ExecutiveAssistant(Agent):
         # Pending preview state (awaiting owner approval)
         self._pending_draft: dict | None = None
         self._pending_card_id: str | None = None
+        self._pending_bulk_email: dict | None = None
         self._card_seq = 0
 
     def _fetch_doc_by_name(self) -> tuple[list[dict], dict[str, dict]]:
@@ -404,7 +407,7 @@ class ExecutiveAssistant(Agent):
         # N+1 of redundant gmail_tokens DB lookups).
         token, _ = await _gmail_get_valid_token(self._supabase, self._business_id, self._location_id)
         if not token:
-            return "Gmail isn't connected for this location yet."
+            return await _gmail_connection_diagnostic(self._supabase, self._business_id, self._location_id)
 
         msgs = await _gmail_list_messages(
             self._supabase, self._business_id, self._location_id, query, max_results, token=token
@@ -749,7 +752,9 @@ class ExecutiveAssistant(Agent):
             self._supabase, self._business_id, self._location_id
         )
         if not token:
-            return "Cannot send — Gmail is not connected for this business."
+            return "Cannot send — " + await _gmail_connection_diagnostic(
+                self._supabase, self._business_id, self._location_id
+            )
 
         # Resolve and download attachment if requested
         pdf_bytes: bytes | None = None
@@ -1347,6 +1352,138 @@ class ExecutiveAssistant(Agent):
             f"phone: {detail['phone'] or 'none on file'}, {len(history)} past appointment(s)."
             f"{dnc_warning}"
         )
+
+    @function_tool()
+    async def prepare_bulk_customer_email(
+        self,
+        context: RunContext,
+        subject: str,
+        body: str,
+    ) -> str:
+        """
+        Prepare one email to send to every qualifying customer in the customer
+        list at once — excludes customers marked do-not-contact and those with
+        no email on file. Shows the owner the exact recipient count and list
+        on screen before anything sends. Only call send_bulk_customer_email
+        after the owner explicitly confirms this preview.
+        """
+        await _set_state(self._room, "thinking")
+        await self._activity_start("Preparing bulk email…")
+        if not self._supabase:
+            return "I can't prepare a bulk email because Supabase is unavailable."
+
+        try:
+            r = (
+                self._supabase.table("customers")
+                .select("id, first_name, last_name, email")
+                .eq("business_id", self._business_id)
+                .eq("do_not_contact", False)
+                .order("last_name")
+                .execute()
+            )
+            rows = getattr(r, "data", None) or []
+        except Exception as e:
+            logger.error("prepare_bulk_customer_email DB error: %s", e)
+            return "Failed to load the customer list. Please try again."
+
+        recipients = [
+            {
+                "id": c["id"],
+                "name": f"{c.get('first_name', '')} {c.get('last_name', '')}".strip(),
+                "email": c["email"],
+            }
+            for c in rows if c.get("email")
+        ]
+        if not recipients:
+            return "No customers with an email on file (and not marked do-not-contact) were found."
+
+        card_id = await self._send_card(
+            "bulk_email_preview",
+            {
+                "subject": subject,
+                "body": body,
+                "count": len(recipients),
+                "recipients": [{"name": r["name"] or r["email"], "email": r["email"]} for r in recipients],
+            },
+            actions=[
+                {"id": "send", "label": f"Send to all {len(recipients)}", "intent": "approve"},
+                {"id": "cancel", "label": "Cancel", "intent": "reject"},
+            ],
+            ephemeral=True,
+        )
+        self._pending_bulk_email = {"subject": subject, "body": body, "recipients": recipients, "card_id": card_id}
+        return (
+            f"I've prepared this email for {len(recipients)} customer(s) with an email on file. "
+            "The full list is shown on screen. Say 'yes, go ahead' to send it to all of them, or tell me what to change."
+        )
+
+    async def _clear_bulk_preview(self) -> None:
+        cid = (self._pending_bulk_email or {}).get("card_id")
+        self._pending_bulk_email = None
+        if cid:
+            await _publish(self._room, {"type": "card_dismiss", "id": cid})
+
+    @function_tool()
+    async def send_bulk_customer_email(
+        self,
+        context: RunContext,
+    ) -> str:
+        """
+        Send the bulk email prepared by prepare_bulk_customer_email to every
+        recipient in that preview. Only call this after the owner explicitly
+        confirms the preview shown on screen.
+        """
+        pending = self._pending_bulk_email
+        if not pending:
+            return "There's no bulk email prepared. Use prepare_bulk_customer_email first."
+
+        await _set_state(self._room, "thinking")
+        await self._activity_start(f"Sending to {len(pending['recipients'])} customers…")
+        token, sender_email = await _gmail_get_valid_token(
+            self._supabase, self._business_id, self._location_id
+        )
+        if not token:
+            return "Cannot send — " + await _gmail_connection_diagnostic(
+                self._supabase, self._business_id, self._location_id
+            )
+
+        import base64
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+
+        subject = pending["subject"]
+        body = pending["body"]
+        sent, failed = 0, 0
+        for recip in pending["recipients"]:
+            msg = MIMEMultipart("alternative")
+            msg["From"] = f"{self._business_name} <{sender_email}>"
+            msg["To"] = recip["email"]
+            msg["Subject"] = subject
+            msg.attach(MIMEText(body, "plain"))
+            raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+            try:
+                async with _httpx.AsyncClient(timeout=20) as http:
+                    r = await http.post(
+                        GMAIL_SEND_URL,
+                        headers={"Authorization": f"Bearer {token}"},
+                        json={"raw": raw},
+                    )
+                    if r.status_code in (200, 201):
+                        sent += 1
+                    else:
+                        failed += 1
+                        logger.warning(
+                            "Bulk email send failed for %s: %s %s", recip["email"], r.status_code, r.text[:200]
+                        )
+            except Exception as e:
+                failed += 1
+                logger.warning("Bulk email send error for %s: %s", recip["email"], e)
+
+        await self._clear_bulk_preview()
+        await self._activity_done("Bulk email sent")
+        if failed:
+            return f"Sent to {sent} customer(s). {failed} failed to send — check the logs for details."
+        return f"Sent to all {sent} customer(s)."
 
 
 # ── LiveKit entry point ───────────────────────────────────────────────────────

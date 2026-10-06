@@ -90,6 +90,56 @@ async def _gmail_get_valid_token(
         return None, ""
 
 
+async def _gmail_connection_diagnostic(
+    supabase,
+    business_id: str,
+    location_id: str | None,
+) -> str:
+    """
+    Build a specific, actionable message when _gmail_get_valid_token found no
+    usable token for (business_id, location_id). Distinguishes "no Gmail
+    connected for this business at all" from "connected, but for a different
+    location" (the AIE-90 case — a token exists but doesn't match this
+    session's location, so the generic "not connected" message was misleading).
+    """
+    try:
+        r = (
+            supabase.table("gmail_tokens")
+            .select("location_id")
+            .eq("business_id", business_id)
+            .execute()
+        )
+        rows = getattr(r, "data", None) or []
+    except Exception as e:
+        logger.warning("Gmail connection diagnostic query failed for business %s: %s", business_id, e)
+        return "Gmail isn't connected for this business yet. Connect it under Settings → Business Settings → Integrations."
+
+    if not rows:
+        return "Gmail isn't connected for this business yet. Connect it under Settings → Business Settings → Integrations."
+
+    other_location_ids = {
+        row.get("location_id") for row in rows
+        if row.get("location_id") and row.get("location_id") != location_id
+    }
+    if not other_location_ids:
+        return "Gmail isn't connected for this location yet. Connect it under Settings → Business Settings → Integrations."
+
+    other_id = next(iter(other_location_ids))
+    location_name = "another location"
+    try:
+        loc_r = supabase.table("locations").select("name").eq("id", other_id).limit(1).execute()
+        loc_rows = getattr(loc_r, "data", None) or []
+        if loc_rows and loc_rows[0].get("name"):
+            location_name = loc_rows[0]["name"]
+    except Exception as e:
+        logger.warning("Failed to resolve location name %s: %s", other_id, e)
+
+    return (
+        f"Gmail is connected for a different location ({location_name}), not this one. "
+        "Switch to that location, or connect Gmail for this location under Settings → Business Settings → Integrations."
+    )
+
+
 async def _gmail_send_confirmation(
     supabase,
     business_id: str,
