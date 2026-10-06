@@ -39,6 +39,13 @@ def build_outlook_auth_url(client_id: str, redirect_uri: str, state: str) -> str
         "response_mode": "query",
         "scope": OUTLOOK_SCOPE,
         "state": state,
+        # Without this, Microsoft can silently reuse an existing sign-in
+        # session and skip the scope-consent screen entirely — the user
+        # appears to "log in" successfully but the returned token never
+        # actually includes Mail.Send, and the callback below rejects the
+        # connection. Forcing "consent" guarantees the permission screen
+        # (and therefore the Mail.Send grant) shows every time.
+        "prompt": "consent",
     })
     return f"{MS_AUTH_BASE}?{params}"
 

@@ -249,26 +249,45 @@ async def get_status(
     row = _get_token_row_for_location(business_id, location_id)
     if not row and location_id:
         row = _get_business_token_row(business_id)
-    if row:
-        google_email = row.get("google_email", "")
-        if not google_email and row.get("access_token"):
-            try:
-                import httpx
-                async with httpx.AsyncClient() as client:
-                    resp = await client.get(
-                        "https://www.googleapis.com/oauth2/v2/userinfo",
-                        headers={"Authorization": f"Bearer {row['access_token']}"},
-                    )
-                    if resp.status_code == 200:
-                        google_email = resp.json().get("email", "")
-                        if google_email:
-                            supabase_admin.table("gmail_tokens").update(
-                                {"google_email": google_email}
-                            ).eq("id", row["id"]).execute()
-            except Exception:
-                pass
-        return {"connected": True, "google_email": google_email, "location_id": location_id}
-    return {"connected": False, "google_email": "", "location_id": location_id}
+    if not row:
+        return {"connected": False, "google_email": "", "location_id": location_id}
+
+    # Row existence alone doesn't mean the connection still works — a revoked
+    # or dead refresh token would still show "Connected" if we only checked
+    # for a row (this masked the real Gmail outage behind AIE-90). Refresh if
+    # expired, then confirm the token actually authenticates against Google,
+    # every call — not just once when google_email was first cached.
+    google_email = row.get("google_email", "")
+    access_token = await gmail.get_valid_access_token(
+        supabase_admin, business_id, settings.google_client_id, settings.google_client_secret, location_id,
+    )
+    if not access_token:
+        return {"connected": False, "google_email": google_email, "location_id": location_id}
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://www.googleapis.com/oauth2/v2/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "Gmail status validation failed for business %s loc %s: %s %s",
+                    business_id, location_id, resp.status_code, resp.text[:200],
+                )
+                return {"connected": False, "google_email": google_email, "location_id": location_id}
+            fetched_email = resp.json().get("email", "")
+            if fetched_email and fetched_email != google_email:
+                google_email = fetched_email
+                supabase_admin.table("gmail_tokens").update(
+                    {"google_email": google_email}
+                ).eq("id", row["id"]).execute()
+    except Exception as e:
+        logger.warning("Gmail status validation request failed for business %s loc %s: %s", business_id, location_id, e)
+        return {"connected": False, "google_email": google_email, "location_id": location_id}
+
+    return {"connected": True, "google_email": google_email, "location_id": location_id}
 
 
 # ── DELETE /integrations/gmail/disconnect ─────────────────────────────────────

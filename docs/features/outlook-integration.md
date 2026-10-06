@@ -79,6 +79,30 @@ access only, same as Gmail.
   those all still use Gmail exclusively.
 - **Migration applied.** `20260903000000_outlook_tokens.sql` was pushed 2026-09-03;
   `supabase gen types` confirmed the hand-written TS types match exactly.
-- **Still needed before this is testable end-to-end:** fix the double-slash typo in the
-  Azure app's registered redirect URI, and paste the real `MICROSOFT_CLIENT_SECRET` value
-  into `backend/.env` (see SESSION_HANDOFF.md → Pending Manual Steps).
+- **Redirect URI typo (AIE-34) — fixed 2026-09-25.** The Azure app's registered redirect URI
+  had a double slash; corrected on both the Azure app and `OUTLOOK_REDIRECT_URI`.
+  `MICROSOFT_CLIENT_SECRET`/`MICROSOFT_CLIENT_ID`/`OUTLOOK_REDIRECT_URI` are all populated in
+  `backend/.env`.
+
+## Bug fix (AIE-34, 2026-10-06) — "login works but doesn't connect"
+
+After the redirect-URI fix above, QA could get through Microsoft's sign-in screen but the
+connection still failed to save, with no clear reason shown.
+
+- **Root cause**: `build_outlook_auth_url()` (`outlook_email_service.py`) never set Microsoft's
+  `prompt` parameter. Without `prompt=consent`, Microsoft can silently reuse an existing
+  sign-in session and skip the scope-consent screen — the user appears to log in successfully,
+  but the token Microsoft returns never actually includes the `Mail.Send` scope. The callback
+  (`outlook_integrations.py:154-167`) already correctly rejected any token missing `Mail.Send`
+  with a 400, which is exactly the silent "doesn't connect" behavior reported.
+- **Fix**: added `"prompt": "consent"` to the auth URL, matching the Gmail builder's existing
+  `prompt: "consent"` — forces Microsoft to show the full permission screen (and therefore
+  grant `Mail.Send`) on every connect attempt.
+- **Secondary fix**: `completeOutlookOAuth()` (`src/lib/voiceAgentApi.ts`) threw the raw
+  response body as the error message instead of parsing the backend's `{"detail": ...}` JSON —
+  so even when the backend's 400 *did* fire with a specific reason, the toast shown to the user
+  was unreadable raw JSON instead of the actual message. Now parses `detail` the same way
+  `completeGmailOAuth()` already did.
+- Verified: Python/TS compile clean, both Docker stacks rebuilt and confirmed healthy,
+  `build_outlook_auth_url()` confirmed to emit `prompt=consent` in the generated URL. Not yet
+  verified: a live end-to-end reconnect against the real Azure app.
