@@ -20,32 +20,45 @@ async def _gmail_get_valid_token(
     location_id: str | None = None,
 ) -> tuple[str | None, str]:
     """
-    Return (access_token, sender_email) for the business+location Gmail account.
-    Refreshes the token if expired. Falls back to the business-wide
-    (location_id IS NULL) token when the location has no token of its own,
-    matching gmail_integrations.py's status-check fallback.
+    Return (access_token, sender_email) for the business's Gmail connection.
+
+    Gmail is one connection per business — there's no per-location connect UI,
+    so location_id is accepted for call-site compatibility but ignored for
+    lookup. Scoping by location let a stale row from an old reconnect attempt
+    (e.g. pre-location-feature rows an April migration re-tagged with a
+    specific location_id) "shadow" a working newer connection stored under a
+    different location_id, even though a valid token existed for the business
+    (AIE-90/AIE-99). Tries every token row for this business, newest first,
+    skipping any that fail to decrypt/refresh, until one actually works.
     """
     try:
-        query = supabase.table("gmail_tokens").select("*").eq("business_id", business_id)
-        if location_id:
-            query = query.eq("location_id", location_id)
-        else:
-            query = query.is_("location_id", "null")
-        r = query.limit(1).execute()
-        data = getattr(r, "data", None) or []
-        if not data and location_id:
-            r = (
-                supabase.table("gmail_tokens").select("*")
-                .eq("business_id", business_id)
-                .is_("location_id", "null")
-                .limit(1).execute()
-            )
-            data = getattr(r, "data", None) or []
-        if not data:
-            return None, ""
-        row = data[0]
-        row["access_token"] = decrypt_oauth_token(row.get("access_token"))
-        row["refresh_token"] = decrypt_oauth_token(row.get("refresh_token"))
+        r = (
+            supabase.table("gmail_tokens")
+            .select("*")
+            .eq("business_id", business_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        rows = getattr(r, "data", None) or []
+    except Exception as e:
+        logger.warning("Failed to list Gmail tokens for business %s: %s", business_id, e)
+        return None, ""
+
+    for row in rows:
+        resolved = await _gmail_resolve_token_row(supabase, row)
+        if resolved:
+            return resolved
+    return None, ""
+
+
+async def _gmail_resolve_token_row(supabase, row: dict) -> tuple[str, str] | None:
+    """Decrypt a single gmail_tokens row and refresh it if expired. Returns
+    None (rather than raising) if the row is unusable, so the caller can move
+    on to the next candidate row instead of failing outright."""
+    try:
+        access_token = decrypt_oauth_token(row.get("access_token"))
+        refresh_token = decrypt_oauth_token(row.get("refresh_token"))
+        google_email = row.get("google_email", "")
 
         expiry_raw = row.get("token_expiry")
         if expiry_raw:
@@ -57,37 +70,38 @@ async def _gmail_get_valid_token(
             expiry = datetime.now(timezone.utc)  # null expiry → treat as expired
         if expiry.tzinfo is None:
             expiry = expiry.replace(tzinfo=timezone.utc)
-        if datetime.now(timezone.utc) >= expiry:
-                import httpx
-                client_id = os.getenv("GOOGLE_CLIENT_ID", "")
-                client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
-                if not client_id or not client_secret:
-                    return None, ""
-                async with httpx.AsyncClient() as http:
-                    resp = await http.post(GOOGLE_TOKEN_URL, data={
-                        "refresh_token": row["refresh_token"],
-                        "client_id": client_id,
-                        "client_secret": client_secret,
-                        "grant_type": "refresh_token",
-                    })
-                    if resp.status_code != 200:
-                        logger.warning(
-                            "Gmail token refresh failed for business %s loc %s: %s %s",
-                            business_id, location_id, resp.status_code, resp.text[:300],
-                        )
-                        return None, ""
-                    refreshed = resp.json()
-                new_expiry = datetime.now(timezone.utc) + timedelta(seconds=refreshed.get("expires_in", 3600) - 60)
-                supabase.table("gmail_tokens").update({
-                    "access_token": encrypt_oauth_token(refreshed["access_token"]),
-                    "token_expiry": new_expiry.isoformat(),
-                }).eq("id", row["id"]).execute()
-                return refreshed["access_token"], row.get("google_email", "")
 
-        return row["access_token"], row.get("google_email", "")
+        if datetime.now(timezone.utc) < expiry:
+            return access_token, google_email
+
+        import httpx
+        client_id = os.getenv("GOOGLE_CLIENT_ID", "")
+        client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
+        if not client_id or not client_secret:
+            return None
+        async with httpx.AsyncClient() as http:
+            resp = await http.post(GOOGLE_TOKEN_URL, data={
+                "refresh_token": refresh_token,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "grant_type": "refresh_token",
+            })
+            if resp.status_code != 200:
+                logger.warning(
+                    "Gmail token refresh failed for row %s (business %s): %s %s",
+                    row.get("id"), row.get("business_id"), resp.status_code, resp.text[:300],
+                )
+                return None
+            refreshed = resp.json()
+        new_expiry = datetime.now(timezone.utc) + timedelta(seconds=refreshed.get("expires_in", 3600) - 60)
+        supabase.table("gmail_tokens").update({
+            "access_token": encrypt_oauth_token(refreshed["access_token"]),
+            "token_expiry": new_expiry.isoformat(),
+        }).eq("id", row["id"]).execute()
+        return refreshed["access_token"], google_email
     except Exception as e:
-        logger.warning("Failed to get Gmail token for business %s loc %s: %s", business_id, location_id, e)
-        return None, ""
+        logger.warning("Failed to resolve Gmail token row %s: %s", row.get("id"), e)
+        return None
 
 
 async def _gmail_connection_diagnostic(
@@ -96,47 +110,32 @@ async def _gmail_connection_diagnostic(
     location_id: str | None,
 ) -> str:
     """
-    Build a specific, actionable message when _gmail_get_valid_token found no
-    usable token for (business_id, location_id). Distinguishes "no Gmail
-    connected for this business at all" from "connected, but for a different
-    location" (the AIE-90 case — a token exists but doesn't match this
-    session's location, so the generic "not connected" message was misleading).
+    Build an actionable message when _gmail_get_valid_token found no usable
+    token for this business. Gmail is business-wide, not per-location (see
+    _gmail_get_valid_token), so this no longer reasons about location — it
+    only distinguishes "nothing connected yet" from "a connection exists but
+    none of it still works" (e.g. revoked access), which the old
+    location-framed message couldn't express and used to misreport as a
+    location mismatch (AIE-90/AIE-99).
     """
     try:
         r = (
             supabase.table("gmail_tokens")
-            .select("location_id")
+            .select("id")
             .eq("business_id", business_id)
             .execute()
         )
         rows = getattr(r, "data", None) or []
     except Exception as e:
         logger.warning("Gmail connection diagnostic query failed for business %s: %s", business_id, e)
-        return "Gmail isn't connected for this business yet. Connect it under Settings → Business Settings → Integrations."
+        rows = []
 
     if not rows:
         return "Gmail isn't connected for this business yet. Connect it under Settings → Business Settings → Integrations."
 
-    other_location_ids = {
-        row.get("location_id") for row in rows
-        if row.get("location_id") and row.get("location_id") != location_id
-    }
-    if not other_location_ids:
-        return "Gmail isn't connected for this location yet. Connect it under Settings → Business Settings → Integrations."
-
-    other_id = next(iter(other_location_ids))
-    location_name = "another location"
-    try:
-        loc_r = supabase.table("locations").select("name").eq("id", other_id).limit(1).execute()
-        loc_rows = getattr(loc_r, "data", None) or []
-        if loc_rows and loc_rows[0].get("name"):
-            location_name = loc_rows[0]["name"]
-    except Exception as e:
-        logger.warning("Failed to resolve location name %s: %s", other_id, e)
-
     return (
-        f"Gmail is connected for a different location ({location_name}), not this one. "
-        "Switch to that location, or connect Gmail for this location under Settings → Business Settings → Integrations."
+        "Gmail was connected before, but the connection no longer works (it may have expired "
+        "or been revoked). Reconnect it under Settings → Business Settings → Integrations."
     )
 
 

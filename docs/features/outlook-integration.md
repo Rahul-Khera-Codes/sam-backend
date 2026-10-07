@@ -106,3 +106,29 @@ connection still failed to save, with no clear reason shown.
 - Verified: Python/TS compile clean, both Docker stacks rebuilt and confirmed healthy,
   `build_outlook_auth_url()` confirmed to emit `prompt=consent` in the generated URL. Not yet
   verified: a live end-to-end reconnect against the real Azure app.
+
+## Bug fix (AIE-34, 2026-10-07) — "Failed to exchange Outlook authorization code"
+
+After the `prompt=consent` fix above, the consent screen correctly appeared and listed
+`Mail.Send`, but the connection still failed — one step later than before, at token exchange.
+
+- **Root cause**: confirmed directly from production logs (`outlook_email_service.py:71`'s
+  error log line) — Microsoft's token endpoint returned:
+  `AADSTS7000215: Invalid client secret provided. Ensure the secret being sent in the request
+  is the client secret value, not the client secret ID, for a secret added to app
+  '4e52c9aa-976a-4fec-898e-a8e37d15c40a'.` The `MICROSOFT_CLIENT_SECRET` configured on
+  production is the Azure **Secret ID** (a GUID, always visible in the portal), not the
+  **Secret Value** (the actual secret string, shown only once at creation time and never
+  retrievable again afterward). This explains why consent/sign-in works (that step only needs
+  `client_id` + `redirect_uri`, no secret) while the exchange step — the only one that actually
+  sends the secret to Microsoft — fails every time.
+- **Fix (pending, not yet applied):** a new client secret needs to be generated on the Azure
+  app (`4e52c9aa-976a-4fec-898e-a8e37d15c40a`) under Certificates & secrets, with its **Value**
+  column (not the ID) copied immediately at creation and set as `MICROSOFT_CLIENT_SECRET` on
+  the production backend, followed by a restart/redeploy and retest. Requested from Sam via
+  AIE-34 comment (2026-10-07) — blocked on production/Azure Portal access this session doesn't
+  have.
+- Note for future debugging: `portal.aiemployeesinc.com` is served by a separate **production**
+  server, not the local Docker dev stack in this repo — same container names, different
+  machine. Local log/container inspection doesn't reflect production state; the fix above was
+  only diagnosable because the user pasted the real production log output directly.

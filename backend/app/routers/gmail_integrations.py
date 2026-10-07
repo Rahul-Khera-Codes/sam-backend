@@ -54,11 +54,15 @@ def _get_token_row_for_location(business_id: str, location_id: Optional[str]) ->
 
 
 def _get_business_token_row(business_id: str) -> Optional[dict]:
+    """Newest Gmail token row for this business, regardless of location.
+    Gmail is one connection per business — there's no per-location connect
+    UI — so a stale row under one location_id shouldn't shadow a working one
+    under a different location_id (AIE-90/AIE-99)."""
     result = (
         supabase_admin.table("gmail_tokens")
         .select("*")
         .eq("business_id", business_id)
-        .is_("location_id", "null")
+        .order("created_at", desc=True)
         .limit(1)
         .execute()
     )
@@ -246,9 +250,7 @@ async def get_status(
     user_id: str = Depends(get_user_id),
 ):
     verify_business_access(user_id, business_id)
-    row = _get_token_row_for_location(business_id, location_id)
-    if not row and location_id:
-        row = _get_business_token_row(business_id)
+    row = _get_business_token_row(business_id)
     if not row:
         return {"connected": False, "google_email": "", "location_id": location_id}
 
