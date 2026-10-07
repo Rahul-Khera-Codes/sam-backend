@@ -123,6 +123,43 @@ only distinguishes "nothing connected yet" vs. "was connected, but nothing curre
   fixed lookup exercised through the full real user-facing flow (chat → draft → approve → send),
   giving end-to-end confidence beyond the direct API test above.
 
+## Second fix (2026-10-07, later same day) — a "valid" token still got rejected by Gmail
+
+After the first fix shipped, a live Remi session failed to send with `Gmail send failed 401:
+invalid authentication credentials` — on a token whose stored `token_expiry` said it still had
+~51 minutes left, and which `tokeninfo` had independently confirmed valid shortly before. So the
+lookup fix (which trusts stored expiry to decide whether to refresh) was correct, but stored
+expiry turned out to not be sufficient ground truth — something external had invalidated the
+token despite our bookkeeping saying it was fine.
+
+**Resolved root cause:** the user had connected Gmail on **local** that morning, then later also
+ran the full Connect flow on **production** for the same business while local's connection was
+still active. Both environments share the same `gmail_tokens` row — two independent full OAuth
+consent grants for the same Google account in quick succession from different environments is
+enough for Google to invalidate the earlier-issued token. Not a config bug, not a code bug — a
+real hazard of local dev and production sharing one Supabase project's OAuth token tables.
+Reconnecting once more (after disconnecting first) issued a fresh, self-consistent token that
+verified immediately (`tokeninfo` 200 + a real send, message landed in `SENT`+`INBOX`).
+
+**Defensive fix added regardless** (since stored expiry can never be a perfect guarantee — clock
+drift, external revocation, or this exact cross-environment case can all produce a "should be
+valid" token Gmail rejects live): every Gmail **send** call site — the 7 automated functions in
+`agent/gmail_helpers.py` (now consolidated through one shared `_gmail_send_raw` helper instead of
+7 duplicated inline POSTs), both of `agent/executive_agent.py`'s interactive send paths, and
+`backend/app/services/email_service.py`'s `send_email`/`send_email_with_attachment` (plus their 6
+wrapper functions and the `report_scheduler.py` caller) — now react to a live 401 by forcing every
+token row for that business to be treated as expired, re-resolving a fresh one via the existing
+business-wide/skip-invalid lookup, and retrying the send exactly once before giving up. Verified
+by deliberately feeding a bogus access token into `_gmail_send_raw` and confirming it correctly
+attempted a real refresh (rejected as expected, since the underlying refresh token was also dead
+at that moment) rather than silently failing — then, after the fresh reconnect, confirmed a real
+send succeeds end-to-end through the same code path.
+
+**Operational note for future sessions:** avoid connecting/reconnecting Gmail (or Outlook/Calendar)
+on both local and production for the same business around the same time — it can invalidate
+whichever one was connected first, surfacing as a confusing "token looked valid but Gmail
+rejected it" failure rather than a clear error.
+
 ## Known remaining issue — NOT fixed by this change
 The Google Cloud OAuth consent screen for this app is still in **Testing** publishing status
 (unverified — `gmail.readonly` is a restricted scope requiring a CASA assessment, in progress; see
