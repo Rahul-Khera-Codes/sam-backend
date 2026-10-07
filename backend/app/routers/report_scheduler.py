@@ -203,6 +203,8 @@ async def send_digest(schedule: dict, recipients: list[str]) -> bool:
                 to=recipient,
                 subject=subject,
                 html_body=html_body,
+                supabase=supabase_admin,
+                business_id=schedule["business_id"],
             )
             sent_any = sent_any or sent
         except Exception as e:

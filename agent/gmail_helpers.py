@@ -104,6 +104,55 @@ async def _gmail_resolve_token_row(supabase, row: dict) -> tuple[str, str] | Non
         return None
 
 
+async def _gmail_force_expire_tokens(supabase, business_id: str) -> None:
+    """Mark every gmail_tokens row for this business as already-expired, so the
+    next _gmail_get_valid_token call is forced to actually refresh each one
+    against Google rather than trusting a locally-stored expiry that has just
+    been proven wrong (see _gmail_send_raw)."""
+    try:
+        past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        supabase.table("gmail_tokens").update({"token_expiry": past}).eq("business_id", business_id).execute()
+    except Exception as e:
+        logger.warning("Failed to force-expire Gmail tokens for business %s: %s", business_id, e)
+
+
+async def _gmail_send_raw(supabase, business_id: str, access_token: str, raw: str) -> tuple[bool, int, str]:
+    """
+    POST a prepared raw MIME message to the Gmail send API.
+
+    A token can be rejected by Gmail with 401 even when our stored
+    token_expiry says it should still be valid — confirmed live 2026-10-07
+    (Woyce Tech business: stored expiry ~51 min out, Gmail's own tokeninfo
+    endpoint confirmed the token valid, yet the send call still got a 401).
+    Rather than chase the exact cause (clock drift, a concurrent refresh
+    elsewhere, external revocation), treat a live 401 as the ground truth:
+    force every token row for this business to be re-checked for real against
+    Google, then retry the send exactly once with whatever comes back.
+    """
+    import httpx
+
+    async def _post(token: str) -> "httpx.Response":
+        async with httpx.AsyncClient() as http:
+            return await http.post(
+                GMAIL_SEND_URL,
+                headers={"Authorization": f"Bearer {token}"},
+                json={"raw": raw},
+            )
+
+    resp = await _post(access_token)
+    if resp.status_code == 401:
+        logger.warning(
+            "Gmail send got 401 with a token that looked valid (business %s) — forcing refresh and retrying once",
+            business_id,
+        )
+        await _gmail_force_expire_tokens(supabase, business_id)
+        new_token, _ = await _gmail_get_valid_token(supabase, business_id, None)
+        if new_token and new_token != access_token:
+            resp = await _post(new_token)
+
+    return resp.status_code in (200, 201), resp.status_code, resp.text[:200]
+
+
 async def _gmail_connection_diagnostic(
     supabase,
     business_id: str,
@@ -162,7 +211,6 @@ async def _gmail_send_confirmation(
     from email.mime.text import MIMEText
     from email.mime.base import MIMEBase
     from email import encoders
-    import httpx
     from ics_helpers import generate_ics
 
     access_token, sender_email = await _gmail_get_valid_token(supabase, business_id, location_id)
@@ -251,16 +299,11 @@ body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSy
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
 
     try:
-        async with httpx.AsyncClient() as http:
-            resp = await http.post(
-                GMAIL_SEND_URL,
-                headers={"Authorization": f"Bearer {access_token}"},
-                json={"raw": raw},
-            )
-            if resp.status_code in (200, 201):
-                logger.info("Confirmation email with .ics sent to %s", client_email)
-            else:
-                logger.warning("Gmail send failed %s: %s", resp.status_code, resp.text[:200])
+        sent, status, text = await _gmail_send_raw(supabase, business_id, access_token, raw)
+        if sent:
+            logger.info("Confirmation email with .ics sent to %s", client_email)
+        else:
+            logger.warning("Gmail send failed %s: %s", status, text)
     except Exception as e:
         logger.warning("Failed to send Gmail confirmation: %s", e)
 
@@ -286,7 +329,6 @@ async def _gmail_send_staff_notification(
     import base64
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
-    import httpx
 
     access_token, sender_email = await _gmail_get_valid_token(supabase, business_id, location_id)
     if not access_token:
@@ -370,16 +412,11 @@ body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSy
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
 
     try:
-        async with httpx.AsyncClient() as http:
-            resp = await http.post(
-                GMAIL_SEND_URL,
-                headers={"Authorization": f"Bearer {access_token}"},
-                json={"raw": raw},
-            )
-            if resp.status_code in (200, 201):
-                logger.info("Staff notification sent to %s", staff_email)
-            else:
-                logger.warning("Staff Gmail notify failed %s: %s", resp.status_code, resp.text[:200])
+        sent, status, text = await _gmail_send_raw(supabase, business_id, access_token, raw)
+        if sent:
+            logger.info("Staff notification sent to %s", staff_email)
+        else:
+            logger.warning("Staff Gmail notify failed %s: %s", status, text)
     except Exception as e:
         logger.warning("Failed to send staff notification email: %s", e)
 
@@ -407,7 +444,6 @@ async def _gmail_send_reschedule_confirmation(
     from email.mime.text import MIMEText
     from email.mime.base import MIMEBase
     from email import encoders
-    import httpx
     from ics_helpers import generate_ics
 
     access_token, sender_email = await _gmail_get_valid_token(supabase, business_id, location_id)
@@ -492,16 +528,11 @@ body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSy
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
 
     try:
-        async with httpx.AsyncClient() as http:
-            resp = await http.post(
-                GMAIL_SEND_URL,
-                headers={"Authorization": f"Bearer {access_token}"},
-                json={"raw": raw},
-            )
-            if resp.status_code in (200, 201):
-                logger.info("Reschedule confirmation with .ics sent to %s", client_email)
-            else:
-                logger.warning("Gmail reschedule send failed %s: %s", resp.status_code, resp.text[:200])
+        sent, status, text = await _gmail_send_raw(supabase, business_id, access_token, raw)
+        if sent:
+            logger.info("Reschedule confirmation with .ics sent to %s", client_email)
+        else:
+            logger.warning("Gmail reschedule send failed %s: %s", status, text)
     except Exception as e:
         logger.warning("Failed to send reschedule confirmation: %s", e)
 
@@ -527,7 +558,6 @@ async def _gmail_send_staff_reschedule_notification(
     import base64
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
-    import httpx
 
     access_token, sender_email = await _gmail_get_valid_token(supabase, business_id, location_id)
     if not access_token:
@@ -603,16 +633,11 @@ body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSy
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
 
     try:
-        async with httpx.AsyncClient() as http:
-            resp = await http.post(
-                GMAIL_SEND_URL,
-                headers={"Authorization": f"Bearer {access_token}"},
-                json={"raw": raw},
-            )
-            if resp.status_code in (200, 201):
-                logger.info("Staff reschedule notification sent to %s", staff_email)
-            else:
-                logger.warning("Staff reschedule notify failed %s: %s", resp.status_code, resp.text[:200])
+        sent, status, text = await _gmail_send_raw(supabase, business_id, access_token, raw)
+        if sent:
+            logger.info("Staff reschedule notification sent to %s", staff_email)
+        else:
+            logger.warning("Staff reschedule notify failed %s: %s", status, text)
     except Exception as e:
         logger.warning("Failed to send staff reschedule notification: %s", e)
 
@@ -637,7 +662,6 @@ async def _gmail_send_cancellation_confirmation(
     import base64
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
-    import httpx
 
     access_token, sender_email = await _gmail_get_valid_token(supabase, business_id, location_id)
     if not access_token:
@@ -695,16 +719,11 @@ body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSy
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
 
     try:
-        async with httpx.AsyncClient() as http:
-            resp = await http.post(
-                GMAIL_SEND_URL,
-                headers={"Authorization": f"Bearer {access_token}"},
-                json={"raw": raw},
-            )
-            if resp.status_code in (200, 201):
-                logger.info("Cancellation email sent to %s", client_email)
-            else:
-                logger.warning("Gmail cancel send failed %s: %s", resp.status_code, resp.text[:200])
+        sent, status, text = await _gmail_send_raw(supabase, business_id, access_token, raw)
+        if sent:
+            logger.info("Cancellation email sent to %s", client_email)
+        else:
+            logger.warning("Gmail cancel send failed %s: %s", status, text)
     except Exception as e:
         logger.warning("Failed to send cancellation email: %s", e)
 
@@ -730,7 +749,6 @@ async def _gmail_send_staff_cancellation_notification(
     import base64
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
-    import httpx
 
     access_token, sender_email = await _gmail_get_valid_token(supabase, business_id, location_id)
     if not access_token:
@@ -805,16 +823,11 @@ body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSy
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
 
     try:
-        async with httpx.AsyncClient() as http:
-            resp = await http.post(
-                GMAIL_SEND_URL,
-                headers={"Authorization": f"Bearer {access_token}"},
-                json={"raw": raw},
-            )
-            if resp.status_code in (200, 201):
-                logger.info("Staff cancellation notification sent to %s", staff_email)
-            else:
-                logger.warning("Staff cancel notify failed %s: %s", resp.status_code, resp.text[:200])
+        sent, status, text = await _gmail_send_raw(supabase, business_id, access_token, raw)
+        if sent:
+            logger.info("Staff cancellation notification sent to %s", staff_email)
+        else:
+            logger.warning("Staff cancel notify failed %s: %s", status, text)
     except Exception as e:
         logger.warning("Failed to send staff cancellation notification: %s", e)
 
@@ -834,7 +847,6 @@ async def _gmail_send_document_notification(
     import base64
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
-    import httpx
 
     access_token, sender_email = await _gmail_get_valid_token(supabase, business_id, location_id)
     if not access_token:
@@ -892,15 +904,10 @@ body{{margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSy
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
 
     try:
-        async with httpx.AsyncClient() as http:
-            resp = await http.post(
-                GMAIL_SEND_URL,
-                headers={"Authorization": f"Bearer {access_token}"},
-                json={"raw": raw},
-            )
-            if resp.status_code in (200, 201):
-                logger.info("Document notification sent to business %s", sender_email)
-            else:
-                logger.warning("Document notification failed %s: %s", resp.status_code, resp.text[:200])
+        sent, status, text = await _gmail_send_raw(supabase, business_id, access_token, raw)
+        if sent:
+            logger.info("Document notification sent to business %s", sender_email)
+        else:
+            logger.warning("Document notification failed %s: %s", status, text)
     except Exception as e:
         logger.warning("Failed to send document notification: %s", e)

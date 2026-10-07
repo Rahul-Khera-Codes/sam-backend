@@ -20,6 +20,7 @@ from urllib.parse import urlencode
 
 import httpx
 
+from app.core.config import settings
 from app.core.token_crypto import decrypt_oauth_token, encrypt_oauth_token
 
 logger = logging.getLogger(__name__)
@@ -251,6 +252,27 @@ def _build_mime_message(
     return raw
 
 
+async def _force_expire_gmail_tokens(supabase, business_id: str) -> None:
+    """Mark every gmail_tokens row for this business as already-expired, so the
+    next get_valid_access_token call is forced to actually refresh each one
+    against Google rather than trusting a locally-stored expiry that has just
+    been proven wrong (see send_email)."""
+    try:
+        past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        supabase.table("gmail_tokens").update({"token_expiry": past}).eq("business_id", business_id).execute()
+    except Exception as e:
+        logger.warning("Failed to force-expire Gmail tokens for business %s: %s", business_id, e)
+
+
+async def _post_to_gmail(raw: str, access_token: str) -> httpx.Response:
+    async with httpx.AsyncClient() as client:
+        return await client.post(
+            GMAIL_SEND_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={"raw": raw},
+        )
+
+
 async def send_email(
     access_token: str,
     sender: str,
@@ -258,19 +280,37 @@ async def send_email(
     subject: str,
     html_body: str,
     plain_body: str = "",
+    supabase=None,
+    business_id: Optional[str] = None,
 ) -> bool:
-    """Send an email via the Gmail API. Returns True on success."""
+    """
+    Send an email via the Gmail API. Returns True on success.
+
+    A token can be rejected by Gmail with 401 even when our stored
+    token_expiry says it should still be valid (confirmed live 2026-10-07).
+    When supabase+business_id are supplied, a live 401 forces every token row
+    for this business to be re-checked for real against Google and retries
+    the send exactly once with whatever comes back, instead of trusting the
+    cached expiry.
+    """
     raw = _build_mime_message(sender, to, subject, html_body, plain_body)
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            GMAIL_SEND_URL,
-            headers={"Authorization": f"Bearer {access_token}"},
-            json={"raw": raw},
+    resp = await _post_to_gmail(raw, access_token)
+    if resp.status_code == 401 and supabase is not None and business_id:
+        logger.warning(
+            "Gmail send got 401 with a token that looked valid (business %s) — forcing refresh and retrying once",
+            business_id,
         )
-        if resp.status_code not in (200, 201):
-            logger.error("Gmail send failed %s: %s", resp.status_code, resp.text)
-            return False
-        return True
+        await _force_expire_gmail_tokens(supabase, business_id)
+        new_token = await get_valid_access_token(
+            supabase, business_id, settings.google_client_id, settings.google_client_secret,
+        )
+        if new_token and new_token != access_token:
+            resp = await _post_to_gmail(raw, new_token)
+
+    if resp.status_code not in (200, 201):
+        logger.error("Gmail send failed %s: %s", resp.status_code, resp.text)
+        return False
+    return True
 
 
 async def send_email_with_attachment(
@@ -282,8 +322,11 @@ async def send_email_with_attachment(
     attachment_bytes: bytes,
     attachment_filename: str,
     attachment_content_type: str = "application/pdf",
+    supabase=None,
+    business_id: Optional[str] = None,
 ) -> bool:
-    """Send an email with a file attachment via the Gmail API."""
+    """Send an email with a file attachment via the Gmail API. See send_email
+    for the 401-retry behavior when supabase+business_id are supplied."""
     msg = MIMEMultipart("mixed")
     msg["From"] = sender
     msg["To"] = to
@@ -298,16 +341,23 @@ async def send_email_with_attachment(
     msg.attach(part)
 
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            GMAIL_SEND_URL,
-            headers={"Authorization": f"Bearer {access_token}"},
-            json={"raw": raw},
+    resp = await _post_to_gmail(raw, access_token)
+    if resp.status_code == 401 and supabase is not None and business_id:
+        logger.warning(
+            "Gmail attachment send got 401 with a token that looked valid (business %s) — forcing refresh and retrying once",
+            business_id,
         )
-        if resp.status_code not in (200, 201):
-            logger.error("Gmail attachment send failed %s: %s", resp.status_code, resp.text)
-            return False
-        return True
+        await _force_expire_gmail_tokens(supabase, business_id)
+        new_token = await get_valid_access_token(
+            supabase, business_id, settings.google_client_id, settings.google_client_secret,
+        )
+        if new_token and new_token != access_token:
+            resp = await _post_to_gmail(raw, new_token)
+
+    if resp.status_code not in (200, 201):
+        logger.error("Gmail attachment send failed %s: %s", resp.status_code, resp.text)
+        return False
+    return True
 
 
 # ── Email templates ───────────────────────────────────────────────────────────
@@ -466,6 +516,8 @@ async def send_appointment_confirmation(
             subject=subject,
             html_body=html_body,
             plain_body=plain_body,
+            supabase=supabase,
+            business_id=business_id,
         )
         if sent:
             logger.info("Appointment confirmation sent to %s", client_email)
@@ -514,7 +566,8 @@ async def send_staff_notification(
     plain_body = f"New appointment: {client_name} | {service} | {date} {time_display} | Phone: {client_phone} | Ref: {confirmation_ref}"
     try:
         return await send_email(access_token=access_token, sender=f"{business_name} <{sender}>",
-            to=staff_email, subject=subject, html_body=html_body, plain_body=plain_body)
+            to=staff_email, subject=subject, html_body=html_body, plain_body=plain_body,
+            supabase=supabase, business_id=business_id)
     except Exception:
         return False
 
@@ -555,7 +608,8 @@ async def send_reschedule_confirmation(
     plain_body = f"Rescheduled: {service} on {new_date} at {time_display} | Ref: {confirmation_ref} | {business_phone}"
     try:
         return await send_email(access_token=access_token, sender=f"{business_name} <{sender}>",
-            to=client_email, subject=subject, html_body=html_body, plain_body=plain_body)
+            to=client_email, subject=subject, html_body=html_body, plain_body=plain_body,
+            supabase=supabase, business_id=business_id)
     except Exception:
         return False
 
@@ -596,7 +650,8 @@ async def send_staff_reschedule_notification(
     plain_body = f"Rescheduled: {client_name} | {service} | {new_date} {time_display} | Ref: {confirmation_ref}"
     try:
         return await send_email(access_token=access_token, sender=f"{business_name} <{sender}>",
-            to=staff_email, subject=subject, html_body=html_body, plain_body=plain_body)
+            to=staff_email, subject=subject, html_body=html_body, plain_body=plain_body,
+            supabase=supabase, business_id=business_id)
     except Exception:
         return False
 
@@ -630,7 +685,8 @@ async def send_cancellation_confirmation(
     plain_body = f"Cancelled: {service} on {date}. Ref: {confirmation_ref}. Call {business_phone} to rebook."
     try:
         return await send_email(access_token=access_token, sender=f"{business_name} <{sender}>",
-            to=client_email, subject=subject, html_body=html_body, plain_body=plain_body)
+            to=client_email, subject=subject, html_body=html_body, plain_body=plain_body,
+            supabase=supabase, business_id=business_id)
     except Exception:
         return False
 
@@ -666,7 +722,8 @@ async def send_staff_cancellation_notification(
     plain_body = f"Cancelled: {client_name} | {service} | {date}. Ref: {confirmation_ref}"
     try:
         return await send_email(access_token=access_token, sender=f"{business_name} <{sender}>",
-            to=staff_email, subject=subject, html_body=html_body, plain_body=plain_body)
+            to=staff_email, subject=subject, html_body=html_body, plain_body=plain_body,
+            supabase=supabase, business_id=business_id)
     except Exception:
         return False
 

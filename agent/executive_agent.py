@@ -26,7 +26,7 @@ from livekit.plugins import openai, liveavatar
 
 import httpx as _httpx
 from constants import GOOGLE_TOKEN_URL, GOOGLE_CALENDAR_BASE, GMAIL_SEND_URL
-from gmail_helpers import _gmail_get_valid_token, _gmail_connection_diagnostic
+from gmail_helpers import _gmail_get_valid_token, _gmail_connection_diagnostic, _gmail_send_raw
 from gcal_helpers import _gcal_get_valid_token, _gcal_refresh_token
 from supabase_helpers import (
     _get_supabase,
@@ -823,18 +823,13 @@ class ExecutiveAssistant(Agent):
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
         try:
-            async with _httpx.AsyncClient(timeout=20) as http:
-                r = await http.post(
-                    GMAIL_SEND_URL,
-                    headers={"Authorization": f"Bearer {token}"},
-                    json={"raw": raw},
-                )
-                if r.status_code in (200, 201):
-                    await self._clear_preview()
-                    await self._activity_done("Email sent")
-                    return f"Email sent to {to}."
-                logger.error("Gmail send failed %s: %s", r.status_code, r.text[:200])
-                return "Failed to send the email. Please try again."
+            sent, status, text = await _gmail_send_raw(self._supabase, self._business_id, token, raw)
+            if sent:
+                await self._clear_preview()
+                await self._activity_done("Email sent")
+                return f"Email sent to {to}."
+            logger.error("Gmail send failed %s: %s", status, text)
+            return "Failed to send the email. Please try again."
         except Exception as e:
             logger.error("send_email_draft error: %s", e)
             return "An error occurred while sending the email."
@@ -1462,19 +1457,14 @@ class ExecutiveAssistant(Agent):
             msg.attach(MIMEText(body, "plain"))
             raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
             try:
-                async with _httpx.AsyncClient(timeout=20) as http:
-                    r = await http.post(
-                        GMAIL_SEND_URL,
-                        headers={"Authorization": f"Bearer {token}"},
-                        json={"raw": raw},
+                ok, status, text = await _gmail_send_raw(self._supabase, self._business_id, token, raw)
+                if ok:
+                    sent += 1
+                else:
+                    failed += 1
+                    logger.warning(
+                        "Bulk email send failed for %s: %s %s", recip["email"], status, text
                     )
-                    if r.status_code in (200, 201):
-                        sent += 1
-                    else:
-                        failed += 1
-                        logger.warning(
-                            "Bulk email send failed for %s: %s %s", recip["email"], r.status_code, r.text[:200]
-                        )
             except Exception as e:
                 failed += 1
                 logger.warning("Bulk email send error for %s: %s", recip["email"], e)
