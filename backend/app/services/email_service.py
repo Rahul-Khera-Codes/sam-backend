@@ -162,30 +162,25 @@ def _decrypt_row_tokens(row: Optional[dict]) -> Optional[dict]:
 def get_token_row(
     supabase, business_id: str, location_id: Optional[str] = None
 ) -> Optional[dict]:
-    """Fetch Gmail token scoped to a location, falling back to the business sender."""
-    query = (
+    """
+    Fetch the newest Gmail token row for this business.
+
+    Gmail is one connection per business — there's no per-location connect
+    UI, so location_id is accepted for call-site compatibility but ignored.
+    Scoping by location let a stale row (e.g. from a pre-location-feature
+    connection an old migration re-tagged with a specific location_id)
+    shadow a working newer connection stored under a different location_id,
+    even though a valid token existed for the business (AIE-90/AIE-99).
+    """
+    result = (
         supabase.table("gmail_tokens")
         .select("*")
         .eq("business_id", business_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
     )
-    if location_id:
-        query = query.eq("location_id", location_id)
-    else:
-        query = query.is_("location_id", "null")
-    result = query.limit(1).execute()
-    if result.data:
-        return _decrypt_row_tokens(result.data[0])
-    if location_id:
-        fallback = (
-            supabase.table("gmail_tokens")
-            .select("*")
-            .eq("business_id", business_id)
-            .is_("location_id", "null")
-            .limit(1)
-            .execute()
-        )
-        return _decrypt_row_tokens(fallback.data[0]) if fallback.data else None
-    return None
+    return _decrypt_row_tokens(result.data[0]) if result.data else None
 
 
 async def get_valid_access_token(
@@ -195,12 +190,26 @@ async def get_valid_access_token(
     client_secret: str,
     location_id: Optional[str] = None,
 ) -> Optional[str]:
-    """Return a valid access token for (business_id, location_id), refreshing if needed."""
-    row = get_token_row(supabase, business_id, location_id)
-    if not row:
-        return None
+    """
+    Return a valid Gmail access token for this business, refreshing if
+    needed. Tries every token row for the business, newest first, skipping
+    any that fail to refresh — so one stale/revoked row can't mask a working
+    one (AIE-90/AIE-99). location_id is accepted for call-site compatibility
+    but ignored (see get_token_row).
+    """
+    result = (
+        supabase.table("gmail_tokens")
+        .select("*")
+        .eq("business_id", business_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    rows = result.data or []
 
-    if is_token_expired(row["token_expiry"]):
+    for raw_row in rows:
+        row = _decrypt_row_tokens(dict(raw_row))
+        if not is_token_expired(row["token_expiry"]):
+            return row["access_token"]
         try:
             refreshed = await refresh_access_token(
                 row["refresh_token"], client_id, client_secret
@@ -213,10 +222,10 @@ async def get_valid_access_token(
             }).eq("id", row["id"]).execute()
             return refreshed["access_token"]
         except Exception as e:
-            logger.error("Gmail token refresh failed: %s", e)
-            return None
+            logger.warning("Gmail token refresh failed for row %s (business %s): %s", row.get("id"), business_id, e)
+            continue
 
-    return row["access_token"]
+    return None
 
 
 # ── Email sending ─────────────────────────────────────────────────────────────
