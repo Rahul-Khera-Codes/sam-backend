@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from app.core.auth import get_current_user, get_user_id
+from app.core.auth import get_current_user, get_user_id, verify_business_access
 from app.core.supabase import supabase_admin
 from app.services import phone_number_service
 
@@ -24,6 +24,11 @@ router = APIRouter(prefix="/phone-numbers", tags=["phone-numbers"])
 class ProvisionRequest(BaseModel):
     phone_number: str           # E.164 e.g. "+14155550100"
     location_id: str
+    business_id: str
+
+
+class SyncDispatchRequest(BaseModel):
+    business_id: str
 
 
 # ── GET /phone-numbers/search ─────────────────────────────────────────────────
@@ -61,22 +66,13 @@ async def provision_number(
 ):
     """
     Purchase a phone number and wire it to the business's LiveKit dispatch rule.
-    Body: { phone_number: "+14155550100", location_id?: "uuid" }
+    Body: { phone_number: "+14155550100", location_id: "uuid", business_id: "uuid" }
     """
-    # Resolve business_id + role from user_roles
-    role_row = (
-        supabase_admin.table("user_roles")
-        .select("business_id, role")
-        .eq("user_id", user_id)
-        .limit(1)
-        .execute()
-    )
-    if not role_row.data:
-        raise HTTPException(status_code=403, detail="User has no role assigned")
-    if role_row.data[0]["role"] not in ("super_admin", "admin"):
+    role = verify_business_access(user_id, body.business_id)
+    if role not in ("super_admin", "admin"):
         raise HTTPException(status_code=403, detail="Only admins can provision phone numbers")
 
-    business_id = role_row.data[0]["business_id"]
+    business_id = body.business_id
 
     location_row = (
         supabase_admin.table("locations")
@@ -112,45 +108,31 @@ async def provision_number(
 
 @router.get("")
 async def list_numbers(
+    business_id: str,
     current_user: dict = Depends(get_current_user),
     user_id: str = Depends(get_user_id),
 ):
     """Returns all active phone numbers for the caller's business."""
-    role_row = (
-        supabase_admin.table("user_roles")
-        .select("business_id")
-        .eq("user_id", user_id)
-        .limit(1)
-        .execute()
-    )
-    if not role_row.data:
-        raise HTTPException(status_code=403, detail="User has no role assigned")
+    verify_business_access(user_id, business_id)
 
-    numbers = phone_number_service.get_phone_numbers_for_business(role_row.data[0]["business_id"])
+    numbers = phone_number_service.get_phone_numbers_for_business(business_id)
     return {"numbers": numbers}
 
 
 @router.post("/sync-dispatch")
 async def sync_dispatch_rules(
+    body: SyncDispatchRequest,
     current_user: dict = Depends(get_current_user),
     user_id: str = Depends(get_user_id),
 ):
     """Refresh dispatch rules so active numbers carry the latest metadata contract."""
-    role_row = (
-        supabase_admin.table("user_roles")
-        .select("business_id, role")
-        .eq("user_id", user_id)
-        .limit(1)
-        .execute()
-    )
-    if not role_row.data:
-        raise HTTPException(status_code=403, detail="User has no role assigned")
-    if role_row.data[0]["role"] not in ("super_admin", "admin"):
+    role = verify_business_access(user_id, body.business_id)
+    if role not in ("super_admin", "admin"):
         raise HTTPException(status_code=403, detail="Only admins can refresh dispatch rules")
 
     try:
         refreshed = await phone_number_service.refresh_dispatch_rules_for_business(
-            role_row.data[0]["business_id"]
+            body.business_id
         )
         return {"numbers": refreshed}
     except ValueError as e:
@@ -165,6 +147,7 @@ async def sync_dispatch_rules(
 @router.delete("/{phone_number_id}")
 async def release_number(
     phone_number_id: str,
+    business_id: str,
     current_user: dict = Depends(get_current_user),
     user_id: str = Depends(get_user_id),
 ):
@@ -172,16 +155,8 @@ async def release_number(
     Release a phone number: deletes LiveKit dispatch rule + releases Twilio number.
     Soft-deletes the DB row (is_active=False).
     """
-    role_row = (
-        supabase_admin.table("user_roles")
-        .select("business_id, role")
-        .eq("user_id", user_id)
-        .limit(1)
-        .execute()
-    )
-    if not role_row.data:
-        raise HTTPException(status_code=403, detail="User has no role assigned")
-    if role_row.data[0]["role"] not in ("super_admin", "admin"):
+    role = verify_business_access(user_id, business_id)
+    if role not in ("super_admin", "admin"):
         raise HTTPException(status_code=403, detail="Only admins can release phone numbers")
 
     # Verify ownership
@@ -189,7 +164,7 @@ async def release_number(
         supabase_admin.table("business_phone_numbers")
         .select("id")
         .eq("id", phone_number_id)
-        .eq("business_id", role_row.data[0]["business_id"])
+        .eq("business_id", business_id)
         .execute()
     )
     if not row_check.data:
