@@ -76,17 +76,30 @@ Single generic table, no schema change needed to add a provider:
   scheduled-post publish attempt against an expired/broken token fails and surfaces
   "Reconnect" in the Integrations tab like any other provider error — no proactive
   before-expiry reminder yet.
-- **Company Page posting is a separate, gated follow-up.** Posting as an organization instead
-  of a member requires the `w_organization_social` scope via LinkedIn's **Community Management
-  API**, which is not self-serve: it needs a use-case application through the Marketing
-  Developer Platform partner program (legal company name, registered address, business email,
-  website, privacy policy URL), 1–4 weeks for Development-tier approval (capped at 500
-  calls/day), then a screencast demo of the live login+posting flow to reach Standard tier.
-  Once approved, implementation needs: requesting `w_organization_social` in the auth-url scope,
-  a step to look up which Company Pages the connecting member administers
-  (`organizationAcls?q=roleAssignee`), a page-picker in the connect UI, storing the chosen
-  `provider_page_id` (column already exists, unused by LinkedIn today), and switching
-  `_publish_to_linkedin`'s `author` URN to `urn:li:organization:{id}`.
+- **Company Page posting — code shipped, gated behind LinkedIn-side approval (AIE-100,
+  2026-10-09).** Posting as an organization instead of a member requires the
+  `w_organization_social` scope via LinkedIn's **Community Management API**, which is not
+  self-serve: Sam needs to add that product in the LinkedIn Developer Portal and get it
+  reviewed/approved (use-case application, verified Company Page, 1–4 weeks for
+  Development-tier approval). Flagged to Sam on AIE-100.
+  - All code is additive and off by default via `MARKETING_LINKEDIN_ORGANIZATION_ACCESS_ENABLED`
+    (`settings.marketing_linkedin_organization_access_enabled`, defaults `False`) — current
+    personal-profile behavior is unchanged until this is flipped on post-approval.
+  - When enabled: `build_linkedin_auth_url` adds `LINKEDIN_ORGANIZATION_SCOPES`
+    (`w_organization_social`, `r_organization_admin`, `rw_organization_admin`) to the auth-url
+    scope; `complete_linkedin_oauth` calls `_fetch_linkedin_organizations` (`GET
+    /rest/organizationAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED`) and stores the
+    result in `metadata.available_organizations` on the integration row (no auto-select).
+  - New endpoints: `GET /integrations/marketing/linkedin/organizations` (list available pages +
+    current selection) and `POST /integrations/marketing/linkedin/select-organization` (sets
+    `provider_page_id`, or `null` to revert to personal) — see `select_linkedin_organization` /
+    `get_linkedin_organizations` in `marketing_social_service.py`.
+  - `_publish_to_linkedin` now posts as `urn:li:organization:{provider_page_id}` when a page is
+    selected, falling back to `urn:li:person:{provider_account_id}` otherwise.
+  - Frontend: `IntegrationsTab.tsx`'s LinkedIn card renders a "Post as" dropdown (Personal
+    Profile vs. each returned Company Page) only when `getLinkedInOrganizations` returns a
+    non-empty list — invisible to everyone until the flag is on and the user has pages to pick
+    from.
 
 ## Key files
 **Backend (sam-backend)**
@@ -100,9 +113,11 @@ Single generic table, no schema change needed to add a provider:
 **Frontend (ai-employees-app)**
 - `src/lib/voiceAgentApi.ts` — `MarketingIntegrationProvider` type + generic status/auth-url/
   callback/disconnect calls (provider is just a path param, no per-provider branching needed);
-  `MarketingIntegrationStatus.account_avatar_url`.
+  `MarketingIntegrationStatus.account_avatar_url`; `getLinkedInOrganizations` /
+  `selectLinkedInOrganization` for the Company Page picker (AIE-100).
 - `src/components/business/IntegrationsTab.tsx` — Marketing Integrations cards (avatar image
-  when connected, falls back to the static brand icon) + OAuth callback handling.
+  when connected, falls back to the static brand icon) + OAuth callback handling; LinkedIn card
+  has an optional `footer` slot rendering the "Post as" page picker (`IntegrationCardProps.footer`).
 - `src/App.tsx` — `/integrations/marketing/linkedin/callback` route reuses the existing
   generic `GoogleOAuthCallback` redirector.
 - `src/lib/marketingEmployeeMock.ts` — `MarketingPlatform` type + scheduled-post API calls.

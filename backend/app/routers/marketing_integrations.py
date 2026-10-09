@@ -6,6 +6,8 @@ from app.core.auth import get_user_id, verify_business_access
 from app.schemas.marketing import (
     MarketingIntegrationStatusResponse,
     MarketingIntegrationsStatusResponse,
+    MarketingLinkedInOrganizationsResponse,
+    MarketingLinkedInSelectOrganizationRequest,
     MarketingOAuthCallbackRequest,
     MarketingOAuthUrlResponse,
 )
@@ -17,7 +19,9 @@ from app.services.marketing_social_service import (
     complete_linkedin_oauth,
     complete_x_oauth,
     disconnect_marketing_integration,
+    get_linkedin_organizations,
     get_marketing_integrations_status,
+    select_linkedin_organization,
 )
 
 router = APIRouter(prefix="/integrations/marketing", tags=["marketing-integrations"])
@@ -90,6 +94,24 @@ async def complete_linkedin_callback(
 ):
     verify_business_access(user_id, body.business_id)
     return await complete_linkedin_oauth(body.code, body.state, body.business_id)
+
+
+@router.get("/linkedin/organizations", response_model=MarketingLinkedInOrganizationsResponse)
+async def get_linkedin_organizations_route(
+    business_id: str = Query(...),
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, business_id)
+    return get_linkedin_organizations(business_id)
+
+
+@router.post("/linkedin/select-organization", response_model=MarketingIntegrationStatusResponse)
+async def select_linkedin_organization_route(
+    body: MarketingLinkedInSelectOrganizationRequest,
+    user_id: str = Depends(get_user_id),
+):
+    verify_business_access(user_id, body.business_id)
+    return select_linkedin_organization(body.business_id, body.organization_id)
 
 
 @router.delete("/{provider}/disconnect")

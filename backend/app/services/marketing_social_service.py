@@ -28,6 +28,9 @@ INSTAGRAM_SCOPES = [
     "instagram_business_content_publish",
 ]
 LINKEDIN_SCOPES = ["openid", "profile", "email", "w_member_social"]
+# Requested only once Sam's LinkedIn Developer Portal app has the "Community Management
+# API" product approved (AIE-100) — see marketing_linkedin_organization_access_enabled.
+LINKEDIN_ORGANIZATION_SCOPES = ["w_organization_social", "r_organization_admin", "rw_organization_admin"]
 MARKETING_ASSETS_BUCKET = "marketing-assets"
 SIGNED_URL_TTL_SECONDS = 60 * 60 * 6
 INSTAGRAM_API_VERSION = "v25.0"
@@ -120,12 +123,16 @@ def _decrypt_token(value: str | None) -> str | None:
 def _integration_row_to_status(provider: str, row: dict[str, Any] | None) -> MarketingIntegrationStatusResponse:
     if not row:
         return MarketingIntegrationStatusResponse(provider=provider, connected=False)
+    metadata = row.get("metadata") or {}
+    account_name = row.get("provider_account_name")
+    if provider == "linkedin" and row.get("provider_page_id"):
+        account_name = metadata.get("selected_organization_name") or account_name
     return MarketingIntegrationStatusResponse(
         provider=provider,
         connected=bool(row.get("is_connected")),
         account_id=row.get("provider_account_id"),
-        account_name=row.get("provider_account_name"),
-        account_avatar_url=(row.get("metadata") or {}).get("avatar_url"),
+        account_name=account_name,
+        account_avatar_url=metadata.get("avatar_url"),
         scopes=row.get("scopes") or [],
         last_error=row.get("last_error"),
         token_expires_at=row.get("token_expires_at"),
@@ -456,14 +463,50 @@ def build_linkedin_auth_url(business_id: str, user_id: str, return_to: str, orig
             "redirect_uri": redirect_uri,
         }
     )
+    scopes = LINKEDIN_SCOPES + (LINKEDIN_ORGANIZATION_SCOPES if settings.marketing_linkedin_organization_access_enabled else [])
     params = {
         "response_type": "code",
         "client_id": settings.marketing_linkedin_client_id,
         "redirect_uri": redirect_uri,
-        "scope": " ".join(LINKEDIN_SCOPES),
+        "scope": " ".join(scopes),
         "state": state,
     }
     return f"https://www.linkedin.com/oauth/v2/authorization?{urlencode(params)}"
+
+
+async def _fetch_linkedin_organizations(client: httpx.AsyncClient, access_token: str) -> list[dict[str, str]]:
+    """List the LinkedIn Company Pages the connecting member administers.
+
+    Requires r_organization_admin, which only exists once the Community Management API
+    product is approved for the app — callers must check
+    settings.marketing_linkedin_organization_access_enabled before calling this.
+    """
+    response = await client.get(
+        "https://api.linkedin.com/rest/organizationAcls",
+        params={
+            "q": "roleAssignee",
+            "role": "ADMINISTRATOR",
+            "state": "APPROVED",
+            "projection": "(elements*(organization~(id,localizedName)))",
+        },
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "LinkedIn-Version": settings.marketing_linkedin_api_version,
+            "X-Restli-Protocol-Version": "2.0.0",
+        },
+    )
+    if response.status_code >= 400:
+        return []
+    elements = response.json().get("elements") or []
+    organizations: list[dict[str, str]] = []
+    for element in elements:
+        org = element.get("organization~") or {}
+        org_urn = str(element.get("organization") or "")
+        org_id = org.get("id") or org_urn.rsplit(":", 1)[-1]
+        name = org.get("localizedName")
+        if org_id and name:
+            organizations.append({"id": str(org_id), "name": name})
+    return organizations
 
 
 async def complete_linkedin_oauth(code: str, state: str, business_id: str) -> MarketingIntegrationStatusResponse:
@@ -495,6 +538,9 @@ async def complete_linkedin_oauth(code: str, state: str, business_id: str) -> Ma
         if profile_response.status_code >= 400:
             raise HTTPException(status_code=400, detail=f"LinkedIn profile lookup failed: {profile_response.text}")
         profile = profile_response.json()
+        organizations: list[dict[str, str]] = []
+        if settings.marketing_linkedin_organization_access_enabled:
+            organizations = await _fetch_linkedin_organizations(client, access_token)
     expires_at = None
     if token_data.get("expires_in"):
         expires_at = (datetime.now(timezone.utc) + timedelta(seconds=int(token_data["expires_in"]))).isoformat()
@@ -509,8 +555,44 @@ async def complete_linkedin_oauth(code: str, state: str, business_id: str) -> Ma
         refresh_token=token_data.get("refresh_token"),
         expires_at=expires_at,
         scopes=scopes,
-        metadata={"raw_profile": profile},
+        metadata={"raw_profile": profile, "available_organizations": organizations},
     )
+
+
+def get_linkedin_organizations(business_id: str) -> MarketingLinkedInOrganizationsResponse:
+    row = _get_integration_row(business_id, "linkedin")
+    if not row:
+        raise HTTPException(status_code=404, detail="LinkedIn is not connected for this business.")
+    organizations = (row.get("metadata") or {}).get("available_organizations") or []
+    return MarketingLinkedInOrganizationsResponse(
+        organizations=[MarketingLinkedInOrganizationResponse(**org) for org in organizations],
+        selected_organization_id=row.get("provider_page_id"),
+    )
+
+
+def select_linkedin_organization(business_id: str, organization_id: str | None) -> MarketingIntegrationStatusResponse:
+    row = _get_integration_row(business_id, "linkedin")
+    if not row:
+        raise HTTPException(status_code=404, detail="LinkedIn is not connected for this business.")
+    metadata = dict(row.get("metadata") or {})
+    organizations = metadata.get("available_organizations") or []
+    selected_name = None
+    if organization_id is not None:
+        match = next((org for org in organizations if org.get("id") == organization_id), None)
+        if not match:
+            raise HTTPException(status_code=400, detail="That LinkedIn Company Page is not available for this connection.")
+        selected_name = match["name"]
+    metadata["selected_organization_name"] = selected_name
+    result = (
+        supabase_admin.table("marketing_platform_integrations")
+        .update({"provider_page_id": organization_id, "metadata": metadata})
+        .eq("id", row["id"])
+        .eq("business_id", business_id)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=500, detail="Failed to update LinkedIn posting target.")
+    return _integration_row_to_status("linkedin", result.data[0])
 
 
 async def disconnect_marketing_integration(business_id: str, provider: str) -> dict[str, bool]:
@@ -883,10 +965,14 @@ async def _publish_to_instagram(
 
 async def _publish_to_linkedin(business_id: str, asset: dict[str, Any], caption: str) -> tuple[str, str]:
     row, access_token = await _access_token_for_provider(business_id, "linkedin")
+    organization_id = row.get("provider_page_id")
     author_id = row.get("provider_account_id")
-    if not author_id:
+    if organization_id:
+        author_urn = f"urn:li:organization:{organization_id}"
+    elif author_id:
+        author_urn = f"urn:li:person:{author_id}"
+    else:
         raise RuntimeError("LinkedIn account id is missing. Reconnect LinkedIn.")
-    author_urn = f"urn:li:person:{author_id}"
     headers = {
         "Authorization": f"Bearer {access_token}",
         "LinkedIn-Version": settings.marketing_linkedin_api_version,

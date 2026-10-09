@@ -238,6 +238,21 @@ class MarketingOAuthCallbackRequest(BaseModel):
     business_id: str
 
 
+class MarketingLinkedInOrganizationResponse(BaseModel):
+    id: str
+    name: str
+
+
+class MarketingLinkedInOrganizationsResponse(BaseModel):
+    organizations: list[MarketingLinkedInOrganizationResponse] = Field(default_factory=list)
+    selected_organization_id: str | None = None
+
+
+class MarketingLinkedInSelectOrganizationRequest(BaseModel):
+    business_id: str
+    organization_id: str | None = None  # None reverts posting to the personal profile
+
+
 class RandomIdeaResponse(BaseModel):
     idea: str
 
