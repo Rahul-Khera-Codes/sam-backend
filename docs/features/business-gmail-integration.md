@@ -160,7 +160,7 @@ on both local and production for the same business around the same time — it c
 whichever one was connected first, surfacing as a confusing "token looked valid but Gmail
 rejected it" failure rather than a clear error.
 
-## Known remaining issue — NOT fixed by this change
+## Known remaining issue — NOT fixed by this change (as of 2026-10-07)
 The Google Cloud OAuth consent screen for this app is still in **Testing** publishing status
 (unverified — `gmail.readonly` is a restricted scope requiring a CASA assessment, in progress; see
 `docs/casa/CASA_REQUIREMENTS_LOG.md` and `docs/GOOGLE_OAUTH_VERIFICATION.md`). Google expires
@@ -170,3 +170,40 @@ of the lookup fix above, until the app is moved to "In Production" in Google Clo
 the 7-day cap immediately; sensitive scopes remain capped at 100 cumulative unverified users until
 full verification completes — current usage is well under that). Tracked in AIE-90 comments,
 assigned to Sam via Google Cloud Console access.
+
+**Update 2026-10-07:** Sam confirmed the consent screen is already "In Production" — this was not
+(or no longer) the blocker. See the next section for what actually was.
+
+## Fourth root cause (2026-10-10) — redirect_uri still pointed at localhost
+
+After the Testing/Production toggle was confirmed already correct, Sam/Charles still reported
+disconnect+reconnect failing on the real deployed app ("tried 2 different accounts, both did not
+work"). Every fix up to this point (location-wide lookup, skip-dead-tokens, 401-retry) was real and
+had been verified — but verification was done by the developer testing from his own local machine,
+which masked this.
+
+**Root cause:** `GOOGLE_REDIRECT_URI` and `GMAIL_REDIRECT_URI` in `backend/.env` were still set to
+`http://localhost:8080/...` — a dev placeholder never switched to production, unlike every sibling
+integration in the same file (`OUTLOOK_REDIRECT_URI`, `MARKETING_*_REDIRECT_URI_PRODUCTION`), which
+correctly point at `https://portal.aiemployeesinc.com/...`. Confirmed the Google Client ID/Secret
+pair itself is valid (probed `oauth2.googleapis.com/token` directly — got `invalid_grant` for a bad
+code, not `invalid_client`/`unauthorized_client`, meaning client auth passes). The redirect alone was
+wrong: any real user outside the developer's own laptop would have their browser sent to
+`localhost:8080` after granting consent, which does nothing on their machine (or Google rejects the
+request outright if that URL isn't a registered redirect URI for the client at all).
+
+**Fix:** both values changed to `https://portal.aiemployeesinc.com/integrations/google/callback` and
+`.../integrations/gmail/callback`, matching the already-working Outlook pattern exactly. **This is an
+env-only change — no application code was touched.** `backend/.env` is gitignored, so this does not
+ship via git; it must be corrected by hand in every environment's own `.env` (confirmed done in local
+dev as of this writing; production's `backend/.env` still needs the same two lines updated manually
+during the next deploy).
+
+**Still required before this is confirmed fixed:** `https://portal.aiemployeesinc.com/integrations/gmail/callback`
+and the `/google/callback` equivalent must be present in **Google Cloud Console → Credentials → [this
+OAuth client] → Authorized redirect URIs** — if they aren't already there (Outlook's equivalent URI
+works today, so this is likely just adding the two missing Google/Gmail entries alongside it), Google
+will reject with `redirect_uri_mismatch` even after the env fix. Needs an actual disconnect/reconnect
+test against the real production app after both the env var and Console changes are in place — not
+just a clean container start — before moving this back to Ready for QA, given this ticket's history
+of fixes that looked correct locally but didn't hold up for real users.
