@@ -25,6 +25,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/integrations/gmail", tags=["integrations"])
 
+# Connecting/disconnecting is business-wide (one shared gmail_tokens row), so it's
+# restricted to the same roles allowed to reach Business Settings' Integrations tab
+# (src/lib/roles.ts RESTRICTED_PAGES["/dashboard/settings/business"] on the frontend —
+# keep these in sync). Status is left unrestricted: any business member can view it,
+# including from Profile Settings, which every role can reach.
+GMAIL_INTEGRATION_MANAGE_ROLES = ["super_admin", "admin"]
+
 
 def _apply_location_filter(query, location_id: Optional[str]):
     """Apply location_id filter: eq if provided, is null if not."""
@@ -79,7 +86,7 @@ async def get_auth_url(
     user_id: str = Depends(get_user_id),
     current_user: dict = Depends(get_current_user),
 ):
-    verify_business_access(user_id, business_id)
+    verify_business_access(user_id, business_id, allowed_roles=GMAIL_INTEGRATION_MANAGE_ROLES)
 
     if not settings.google_client_id:
         raise HTTPException(
@@ -126,7 +133,7 @@ async def oauth_callback(
     if not settings.google_client_id:
         raise HTTPException(status_code=501, detail="Gmail not configured.")
 
-    verify_business_access(caller_user_id, body.business_id)
+    verify_business_access(caller_user_id, body.business_id, allowed_roles=GMAIL_INTEGRATION_MANAGE_ROLES)
 
     try:
         state = json.loads(body.state)
@@ -300,7 +307,7 @@ async def disconnect(
     location_id: Optional[str] = None,
     user_id: str = Depends(get_user_id),
 ):
-    verify_business_access(user_id, business_id)
+    verify_business_access(user_id, business_id, allowed_roles=GMAIL_INTEGRATION_MANAGE_ROLES)
     row = _get_token_row_for_location(business_id, location_id)
     if not row:
         return {"disconnected": True}

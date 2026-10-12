@@ -1,6 +1,18 @@
-# Profile Settings — Gmail Sign-in & Password (AIE-57)
+# Profile Settings — Gmail Sign-in & Password (AIE-57) — ARCHIVED 2026-10-12
 
-## What it does
+> **Superseded.** As of the AIE-102 follow-up, Profile Settings → Connected Accounts → Gmail no
+> longer works this way at all — it was repurposed to show/control the business-wide Gmail
+> integration instead (same one Business Settings manages). See "Unified with Profile Settings" in
+> `docs/features/business-gmail-integration.md` for what it does now and why. Everything below is
+> kept for history only — it describes a feature that no longer exists in the app. The actual
+> "Sign in with Google" login flow this doc describes is untouched and still works; only this card's
+> UI stopped representing it.
+
+> **The password section on this same page is a separate, still-active story** — see "Password
+> section simplified (2026-10-12)" near the end of this doc. It isn't archived; it just no longer has
+> anything to do with Gmail, which is why it's documented here rather than in the Gmail doc.
+
+## What it does (historical — see note above)
 Under Profile Settings → "Connected Accounts", a user can link their personal Gmail account as
 an *additional sign-in method* via Supabase Auth identity linking (`supabase.auth.linkIdentity`).
 This is entirely separate from two other "Google" integrations that happen to live nearby:
@@ -122,6 +134,48 @@ that `AuthApiError.code` is a real, typed field (not message-parsing) and that
 `_callRefreshToken` unconditionally calls `_saveSession` + `_notifyAllSubscribers('TOKEN_REFRESHED', ...)`,
 which is exactly the listener `AuthContext` already subscribes to — no new context API needed.
 
+## Round 3 (AIE-102, 10/12): Disconnect click produced zero feedback and zero network calls
+Reported by a client via Sam's own account: Gmail + a password were both already connected
+(`identities: ["google","email"]`, confirmed directly against prod via SQL), manual linking was
+confirmed enabled in Supabase Auth settings, and the Disconnect button was not disabled — yet
+clicking it did nothing visible, and prod Auth Logs showed **zero** `/token` or `/user/identities/*`
+requests at all around the time of the reported attempt. The button's own state (enabled, correct
+identity count) ruled out every account-data theory from rounds 1–2.
+
+**Root cause:** two gaps in `src/pages/dashboard/AccountSettings.tsx`, either of which explains a
+silent no-op click, both fixed together since they compound:
+
+1. `resolveIdentityCapability()` — the very first thing both `handleGoogleIdentityDisconnect` and
+   `performGoogleIdentityDisconnect` call — sat **outside any try/catch**, and no loading state was
+   set until *after* it resolved. If that call threw, or stalled (e.g. contention on GoTrue's
+   cross-tab session lock via `refreshSession()`), the click produced literally no feedback: no
+   dialog, no toast, no console error, nothing — matching the zero-network-calls evidence exactly.
+2. The mismatched-Google-email effect (added in round 2, see above) silently called
+   `unlinkIdentity()` on the *same* Google identity automatically on every page load whenever the
+   connected Gmail didn't match the account's login email — which is Sam's actual account shape
+   (`info@canadastopdjs.com` vs `sam@aiemployeesinc.com`). That meant a background unlink could be
+   in flight against the same identity/session lock at the exact moment the user clicks the manual
+   Disconnect button — a second, independent way to get a no-op click.
+
+**Fix:**
+- `handleGoogleIdentityDisconnect`, `performGoogleIdentityDisconnect`, and
+  `confirmDisconnectWithPassword` now set their loading state *before* the first `await` and wrap
+  their entire body in `try/catch`, logging to console and surfacing a toast/inline error on any
+  failure — so this class of bug can never again fail with zero visible feedback.
+- Removed the automatic background `unlinkIdentity()` call from the mismatch-detection effect
+  entirely. It's now a pure derived value (`hasGoogleEmailMismatch`) with no side effect, rendered
+  as a persistent `Alert` banner in the Connected Accounts card explaining the mismatch and pointing
+  the user at the existing manual Disconnect button — so there is exactly **one** code path in the
+  component that ever calls `unlinkIdentity()`, eliminating the race entirely.
+- Per product decision: the mismatch banner only tells the user to disconnect + reconnect with the
+  correct Gmail account — no account-email-change option, no new flows.
+
+**Verified:** `npx tsc --noEmit` clean. Not reproduced live (the original report was on a
+teammate's account, not independently reproducible on demand) — this fix is based on tracing two
+confirmed code-level gaps that are each independently sufficient to produce the exact symptom
+reported (enabled button, click does nothing, zero auth logs). If this recurs, the added
+`console.error` calls should finally surface *something* in the browser console to narrow further.
+
 ## Decisions / tradeoffs
 - **No schema/migration for this** — `user_metadata` (already synced into the client `User`
   object via the existing `onAuthStateChange` listener in `AuthContext`) was enough; a
@@ -134,3 +188,44 @@ which is exactly the listener `AuthContext` already subscribes to — no new con
 - **Business Settings' Gmail integration and "My Google Calendar" were confirmed untouched** —
   both already worked correctly; this ticket only ever concerned the Profile Settings sign-in
   identity.
+
+## Password section simplified (2026-10-12)
+
+**Not archived** — unlike the Gmail card above, the password section on this same page is still
+active; it's just no longer entangled with Gmail at all. Product decision, following straight on
+from the Gmail unification: a single sign-in method is enough, so there's no need for a Google-only
+account to ever add a backup email+password login, and no need for a separate
+current-password-entry form for accounts that already have one.
+
+**What changed in `AccountSettings.tsx`:**
+- **"Set Password" (first-time password creation for Google-only accounts) removed entirely.**
+  `hasPasswordCapability === false` now renders no password section at all — no form, no prompt,
+  nothing. There is intentionally no self-service way for a Google-only account to add a password;
+  if Google sign-in is ever unavailable for such an account, recovery goes through support, not a
+  portal UI.
+- **"Change Password" (for accounts that already have one) no longer asks for the current
+  password.** It's now a single button, "Send Password Reset Email," that calls the exact same
+  `resetPassword()` (`supabase.auth.resetPasswordForEmail`) already used by the separate pre-login
+  "Forgot password" page — same email, same `/reset-password` landing page, same
+  `updatePassword(password, "global")` call once there. One verification mechanism reused, not a
+  second one built alongside it. The in-app copy explains what will happen ("you'll be signed out of
+  this session once it's updated") since the user is now mid-session when they trigger it, unlike the
+  pre-login flow where that's a given.
+- Removed as dead weight in the same pass: the `currentPassword`/`newPassword`/`confirmPassword`
+  form and its show/hide toggles, the `signInWithPassword` current-password-verification call, and
+  the second (previously missed) call site for the now-fully-removed `attach_password_identity()` RPC
+  that lived inside the old submit handler specifically to unlock the old Gmail-disconnect gate.
+- `ResetPassword.tsx` itself needed no changes — its copy was already generic enough to make sense
+  reached from either entry point.
+
+**Explicitly considered and rejected:** an email-OTP-code flow (send a 6-digit code, type it in,
+change password inline without leaving the page) and reusing the existing TOTP-based 2FA
+(`TwoFactorSetup.tsx`, `supabase.auth.mfa`) as a gate on this action. Investigated both — confirmed
+no email-OTP infrastructure exists anywhere in either repo today (would have been net-new, via
+Supabase's `signInWithOtp`/`verifyOtp`), and the existing 2FA is authenticator-app/TOTP only, sends no
+email, and most accounts don't have it enabled at all. Decided to reuse the existing, already-working
+forgot-password mechanism outright instead of building anything new.
+
+**Verified:** `npx tsc --noEmit` clean; swept for dangling references to every removed
+identifier (`currentPassword`, `isUpdatingPassword`, `handleUpdatePassword`, etc.) — none remain.
+Not yet manually tested end-to-end (sending the email and completing the reset-password round trip).

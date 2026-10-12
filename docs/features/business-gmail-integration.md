@@ -7,15 +7,19 @@ notices, staff new-booking notifications, PDF documents sent during calls, repor
 digests, and anything Remi (the Executive Agent) sends on request (ad-hoc "send an email" /
 bulk customer email).
 
-This is distinct from two other Google-ish things that live nearby and are unrelated:
-- **Profile Settings → Connected Accounts → Gmail** — personal sign-in identity linking
-  (`supabase.auth.linkIdentity`). See `docs/features/profile-gmail-signin.md`.
-- **Profile Settings → My Google Calendar** — per-staff calendar sync, separate OAuth token/table.
+**As of 2026-10-12 (AIE-102 follow-up), Profile Settings → Connected Accounts → Gmail is this same
+integration**, not a separate concept — see "Unified with Profile Settings" below. The one thing
+still genuinely separate:
+- **Profile Settings → My Google Calendar** — per-staff calendar sync, separate OAuth token/table,
+  deliberately left out of this change.
 
 ## Key files
-- **Frontend:** `ai-employees-app/src/components/business/IntegrationsTab.tsx` — the single
-  "Connect Gmail" / "Connected" / "Disconnect" toggle. No per-location or per-user selector exists
-  here; it never sends a `location_id` on connect.
+- **Frontend (Business Settings):** `ai-employees-app/src/components/business/IntegrationsTab.tsx` —
+  the "Connect Gmail" / "Connected" / "Disconnect" toggle. No per-location or per-user selector
+  exists here; it never sends a `location_id` on connect.
+- **Frontend (Profile Settings):** `ai-employees-app/src/pages/dashboard/AccountSettings.tsx` —
+  "Connected Accounts" card, calling the exact same functions as above, scoped to the same
+  `businessId`. Read-only for roles that can't manage it (see "Unified with Profile Settings").
 - **Backend OAuth routes:** `backend/app/routers/gmail_integrations.py` — `/integrations/gmail/auth-url`,
   `/callback`, `/status`, `/disconnect`.
 - **Backend shared token helpers:** `backend/app/services/email_service.py` — `get_token_row`,
@@ -207,3 +211,52 @@ will reject with `redirect_uri_mismatch` even after the env fix. Needs an actual
 test against the real production app after both the env var and Console changes are in place — not
 just a clean container start — before moving this back to Ready for QA, given this ticket's history
 of fixes that looked correct locally but didn't hold up for real users.
+
+## Unified with Profile Settings (2026-10-12, AIE-102 follow-up)
+
+**Why:** Profile Settings → Connected Accounts → Gmail used to be a completely different feature —
+Supabase Auth sign-in identity linking (`supabase.auth.linkIdentity`/`unlinkIdentity`), documented
+separately in `docs/features/profile-gmail-signin.md`. Product decision: that card should instead
+show/control the *same* business integration this doc describes, so status and connect/disconnect
+stay consistent no matter which page a user is on — not a second independent Google connection with
+its own password-reverification/lockout-guard machinery (that machinery existed only because it used
+to double as a login method; it never has been one here).
+
+**What changed:**
+- `AccountSettings.tsx`'s Gmail card now calls the exact same `getGmailStatus`/`getGmailAuthUrl`/
+  `completeGmailOAuth`/`disconnectGmail` functions `IntegrationsTab.tsx` already used, scoped to the
+  same `businessId` both pages read via `useBusiness()`. One `gmail_tokens` row, same status on both
+  pages, no separate client-side state to drift.
+- Disconnecting from Profile Settings is now a plain one-click action — no password dialog, no
+  sole-identity lockout check. It's a business integration, not a login credential.
+- **Supabase's Google sign-in identity linking is untouched** — "Sign in with Google" (the actual
+  login flow) still works exactly as before; this card simply no longer displays or manages that
+  identity. There is currently no self-service UI anywhere for a user to view/disconnect their own
+  sign-in identity specifically — product decision was that none is needed.
+- All of the AIE-57/AIE-102 machinery that only existed to make the old sign-in-identity version
+  safe to disconnect was deleted outright from `AccountSettings.tsx`: `hasPasswordCapability`'s use
+  for Gmail gating (the flag itself stays — still used by the unrelated Change/Set Password form),
+  `SOLE_IDENTITY_MESSAGE`, `resolveIdentityCapability`, the disconnect-password `Dialog` and its
+  state, `handleGoogleIdentityDisconnect`/`performGoogleIdentityDisconnect`/
+  `confirmDisconnectWithPassword`, the `attach_password_identity` self-heal effect, and the
+  mismatched-Google-email banner. The `attach_password_identity()` DB function/migration from round 2
+  is left in place (unused, not reverted) — nothing calls it anymore.
+- **New server-side permission gate, added as part of this change, not deferred:**
+  `verify_business_access()` (`app/core/auth.py`) gained an `allowed_roles` parameter.
+  `/integrations/gmail/auth-url`, `/callback`, and `/disconnect` now pass
+  `GMAIL_INTEGRATION_MANAGE_ROLES = ["super_admin", "admin"]`; `/status` stays open to any business
+  member. Before this, these endpoints had **no role check at all** — Business Settings' UI simply
+  hid the buttons from lower-role accounts via its own route guard (`RESTRICTED_PAGES` in
+  `src/lib/roles.ts`), which was sufficient only because that page was the one place these endpoints
+  were ever called from. Adding a second, unrestricted-by-role page (Profile Settings, reachable by
+  every role) made that frontend-only gate insufficient, so real enforcement was added at the same
+  time instead of shipping a new bypass. Frontend mirrors the same check via
+  `canAccessPath(appRole, "/dashboard/settings/business")` for the button-level UI.
+- `docs/features/profile-gmail-signin.md` is now archived/superseded — its history is real (that's
+  genuinely what shipped at the time), but Profile Settings' Gmail card is no longer its own feature.
+
+**Verified:** `npx tsc --noEmit` clean (frontend), Python syntax-checked + backend container rebuilt
+and started cleanly (no import errors) for the `auth.py`/`gmail_integrations.py` change. Not yet
+manually QA'd end-to-end against the real production app — see the manual test plan this should
+follow, mirroring the "Round 3" verification approach above (role-gating in particular needs checking
+against a real "user"-role account, not just super_admin/admin).
