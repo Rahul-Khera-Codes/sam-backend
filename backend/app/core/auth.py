@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 
 import jwt
 from fastapi import Depends, HTTPException, status
@@ -53,7 +54,11 @@ def get_user_id(current_user: dict = Depends(get_current_user)) -> str:
     return user_id
 
 
-def verify_business_access(user_id: str, business_id: str) -> str:
+def verify_business_access(
+    user_id: str,
+    business_id: str,
+    allowed_roles: Optional[list[str]] = None,
+) -> str:
     """
     Verify the authenticated user has a role for the given business_id.
     Returns the user's role for that business.
@@ -61,6 +66,12 @@ def verify_business_access(user_id: str, business_id: str) -> str:
     Raises 403 if the user has no membership in this business — prevents
     a user from passing an arbitrary business_id in the URL/body to
     access another business's data.
+
+    If `allowed_roles` is given, also raises 403 when the user's role for
+    this business isn't in that list — for endpoints whose only existing
+    caller enforces a role restriction purely in its own frontend route
+    guard (e.g. Business Settings), which stops being sufficient the moment
+    a second, less-restricted page starts calling the same endpoint.
 
     Also raises 403 if the business has been soft-deleted.
     """
@@ -88,6 +99,13 @@ def verify_business_access(user_id: str, business_id: str) -> str:
             detail="You don't have access to this business",
         )
 
+    role = role_row.data[0]["role"]
+    if allowed_roles is not None and role not in allowed_roles:
+        raise HTTPException(
+            status_code=403,
+            detail="You don't have permission to manage this integration.",
+        )
+
     biz = _execute_with_retry(
         supabase_admin.table("businesses")
         .select("is_deleted")
@@ -100,7 +118,7 @@ def verify_business_access(user_id: str, business_id: str) -> str:
             detail="This business account has been deactivated. Contact support to restore access.",
         )
 
-    return role_row.data[0]["role"]
+    return role
 
 
 def require_business_access(business_id_param: str = "business_id"):
