@@ -206,6 +206,16 @@ async def _gcal_fetch_busy_intervals(
                     "items": [{"id": "primary"}],
                 },
             )
+            if r.status_code in (401, 403):
+                # Fails open (see docstring), but a 401/403 almost always means a
+                # missing/stale OAuth scope or a revoked grant, not a transient
+                # blip — log loudly so this doesn't silently degrade to "always free".
+                logger.error(
+                    "Google Calendar freeBusy query unauthorized for staff %s "
+                    "(status %s) — check granted scopes / token validity: %s",
+                    staff_id, r.status_code, r.text[:300],
+                )
+                return []
             if r.status_code != 200:
                 logger.warning(
                     "Google Calendar freeBusy query failed for staff %s: %s %s",

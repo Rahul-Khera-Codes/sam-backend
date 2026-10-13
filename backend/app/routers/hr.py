@@ -606,7 +606,7 @@ def _load_native_jobs(business_id: str, applicants_by_job: dict[str, int]) -> li
 def _fetch_hr_applications(business_id: str) -> list[dict]:
     rows = (
         supabase_admin.table("hr_job_applications")
-        .select("job_posting_id,status,submitted_at")
+        .select("job_posting_id,status,stage,submitted_at")
         .eq("business_id", business_id)
         .execute()
     )
@@ -616,11 +616,22 @@ def _fetch_hr_applications(business_id: str) -> list[dict]:
 def _fetch_hr_interview_sessions(business_id: str) -> list[dict]:
     rows = (
         supabase_admin.table("hr_interview_sessions")
-        .select("status,interview_kind,invited_at")
+        .select("status,interview_kind,invited_at,job_posting_id")
         .eq("business_id", business_id)
         .execute()
     )
     return rows.data or []
+
+
+def _closed_job_posting_ids(business_id: str) -> set[str]:
+    rows = (
+        supabase_admin.table("hr_job_postings")
+        .select("id")
+        .eq("business_id", business_id)
+        .eq("status", "closed")
+        .execute()
+    )
+    return {row["id"] for row in (rows.data or [])}
 
 
 def _parse_ts(value) -> datetime | None:
@@ -658,16 +669,31 @@ def _windowed_change(rows: list[dict], ts_key: str, predicate, now: datetime) ->
     return _pct_change_label(current, previous)
 
 
-def _build_dashboard_stats(applications: list[dict], interview_sessions: list[dict]) -> dict:
+def _build_dashboard_stats(
+    applications: list[dict],
+    interview_sessions: list[dict],
+    closed_job_posting_ids: set[str],
+) -> dict:
     now = datetime.now(timezone.utc)
 
+    # "Total Applicants"/"Hired"/the funnel stages below are lifetime counts — same
+    # semantics as a job posting's own `applicants` counter, which also isn't
+    # archive-filtered. "Pending Review" and "Active Interviews" are snapshots of
+    # what's actually actionable right now, so those two exclude archived
+    # applications / closed-position sessions (AIE-95) — a closed job's leftover
+    # "new"/"invited" rows aren't really pending anything anymore.
     total_applicants = len(applications)
-    pending_review = sum(1 for a in applications if a.get("status") == "new")
+    pending_review = sum(
+        1 for a in applications if a.get("status") == "new" and a.get("stage") != "archived"
+    )
     hired = sum(1 for a in applications if a.get("status") == "hired")
 
+    live_sessions = [
+        s for s in interview_sessions if s.get("job_posting_id") not in closed_job_posting_ids
+    ]
     active_interview_statuses = {"invited", "opened", "in_progress"}
     active_interviews = sum(
-        1 for s in interview_sessions if s.get("status") in active_interview_statuses
+        1 for s in live_sessions if s.get("status") in active_interview_statuses
     )
     ai_screened = sum(
         1
@@ -689,7 +715,10 @@ def _build_dashboard_stats(applications: list[dict], interview_sessions: list[di
             title="Pending Review",
             value=str(pending_review),
             change=_windowed_change(
-                applications, "submitted_at", lambda a: a.get("status") == "new", now
+                applications,
+                "submitted_at",
+                lambda a: a.get("status") == "new" and a.get("stage") != "archived",
+                now,
             ),
             icon="briefcase",
         ).model_dump(),
@@ -697,7 +726,7 @@ def _build_dashboard_stats(applications: list[dict], interview_sessions: list[di
             title="Active Interviews",
             value=str(active_interviews),
             change=_windowed_change(
-                interview_sessions,
+                live_sessions,
                 "invited_at",
                 lambda s: s.get("status") in active_interview_statuses,
                 now,
@@ -747,12 +776,13 @@ async def get_hr_jobs_workspace(
 ):
     applications = _fetch_hr_applications(business_id)
     interview_sessions = _fetch_hr_interview_sessions(business_id)
+    closed_job_posting_ids = _closed_job_posting_ids(business_id)
 
     payload = await _get_hr_jobs_payload(business_id, applications=applications)
     jobs = [job.model_dump() for job in payload.jobs]
     workspace = _workspace_view_from_jobs(jobs).model_dump()
 
-    dashboard_stats = _build_dashboard_stats(applications, interview_sessions)
+    dashboard_stats = _build_dashboard_stats(applications, interview_sessions, closed_job_posting_ids)
     workspace["dashboard"]["stats"] = dashboard_stats["stats"]
     workspace["dashboard"]["funnel_stages"] = dashboard_stats["funnel_stages"]
 

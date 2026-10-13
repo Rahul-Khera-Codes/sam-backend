@@ -539,6 +539,59 @@ Dockerfiles): agent 50/50 in this file (59/60 full suite, the 1 failure being th
 previously-flagged `test_build_instructions_custom_greeting_replaces_welcome_block`), backend
 16/16 full suite.
 
+## Regression fixed 2026-10-13 (AIE-69) — Google Calendar check was silently no-op'ing for every connected account
+
+QA (Sam, 2026-10-12) reported the Sept 7 Google Calendar fix above wasn't working at all: booked a
+personal Google Calendar event 10am–10pm, called in, and the phone agent offered every slot in that
+window as available.
+
+**Root cause:** the OAuth consent scope requested when a staff member connects Google Calendar
+(`SCOPES` in `backend/app/services/google_calendar_service.py`) was only ever
+`calendar.events` (+ `userinfo.email`/`openid`) — granted to create/update/delete events on the
+staff member's calendar (the original one-way push integration), never to read anything back.
+The Sept 7 fix added a `POST .../freeBusy` call but never widened the scope it runs under.
+`freeBusy.query` requires `calendar.freebusy`, `calendar.readonly`, or full `calendar` —
+`calendar.events` alone doesn't cover it, so Google has always returned 401/403 for this
+call, for every account, old or newly (re)connected.
+
+This was invisible because `fetch_busy_intervals`/`_gcal_fetch_busy_intervals` are intentionally
+**fail-open** (see their docstrings): any token/refresh problem or non-200 response returns
+`[]` and logs a `warning` — indistinguishable from "the employee genuinely has no conflicts
+today." The automated tests all mock the HTTP call, so they never caught the scope gap; only a
+real call against a real connected calendar exposes it.
+
+**Fix:**
+- Added `https://www.googleapis.com/auth/calendar.freebusy` to `SCOPES` in
+  `backend/app/services/google_calendar_service.py` — the minimal, non-sensitive scope Google
+  defines specifically for free/busy-only reads (doesn't expose event titles/details, unlike
+  `calendar.readonly`/`calendar`, which are "sensitive" scopes requiring app verification).
+  Kept `calendar.events` for the existing push (create/update/delete) path.
+- Upgraded the 401/403 branch in both `fetch_busy_intervals` (backend) and
+  `_gcal_fetch_busy_intervals` (`agent/gcal_helpers.py`) from `logger.warning` to `logger.error`
+  with an explicit "check granted scopes / token validity" message — still fails open (returns
+  `[]`, never blocks booking), but an auth/scope failure is now distinguishable in logs from a
+  transient API blip instead of silently reading as "no conflicts."
+- Rebuilt and restarted the full `sam-backend` Docker stack; confirmed `sam-backend` responsive
+  (`GET /docs` → 200) and already serving live traffic post-rebuild.
+
+**Required manual step — every business that already connected Google Calendar must
+disconnect and reconnect it.** Google does not retroactively apply a newly added scope to an
+existing OAuth grant; the old tokens still only carry `calendar.events` until the staff member
+re-runs the consent flow. Not yet communicated to existing connected businesses as of this
+write-up — needs a decision on how/when to prompt reconnection (in-app banner on
+`/integrations/google/status` returning connected-but-stale-scope vs. a one-off support message).
+
+**Not yet done / follow-ups:**
+- No automated regression test added for the scope itself (the existing tests mock the HTTP
+  layer, which is exactly how this slipped through — a real/sandboxed OAuth round-trip test
+  would be needed to actually catch a scope regression, not attempted in this pass).
+- `/integrations/google/status` doesn't currently distinguish "connected" from "connected but
+  missing freebusy scope" — a business reconnecting is the only way to self-diagnose today
+  short of reading backend logs.
+- Outlook is still fully blocked, unchanged from the 2026-09-07 note below — Azure app
+  registration still only has `Mail.Send`/`offline_access`/`User.Read`, no calendar scope has
+  been requested or granted yet.
+
 ## Bug fixed 2026-09-08 (AIE-77) — agent booked the customer under the assigned staff member's name
 Reported: an appointment's `client_name` came back as "Sam Maisuria" — the staff member assigned to
 the appointment — instead of the actual caller's name.
