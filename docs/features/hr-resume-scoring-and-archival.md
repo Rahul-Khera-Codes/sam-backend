@@ -106,6 +106,58 @@ spec'd the full pipeline (see the note at the top of `hr-interviews-scorecard.md
 - Bulk-invite as a real backend batch endpoint — `POST /hr/interviews/invite` is still strictly
   one candidate per call; the frontend's bulk "Invite to Interview" button loops client-side.
 
+## Bug fixed 2026-10-13 (AIE-95) — closing a job didn't remove its candidates from the Interviews "Candidate Pipeline" widget
+
+Reported: closed the "Website Developer" position; 2 former candidates for it still showed up
+active in the dashboard's "Candidate Pipeline" widget (`HrInterviews.tsx`, fed by
+`GET /hr/interviews/pipeline`).
+
+**Root cause:** the archival cascade above (`update_hr_job` setting `stage="archived"` on close)
+only ever touched `hr_job_applications` — exactly as designed. But the Candidate Pipeline widget
+doesn't read `hr_job_applications` at all; it reads a separate table, `hr_interview_sessions`
+(`hr_interview_runtime_service.py::list_pipeline`), filtered only by `business_id` with no
+awareness of the linked job posting's status. So a closed job's interview sessions kept showing
+up there even though the application-level archive worked correctly and `GET /hr/candidates`
+(the actual Candidates page) already correctly hid them.
+
+**Fix:** `list_pipeline` now fetches each referenced job posting (reusing the existing per-job
+fetch, renamed `_jobs_for`, that used to only resolve titles) and excludes any session whose job
+posting `status == "closed"`. This doesn't change the STATUS column semantics described in
+decision #3 of `hr-interviews-pipeline-dashboard.md` (still purely interview-progress, not
+shortlist state) — it only changes which *rows* are visible at all, same axis as a job's own
+open/closed lifecycle, not the candidate's shortlist/archive stage.
+
+**Not done in this pass:** sessions for jobs that can't be found at all (`HrInterviewNotFound`)
+are still shown, same as before — only a confirmed `status == "closed"` excludes a row. No new
+UI affordance to view a closed job's past interview sessions (e.g. historical reporting) was
+added; if that's ever wanted, it isn't possible today without a direct Supabase query.
+
+### Follow-up, same day: the HR dashboard's own stat cards/funnel had the identical gap
+
+Checking for other surfaces with the same root cause (reads `hr_interview_sessions`/
+`hr_job_applications` without regard to job/application archive state) turned up one more:
+`GET /hr/jobs/workspace`'s dashboard stats (`hr.py::_build_dashboard_stats`, the "Active
+Interviews" stat card and the Applicants→AI Screened→Interviewed→Hired funnel on the HR
+dashboard home) also counted a closed job's sessions/applications with no filtering at all.
+Confirmed against the same real "Website Developer" data: one of its applications is
+`status="new"` + `stage="archived"` (a candidate who applied right before the job closed and
+was never reviewed) — this was still counting toward "Pending Review" before the fix.
+
+**Fix:** `_build_dashboard_stats` now takes the set of closed job posting IDs
+(`_closed_job_posting_ids`, new) and:
+- "Active Interviews" excludes sessions whose `job_posting_id` is closed (same criterion as the
+  Candidate Pipeline fix above).
+- "Pending Review" excludes applications with `stage == "archived"` (catches both a closed-job
+  application and a hired-and-archived one, same check `GET /hr/candidates` already uses).
+
+**Deliberately left as lifetime/historical counts, not filtered:** "Total Applicants", "Hired",
+and all four funnel stages (Applicants/AI Screened/Interviewed/Hired). These already match the
+precedent set by a job posting's own `applicants` counter, which the original 9/15 pass
+explicitly decided NOT to archive-filter ("no new counting logic"). Only the two stats whose
+name implies "right now" (Active Interviews, Pending Review) were changed — filtering the
+lifetime ones too would make "5 total applicants" change retroactively just because a job
+closed, which isn't what those numbers mean.
+
 ## Update (2026-09-15, same day): job-scoped Candidates table to match Sam's reference screenshot
 Sam's original 9/14 comment included a screenshot ("Candiview" template) of a single-job Candidates
 table — badge for the job + applicant count, Export CSV / View Job Details, a circular AI-score

@@ -25,7 +25,7 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 GOOGLE_CALENDAR_BASE = "https://www.googleapis.com/calendar/v3"
 GOOGLE_AUTH_BASE = "https://accounts.google.com/o/oauth2/v2/auth"
-SCOPES = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email openid"
+SCOPES = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.freebusy https://www.googleapis.com/auth/userinfo.email openid"
 
 
 # ── OAuth URL ─────────────────────────────────────────────────────────────────
@@ -334,6 +334,16 @@ async def fetch_busy_intervals(
                     "items": [{"id": "primary"}],
                 },
             )
+            if resp.status_code in (401, 403):
+                # Fails open (see docstring), but a 401/403 almost always means a
+                # missing/stale OAuth scope or a revoked grant, not a transient
+                # blip — log loudly so this doesn't silently degrade to "always free".
+                logger.error(
+                    "Google Calendar freeBusy query unauthorized (status %s) — "
+                    "check granted scopes / token validity: %s",
+                    resp.status_code, resp.text[:300],
+                )
+                return []
             resp.raise_for_status()
             data = resp.json()
     except Exception as e:

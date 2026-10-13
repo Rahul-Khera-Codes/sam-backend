@@ -231,17 +231,18 @@ def _summarize_session(row: dict[str, Any], job_title: str = "") -> HrInterviewS
     )
 
 
-def _job_titles_for(rows: list[dict[str, Any]], business_id: str) -> dict[str, str]:
-    titles: dict[str, str] = {}
+def _jobs_for(rows: list[dict[str, Any]], business_id: str) -> dict[str, dict[str, Any]]:
+    """Fetch each unique job posting referenced by `rows` once, keyed by job_posting_id."""
+    jobs: dict[str, dict[str, Any]] = {}
     for row in rows:
         job_id = row.get("job_posting_id")
-        if not job_id or job_id in titles:
+        if not job_id or job_id in jobs:
             continue
         try:
-            titles[job_id] = _get_job(business_id, job_id).get("title") or "Untitled role"
+            jobs[job_id] = _get_job(business_id, job_id)
         except HrInterviewNotFound:
-            titles[job_id] = "Unknown role"
-    return titles
+            jobs[job_id] = {}
+    return jobs
 
 
 async def _send_interview_invite_email(
@@ -492,7 +493,15 @@ def list_pipeline(business_id: str) -> HrInterviewPipelineResponse:
         .execute()
     )
     rows = result.data or []
-    titles = _job_titles_for(rows, business_id)
+    jobs = _jobs_for(rows, business_id)
+    # A closed position's candidates are retired (hr_job_applications.stage is set to
+    # "archived" when the job closes, see update_hr_job) — this pipeline should stop
+    # showing them too, instead of only reflecting raw interview-session progress.
+    rows = [row for row in rows if jobs.get(row.get("job_posting_id"), {}).get("status") != "closed"]
+    titles = {
+        job_id: (job.get("title") or "Untitled role") if job else "Unknown role"
+        for job_id, job in jobs.items()
+    }
     summaries = [_summarize_session(row, titles.get(row.get("job_posting_id"), "")) for row in rows]
     ai_screens = [item for item in summaries if item.interview_kind == "ai_screen"]
     human_interviews = [item for item in summaries if item.interview_kind == "human_external"]
