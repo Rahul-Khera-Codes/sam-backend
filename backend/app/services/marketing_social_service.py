@@ -657,10 +657,24 @@ async def _refresh_instagram_access_token(business_id: str, row: dict[str, Any])
     return token_data.get("access_token", access_token)
 
 
+def _mark_integration_disconnected(business_id: str, row: dict[str, Any], error: str) -> None:
+    """Flip is_connected off and surface the error so Settings -> Integrations stops
+    showing a dead connection as live. LinkedIn only issues refresh_token to apps
+    approved as Marketing Developer Platform partners (separate from the Community
+    Management API product) — standard connections never get one, so every
+    LinkedIn connection reaches this dead end ~60 days after connecting, with
+    reconnecting as the only recovery."""
+    supabase_admin.table("marketing_platform_integrations").update(
+        {"is_connected": False, "last_error": error}
+    ).eq("id", row["id"]).eq("business_id", business_id).execute()
+
+
 async def _refresh_linkedin_access_token(business_id: str, row: dict[str, Any]) -> str:
     refresh_token = _decrypt_token(row.get("encrypted_refresh_token"))
     if not refresh_token:
-        raise RuntimeError("LinkedIn refresh token is missing. Reconnect LinkedIn.")
+        error = "LinkedIn refresh token is missing. Reconnect LinkedIn."
+        _mark_integration_disconnected(business_id, row, error)
+        raise RuntimeError(error)
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
             "https://www.linkedin.com/oauth/v2/accessToken",
@@ -673,7 +687,9 @@ async def _refresh_linkedin_access_token(business_id: str, row: dict[str, Any]) 
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
     if response.status_code >= 400:
-        raise RuntimeError(f"LinkedIn token refresh failed: {response.text}")
+        error = f"LinkedIn token refresh failed: {response.text}"
+        _mark_integration_disconnected(business_id, row, error)
+        raise RuntimeError(error)
     token_data = response.json()
     expires_at = None
     if token_data.get("expires_in"):

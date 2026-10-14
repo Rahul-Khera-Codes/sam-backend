@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     marketing_linkedin_redirect_uri_production: str = ""
     # LinkedIn-Version header (YYYYMM) — bump via env once the real app is live and tested
     # against whatever version is current then; no code change needed.
-    marketing_linkedin_api_version: str = "202502"
+    marketing_linkedin_api_version: str = "202609"
     # Flip on once Sam gets the "Community Management API" product approved in the
     # LinkedIn Developer Portal (see AIE-100) and w_organization_social /
     # r_organization_admin scopes are provisioned. Until then this stays False and the
