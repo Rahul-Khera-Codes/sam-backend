@@ -20,6 +20,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.core.supabase import supabase_admin
 from app.services import livekit_service, settings_service
+from app.services.customers_service import _normalize_phone_e164
 from app.routers.market_agent import run_market_agent_refresh
 from app.routers.report_scheduler import send_digest
 from app.services.marketing_social_service import publish_due_scheduled_posts
@@ -178,7 +179,7 @@ async def run_reminder_calls() -> None:
             continue
 
         for appt in (appts.data or []):
-            phone = (appt.get("client_phone") or "").strip()
+            phone = _normalize_phone_e164((appt.get("client_phone") or "").strip())
             if not phone:
                 logger.info(
                     "Scheduler: skipping reminder for appointment %s — no client phone", appt["id"]
@@ -271,7 +272,7 @@ async def run_reschedule_calls() -> None:
             continue
 
         for appt in (appts.data or []):
-            phone = (appt.get("client_phone") or "").strip()
+            phone = _normalize_phone_e164((appt.get("client_phone") or "").strip())
             if not phone:
                 logger.info(
                     "Scheduler: skipping reschedule for appointment %s — no client phone", appt["id"]
@@ -363,7 +364,7 @@ async def run_noshow_calls() -> None:
             continue
 
         for appt in (appts.data or []):
-            phone = (appt.get("client_phone") or "").strip()
+            phone = _normalize_phone_e164((appt.get("client_phone") or "").strip())
             if not phone:
                 logger.info(
                     "Scheduler: skipping no-show call for appointment %s — no client phone", appt["id"]

@@ -65,6 +65,7 @@ class CallResponse(BaseModel):
     livekit_room_id: Optional[str]
     created_at: datetime
     appointment_ref: Optional[str] = None
+    miss_reason: Optional[str] = None
 
 
 class TranscriptUtterance(BaseModel):

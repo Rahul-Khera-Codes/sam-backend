@@ -51,6 +51,47 @@ rendered but had no effect on whether calls/texts actually went out. AIE-62 clos
 - When `outbound_calling` is off, it blocks *all* outbound call paths for that location
   (scheduler-driven and the manual test dialer), not just automated ones.
 
+## AIE-83 — reminder/reschedule/no-show calls dialing a non-E.164 number (2026-10-14)
+Sam reported (again, after two earlier AIE-83 fix rounds covering answer-detection timing and
+direction-agnostic "missed" status) that an `appointment_reminder` call showed as `missed` with
+`duration_seconds: 0` and `miss_reason: "dialing"` — the SIP leg never progressed past the initial
+dial step. Checked Twilio's Call Logs API directly for the number/time window of that call and of
+a later `noshow_followup` retry on the same appointment: **neither outbound attempt ever reached
+Twilio at all** — zero matching call records on the carrier side, even though both show up as
+`missed` in our `calls` table after our own internal timeout. The failure is before the SIP
+trunk, not a no-answer/ring-timeout case.
+
+Root cause: `run_reminder_calls()`, `run_reschedule_calls()`, and `run_noshow_calls()` in
+`scheduler_service.py` all read `appointments.client_phone` and pass it straight to
+`_trigger_outbound_call()` → `livekit_service.create_sip_participant(to_number=...)` with no E.164
+normalization. The affected appointment's `client_phone` was stored as `7809944331` (no `+1`); real
+inbound calls from the same person show `+17809944331`. `create_sip_participant` builds the SIP
+`sip_call_to` field from whatever string it's given — a bare 10-digit number without a `+` isn't a
+dialable SIP URI, so LiveKit never forwards a request to the Twilio trunk at all. This is distinct
+from the earlier AIE-83 fix that normalizes `client_phone` at `book_appointment` write-time (that
+only prevents *new* bookings from storing a bad number; it never re-validates at dial-time, so any
+appointment whose phone was stored before that fix, or via a path that bypasses it, still dials raw).
+
+**Fix:** all three scheduler loops now call the existing `_normalize_phone_e164()` (already in
+`backend/app/services/customers_service.py`, imported into `scheduler_service.py`) on `client_phone`
+immediately after reading it from the appointment row, before it's ever used to dial. Defense at the
+dial site, not just the write site.
+
+**Also fixed in the same pass:** `miss_reason` was being written to `calls` (prior AIE-83 round)
+but never reached the UI — `backend/app/schemas/calls.py::CallResponse` didn't declare the field, so
+FastAPI's `response_model` silently stripped it even though `select("*")` fetched it from Supabase.
+Added `miss_reason: Optional[str]` to the schema, `CallRecord.miss_reason` in
+`ai-employees-app/src/lib/voiceAgentApi.ts`, and a conditional "Miss Reason" stat tile in
+`CallRecordings.tsx` (shown only when `status === "missed"` and a reason is present) so a future
+instant-dial-failure case is visible from the dashboard without a DB query.
+
+**Not fixed / needs a decision:** the webhook backstop (`backend/app/routers/calls.py:553`,
+`POST /calls/webhook`) finalizes orphaned calls when the agent's own code path doesn't run, but it
+has no access to `sip.callStatus` and never writes `miss_reason` — the `noshow_followup` retry's
+`miss_reason` came back `null` because it was finalized by the backstop, not the agent. Left open
+pending a decision on how/where to persist the last-known SIP status somewhere the webhook (running
+after the agent process has exited) can read it.
+
 ## Known related gaps (not touched — out of scope for AIE-62)
 - `agent/sms_helpers.py::send_appointment_reminder_sms()` is defined but never called anywhere —
   reminder-day SMS doesn't exist today, only reminder *calls* do.

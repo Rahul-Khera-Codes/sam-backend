@@ -138,3 +138,53 @@ and `/terms`) before this work — they just weren't linked anywhere reachable p
 
 These are the URLs to submit as Privacy Policy / Terms of Service in the LinkedIn developer
 app config.
+
+## AIE-100 — LinkedIn integration audit (2026-10-14)
+Triggered by a `redirect_uri does not match the registered value` error on Sam's new
+"AI Employees - Community" LinkedIn app (client_id `86i9ylq4876wzc`, created 10/9 to pursue the
+Community Management API product for Company Page posting). That specific error is pure LinkedIn
+Developer Portal config — the new app has never had its Auth tab's "Authorized redirect URLs"
+populated, so it needs `http://localhost:8080/integrations/marketing/linkedin/callback` and
+`https://portal.aiemployeesinc.com/integrations/marketing/linkedin/callback` added there (only
+Sam can do this — portal access). Not a code issue, nothing to fix on our side for that one.
+
+While investigating, audited the rest of the LinkedIn integration and found two more real issues,
+both now fixed:
+
+1. **Stale `LinkedIn-Version` header.** `config.py`'s `marketing_linkedin_api_version` was hardcoded
+   to `"202502"` (Feb 2025). LinkedIn supports each monthly version for ~12 months before sunset
+   (confirmed via their current versioning docs) — `202502` was roughly 8 months past that window.
+   Every `/rest/*` call (`organizationAcls` lookup, image upload, post creation) was at serious risk
+   of already failing independent of anything else. Bumped the default to `202609` (current latest
+   as of this audit). **This isn't a one-time fix** — this string needs bumping roughly yearly or
+   LinkedIn will start rejecting the header again; nothing in the code tracks or warns about this.
+
+2. **No realistic token refresh path, and a dead connection looked alive.** LinkedIn only issues an
+   OAuth `refresh_token` to apps approved as **Marketing Developer Platform partners** — a
+   separate/additional approval from the Community Management API product already in progress for
+   AIE-100. Our requested scopes never get one, so `encrypted_refresh_token` is null for every real
+   connection, and `_refresh_linkedin_access_token` always fails once the 60-day access token
+   expires. Previously this only ever surfaced as a `publish_error` on individual scheduled posts —
+   `marketing_platform_integrations.is_connected`/`last_error` were never updated, so
+   Settings → Integrations kept showing LinkedIn as "Connected" indefinitely after it had actually
+   died. Fixed: `_refresh_linkedin_access_token` (`marketing_social_service.py`) now calls a new
+   `_mark_integration_disconnected()` helper that flips `is_connected` to `false` and writes
+   `last_error` the moment a refresh fails, so the card goes back to showing "Connect" instead of a
+   stale "Connected" badge. Also wired the (already-existing) `last_error` field through to the
+   frontend — `IntegrationCard` now renders it under the description whenever a provider shows
+   disconnected with a stored error, for Instagram/X/LinkedIn alike (only LinkedIn actually hits this
+   today, but the other two providers share the same dead pattern, so the fix covers all three for free).
+   **Not fixed, by design:** a mid-session 401 during an actual publish call doesn't flip
+   `is_connected` — only a failed *refresh* does. A transient LinkedIn API error on `/rest/posts`
+   shouldn't force a full reconnect; only an unambiguously dead token should.
+   **Real fix for #2 is out of code's hands:** LinkedIn will keep killing every connection at ~60
+   days until the app is approved for Programmatic Refresh Tokens (MDP partner status) — worth
+   raising with Sam as a second, separate approval request alongside Community Management API,
+   since without it every connected business will need to manually reconnect every two months.
+
+3. **Operational gotcha, not a bug:** `available_organizations` (the Company Page list) is only ever
+   fetched once, at the moment of OAuth connect (`complete_linkedin_oauth`). Flipping
+   `MARKETING_LINKEDIN_ORGANIZATION_ACCESS_ENABLED` to `true` once LinkedIn approves the product will
+   **not** retroactively show the page picker for already-connected businesses — each one needs to
+   disconnect and reconnect LinkedIn after approval for the org list to populate. Flagging now so
+   it's not a surprise later.
