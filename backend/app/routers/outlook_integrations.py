@@ -55,11 +55,16 @@ def _get_token_row_for_location(business_id: str, location_id: Optional[str]) ->
 
 
 def _get_business_token_row(business_id: str) -> Optional[dict]:
+    """Newest Outlook token row for this business, regardless of location —
+    mirrors gmail_integrations.py's _get_business_token_row (AIE-90 pattern):
+    Outlook is one connection per business, so a stale row under one
+    location_id shouldn't shadow a working one under a different
+    location_id, or block a reconnect from updating in place."""
     result = (
         supabase_admin.table("outlook_tokens")
         .select("*")
         .eq("business_id", business_id)
-        .is_("location_id", "null")
+        .order("created_at", desc=True)
         .limit(1)
         .execute()
     )
@@ -179,9 +184,14 @@ async def oauth_callback(
     if location_id:
         row["location_id"] = location_id
 
-    # SELECT + INSERT/UPDATE (partial unique indexes don't work with upsert)
+    # SELECT + INSERT/UPDATE (partial unique indexes don't work with upsert).
+    # Outlook is one connection per business, not per-location — look up ANY
+    # existing row for this business, not just one matching this exact
+    # location_id, so a reconnect always replaces the business's single row
+    # instead of inserting a duplicate alongside an old location-scoped row
+    # (same duplicate-row bug fixed for Gmail in AIE-90).
     try:
-        existing = _get_token_row_for_location(business_id, location_id)
+        existing = _get_business_token_row(business_id)
         if existing:
             supabase_admin.table("outlook_tokens").update(
                 {k: v for k, v in row.items() if k not in ("business_id", "location_id")}
@@ -225,15 +235,24 @@ async def disconnect(
     user_id: str = Depends(get_user_id),
 ):
     verify_business_access(user_id, business_id)
-    row = _get_token_row_for_location(business_id, location_id)
-    if not row:
+    # Outlook is one connection per business, not per-location — clear every
+    # row for this business (not just one matching this exact location_id),
+    # so a stale location-scoped row can't survive a disconnect and keep
+    # shadowing future reconnects (same fix as Gmail's AIE-90 follow-up).
+    result = (
+        supabase_admin.table("outlook_tokens")
+        .select("id")
+        .eq("business_id", business_id)
+        .execute()
+    )
+    if not result.data:
         return {"disconnected": True}
 
     # No Microsoft Graph revoke endpoint for delegated consent — deleting the
-    # stored row is all we can do server-side. The user's consent grant itself
-    # persists until removed at https://myaccount.microsoft.com/consents.
+    # stored row(s) is all we can do server-side. The user's consent grant
+    # itself persists until removed at https://myaccount.microsoft.com/consents.
     try:
-        supabase_admin.table("outlook_tokens").delete().eq("id", row["id"]).execute()
+        supabase_admin.table("outlook_tokens").delete().eq("business_id", business_id).execute()
     except Exception as e:
         logger.error("Failed to delete Outlook tokens: %s", e)
         raise HTTPException(status_code=500, detail="Failed to disconnect Outlook.")

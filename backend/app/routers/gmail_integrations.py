@@ -33,31 +33,12 @@ router = APIRouter(prefix="/integrations/gmail", tags=["integrations"])
 GMAIL_INTEGRATION_MANAGE_ROLES = ["super_admin", "admin"]
 
 
-def _apply_location_filter(query, location_id: Optional[str]):
-    """Apply location_id filter: eq if provided, is null if not."""
-    if location_id:
-        return query.eq("location_id", location_id)
-    return query.is_("location_id", "null")
-
-
 def _decrypt_row_tokens(row: Optional[dict]) -> Optional[dict]:
     if not row:
         return row
     row["access_token"] = decrypt_oauth_token(row.get("access_token"))
     row["refresh_token"] = decrypt_oauth_token(row.get("refresh_token"))
     return row
-
-
-def _get_token_row_for_location(business_id: str, location_id: Optional[str]) -> Optional[dict]:
-    """Fetch gmail token row scoped to (business_id, location_id)."""
-    query = (
-        supabase_admin.table("gmail_tokens")
-        .select("*")
-        .eq("business_id", business_id)
-    )
-    query = _apply_location_filter(query, location_id)
-    result = query.limit(1).execute()
-    return _decrypt_row_tokens(result.data[0]) if result.data else None
 
 
 def _get_business_token_row(business_id: str) -> Optional[dict]:
@@ -232,9 +213,17 @@ async def oauth_callback(
     if location_id:
         row["location_id"] = location_id
 
-    # SELECT + INSERT/UPDATE (partial unique indexes don't work with upsert)
+    # SELECT + INSERT/UPDATE (partial unique indexes don't work with upsert).
+    # Gmail is one connection per business, not per-location (see
+    # _get_business_token_row) — look up ANY existing row for this business,
+    # not just one matching this exact location_id, so a reconnect always
+    # replaces the business's single row instead of inserting a duplicate
+    # alongside an old location-scoped row left over from a
+    # pre-location-feature migration (AIE-90 follow-up: this is how the
+    # business in that ticket ended up with two gmail_tokens rows, one of
+    # them a permanent zombie no disconnect/reconnect cycle ever touched).
     try:
-        existing = _get_token_row_for_location(business_id, location_id)
+        existing = _get_business_token_row(business_id)
         if existing:
             supabase_admin.table("gmail_tokens").update(
                 {k: v for k, v in row.items() if k not in ("business_id", "location_id")}
@@ -308,17 +297,29 @@ async def disconnect(
     user_id: str = Depends(get_user_id),
 ):
     verify_business_access(user_id, business_id, allowed_roles=GMAIL_INTEGRATION_MANAGE_ROLES)
-    row = _get_token_row_for_location(business_id, location_id)
-    if not row:
+    # Gmail is one connection per business, not per-location — clear every
+    # row for this business (not just one matching this exact location_id),
+    # so a stale location-scoped row from before the business-wide model
+    # can't survive a disconnect and keep shadowing future reconnects
+    # (AIE-90 follow-up).
+    result = (
+        supabase_admin.table("gmail_tokens")
+        .select("*")
+        .eq("business_id", business_id)
+        .execute()
+    )
+    rows = result.data or []
+    if not rows:
         return {"disconnected": True}
 
-    try:
-        await gmail.revoke_token(row["refresh_token"])
-    except Exception:
-        pass
+    for row in rows:
+        try:
+            await gmail.revoke_token(decrypt_oauth_token(row.get("refresh_token")))
+        except Exception:
+            pass
 
     try:
-        supabase_admin.table("gmail_tokens").delete().eq("id", row["id"]).execute()
+        supabase_admin.table("gmail_tokens").delete().eq("business_id", business_id).execute()
     except Exception as e:
         logger.error("Failed to delete Gmail tokens: %s", e)
         raise HTTPException(status_code=500, detail="Failed to disconnect Gmail.")
