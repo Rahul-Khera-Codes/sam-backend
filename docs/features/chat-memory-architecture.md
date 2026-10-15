@@ -340,6 +340,53 @@ project and OpenAI API inside the running containers, with cleanup after:
   and the backend registered/started cleanly with the new code (no
   import/syntax errors); existing test suite still passes.
 
+## Phase 2 follow-up fix — stale technical-status facts poisoning agent behavior (AIE-90)
+
+**Symptom:** Remi kept refusing to send email ("we'll need to reconnect your
+Gmail integration") days after the actual Gmail connection had been fixed and
+proven working (direct `docker exec` test against `_gmail_get_valid_token`
+succeeded). Live call logs showed the refusal with **no corresponding
+`send_email_draft`/`draft_email` tool execution at all** — the model wasn't
+even attempting the tool, just asserting failure conversationally.
+
+**Root cause:** the Phase 2 semantic-memory summarizer had no guardrail
+against extracting *transient system/integration status* as a "durable fact."
+During the real outage, conversations produced facts like *"The user needs to
+reconnect their Gmail integration to send emails"*, which got stored in
+`remi_semantic_facts` and then re-injected into **every subsequent
+conversation's system prompt** via `{context}` (`agent/executive_agent.py:236`)
+indefinitely — including conversations held long after the underlying bug was
+fixed. The model treated this recalled note as settled, current fact and
+stopped bothering to actually call the send tool to verify. This affected any
+business that hit any integration failure once — the bad memory persists
+forever (facts have no expiry/invalidation), actively blocking retries even
+after a real fix ships.
+
+**Fix (both in `agent/supabase_helpers.py`, applies to both Remi and John since
+`_summarize_conversation_to_facts`/`_format_semantic_context` are shared):**
+1. `_summarize_conversation_to_facts`'s extraction system prompt now
+   explicitly excludes "the current status of a technical integration, system
+   error, or connection problem" from what counts as a durable fact — these
+   are point-in-time states, not reusable preferences/decisions/contacts.
+2. `_format_semantic_context`'s rendered block now carries an explicit caveat
+   that recalled facts are background only, can go stale (especially
+   integration/error/connection status), and the model must verify with the
+   actual tool before telling the owner something isn't possible — defense in
+   depth in case a stale status-like fact already exists from before this fix,
+   or a future extraction slips one through.
+3. Manually deleted the specific stale "needs to reconnect" facts already
+   stored for the business that surfaced this (no migration/backfill —
+   one-off data cleanup; existing stale facts for *other* businesses, if any,
+   are not retroactively cleaned up by this fix and would need the same manual
+   deletion if they cause a similar symptom).
+
+**Not fixed/out of scope:** facts still have no expiry or invalidation
+mechanism in general — a genuinely-durable-sounding fact that later becomes
+false for a non-technical reason (e.g. a stated preference the business later
+reverses) can still go stale indefinitely. This fix only addresses the
+specific, high-confidence category (technical/integration status) that's
+guaranteed to be transient by nature.
+
 ## Phase 2 backlog (trimmed — still not built)
 
 - Cross-component token-budget governor: today's budget only covers John's

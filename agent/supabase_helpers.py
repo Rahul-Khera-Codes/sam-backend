@@ -149,6 +149,11 @@ async def _summarize_conversation_to_facts(messages: list[dict], *, business_nam
                         "Only extract genuinely reusable preferences, decisions, or repeatedly-relevant "
                         "information (a stated preference, a policy detail, a contact, a recurring need). "
                         "Do not extract one-off questions, small talk, or anything unlikely to matter again. "
+                        "Never extract the current status of a technical integration, system error, or "
+                        "connection problem (e.g. 'Gmail needs to be reconnected', 'the calendar sync is "
+                        "broken') — these are point-in-time states that may already be resolved by the next "
+                        "conversation, and remembering them as settled fact would wrongly convince a future "
+                        "conversation the problem still exists without checking. "
                         "Each fact must be a short, standalone sentence understandable without the transcript. "
                         "Return JSON: {\"facts\": [\"...\", ...]} — empty array if nothing durable."
                     ),
@@ -198,7 +203,13 @@ def _format_semantic_context(facts: list[str]) -> str:
     if not facts:
         return ""
     bullets = "\n".join(f"- {f}" for f in facts)
-    return f"What you remember from past conversations with this business:\n{bullets}"
+    return (
+        "What you remember from past conversations with this business (for background only — "
+        "these notes can go stale, especially anything about an integration, error, or connection "
+        "status. Never tell the owner something isn't possible based on a remembered note alone; "
+        "always check with the actual tool first):\n"
+        f"{bullets}"
+    )
 
 
 def _store_semantic_facts(
