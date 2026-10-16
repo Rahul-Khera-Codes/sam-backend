@@ -100,3 +100,27 @@ after the agent process has exited) can read it.
 - `booking_service.py` and `agent/sms_helpers.py` still have two independent Twilio
   confirmation-SMS code paths with different message templates (one per booking origin) —
   functionally fine post-fix (both now respect the toggle) but a future cleanup could unify them.
+
+## Fix (2026-10-16) — outbound calls opened with the inbound "how can I help you today" greeting
+
+**Symptom (client, Divinity DJs):** two days in a row the agent phoned the client's number (scheduled
+no-show / reschedule follow-ups for test appointments "Jane Doe" / "Test Name") and then opened with the
+inbound receptionist greeting instead of the follow-up script.
+
+**Root cause:** `agent/agent.py` always loaded `inbound_calling.greeting_message` and built the system
+prompt via `build_instructions(..., custom_greeting=...)`, regardless of `call_direction`. The prompt then
+said "Start the call with this greeting: …how can we help you today?" (or, with no custom greeting, the
+default "Thank you for calling X, how can I help you today?" example), contradicting the outbound
+`generate_reply` instruction that tells the agent to open with the scheduled `message_template`. The
+system-prompt instruction won.
+
+**Fix:** `build_instructions` gained `outbound: bool = False`. When true, the welcome block is replaced
+with outbound framing (the person did not call in; no "thank you for calling"/"how can I help you today";
+the opening line is delivered separately) and the rest of the prompt (services, staff, booking rules) is
+kept so the agent can still rebook. `agent.py` passes `outbound=(call_direction == "outbound")` and skips
+the inbound greeting lookup for outbound calls. Inbound behaviour is unchanged. Covers both scheduler calls
+and `POST /calls/outbound`. Tests: `agent/tests/test_prompt_builder.py`.
+
+**Not changed:** the scheduler still calls any appointment marked no_show/cancelled with a client phone —
+test appointments using a real person's number will keep triggering real calls. `calls` stores no transcript,
+so the spoken opening can only be confirmed by a live test call.
