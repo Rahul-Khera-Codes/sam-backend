@@ -260,3 +260,29 @@ and started cleanly (no import errors) for the `auth.py`/`gmail_integrations.py`
 manually QA'd end-to-end against the real production app — see the manual test plan this should
 follow, mirroring the "Round 3" verification approach above (role-gating in particular needs checking
 against a real "user"-role account, not just super_admin/admin).
+
+## Fifth root cause (2026-10-16, AIE-90) — prod agent missing `MARKETING_TOKEN_ENCRYPTION_KEY`
+
+**Symptom:** Remi sent email fine on local (`localhost:8080`) but failed on production
+(`portal.aiemployeesinc.com/dashboard/executive`) with the usual "Gmail connection no longer works".
+
+**Root cause:** production's `agent/.env.local` (read by `sam-executive-agent`, gitignored, never
+shipped via `git pull`) did not contain `MARKETING_TOKEN_ENCRYPTION_KEY`. `agent/token_crypto.py`
+therefore could not decrypt the Fernet-encrypted `gmail_tokens` values and — by design, for the
+legacy-plaintext-row fallback — silently returned the ciphertext as if it were the token. The refresh
+call sent ciphertext to Google (`invalid_grant`), every row was skipped, and the diagnostic reported
+a dead connection. Local worked because local's `agent/.env.local` has the key. Local and prod share
+one Supabase project, so the data was identical; only the env differed.
+
+**Fix:** added the key to production's `agent/.env.local` (same value as `backend/.env` and local).
+Confirmed by the user: email send works on production afterwards. No code change.
+
+**Operational note:** `agent/.env.local` and `backend/.env` are separate, gitignored files per
+environment. Any new secret added to one must be added by hand to prod's copy, and the agent container
+restarted. `MARKETING_TOKEN_ENCRYPTION_KEY` must be identical in `backend/.env` and `agent/.env.local`
+in every environment.
+
+**Possible hardening (not done, needs a decision):** `decrypt_oauth_token` returning ciphertext on
+`InvalidToken`/missing key hides this class of misconfig. Options: log a loud warning when the key is
+missing or a value looks like Fernet (`gAAAA...`) but fails to decrypt; or fail fast at agent startup
+if the key is unset.

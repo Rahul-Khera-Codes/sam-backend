@@ -146,3 +146,22 @@ def test_build_instructions_custom_schedule_uses_local_weekday_not_server_clock(
 
     mock_local_now.assert_any_call("America/Toronto")
     assert "Today's hours are affected by the active schedule 'Holiday Hours'" in result
+
+
+def test_build_instructions_outbound_drops_inbound_greeting():
+    """Outbound calls must not carry the inbound receptionist greeting (default or custom)."""
+    with patch("prompt_builder._get_supabase", return_value=_mock_supabase_minimal()):
+        result = build_instructions("biz-123", None, custom_greeting="Hey, welcome to Test Biz!", outbound=True)
+    assert "OUTBOUND call" in result
+    assert "Hey, welcome to Test Biz!" not in result
+    assert "Start the call with this greeting" not in result
+    assert "Always start the call" not in result
+    assert 'Example: "Thank you for calling' not in result
+
+
+def test_build_instructions_inbound_unchanged_by_outbound_flag_default():
+    """Default (outbound=False) keeps the inbound greeting behaviour."""
+    with patch("prompt_builder._get_supabase", return_value=_mock_supabase_minimal()):
+        result = build_instructions("biz-123", None)
+    assert "Always start the call" in result
+    assert "OUTBOUND call" not in result

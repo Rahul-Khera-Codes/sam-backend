@@ -402,6 +402,7 @@ def build_instructions(
     business_id: str | None,
     location_id: str | None,
     custom_greeting: str | None = None,
+    outbound: bool = False,
 ) -> str:
     """
     Build the full agent system prompt from all business data in Supabase:
@@ -548,7 +549,20 @@ def build_instructions(
         if spoken:
             location_phrase = f" in {spoken}"
 
-    if custom_greeting and custom_greeting.strip():
+    if outbound:
+        # The agent placed this call — the person never called in, so the inbound
+        # receptionist greeting ("Thank you for calling… how can I help you
+        # today?", or the business's custom one) would contradict the outbound
+        # opening script delivered separately via generate_reply.
+        welcome = (
+            f"You are the AI phone assistant for {company_name}{location_phrase}, "
+            "placing an OUTBOUND call. The person you are speaking with did not call "
+            "you. Do NOT greet them as a caller and do NOT say \"thank you for calling\" "
+            "or \"how can I help you today\". Your opening line is given to you "
+            "separately at the start of the call; deliver it, then continue the "
+            "conversation naturally following these rules:\n\n"
+        )
+    elif custom_greeting and custom_greeting.strip():
         welcome = (
             f"You are the AI phone receptionist for {company_name}{location_phrase}.\n"
             f'Start the call with this greeting: "{custom_greeting}"\n'
