@@ -147,3 +147,6 @@ row gets `refunded_at` set from its old `paid_at`/`updated_at`.
   deleting it via the endpoint that already existed for that (`DELETE .../entries/{entry_id}`).
   Keeping a dedicated unrefund endpoint alongside would have meant two ways to remove a refund
   entry that needed to stay in sync.
+
+## Catalog + custom line items (AIE-103, 2026-10-17)
+Payment Details has an "Add item or service" panel: pick from the Product Management catalog or add a custom Service/Item. Line items gained optional `product_id`, `kind`, `description` (frontend `PaymentLineItem` / `PaymentLineItemApi`, backend `AppointmentPaymentLineItem`); catalog lines store a price snapshot so later product edits don't change past invoices. Existing line items and totals logic are unchanged. Details: `product-management.md`.
