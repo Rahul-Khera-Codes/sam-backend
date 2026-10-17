@@ -5,6 +5,7 @@ All functions are best-effort — failures are logged, not raised.
 
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 
 from constants import GOOGLE_TOKEN_URL, GMAIL_SEND_URL
@@ -12,6 +13,30 @@ from supabase_helpers import _fmt_time_12h
 from token_crypto import decrypt_oauth_token, encrypt_oauth_token
 
 logger = logging.getLogger("voice-agent")
+
+
+_PLACEHOLDER_RE = re.compile(r"\{\{?\s*(first[_ ]?name|last[_ ]?name|full[_ ]?name|name)\s*\}?\}", re.IGNORECASE)
+
+
+def _personalize(text: str, recipient: dict) -> str:
+    """
+    Replace {first_name} / {last_name} / {full_name} / {name} (any case, optional
+    spaces, single or double braces) with the recipient's values. A missing first
+    name falls back to "there" so a raw token never reaches the customer.
+    """
+    first = (recipient.get("first_name") or "").strip()
+    last = (recipient.get("last_name") or "").strip()
+    full = f"{first} {last}".strip()
+
+    def _sub(m: re.Match) -> str:
+        key = re.sub(r"[_ ]", "", m.group(1).lower())
+        if key == "firstname":
+            return first or "there"
+        if key == "lastname":
+            return last
+        return full or first or "there"
+
+    return _PLACEHOLDER_RE.sub(_sub, text or "")
 
 
 async def _gmail_get_valid_token(

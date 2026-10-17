@@ -147,6 +147,10 @@ def _build_payment_snapshot(body: SaveAppointmentPaymentRequest) -> tuple[list[d
             "price": price,
             "quantity": item.quantity,
             "line_total": float(line_total),
+            # Only written when present so legacy line items keep their exact shape
+            **({"product_id": item.product_id} if item.product_id else {}),
+            **({"kind": item.kind} if item.kind else {}),
+            **({"description": item.description.strip()} if item.description and item.description.strip() else {}),
         })
 
     tip_amount = _money(body.tip_amount)

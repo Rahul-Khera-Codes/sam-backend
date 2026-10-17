@@ -132,6 +132,10 @@ class AppointmentPaymentLineItem(BaseModel):
     service_name: str
     price: Optional[float] = None
     quantity: int = 1
+    # AIE-103: catalog / custom items. All optional so existing records and clients are unaffected.
+    product_id: Optional[str] = None
+    kind: Optional[Literal["Service", "Item"]] = None
+    description: Optional[str] = Field(default=None, max_length=2000)
 
 
 class SaveAppointmentPaymentRequest(BaseModel):

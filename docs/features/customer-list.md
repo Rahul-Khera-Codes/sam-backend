@@ -62,3 +62,19 @@ AIE-90 ("Remi: Error sending messages") and AIE-99 ("Remi: Not connected to the 
 - Both AIE-90 and AIE-99 linked as related in Linear — same root cause, tracked together.
 
 Verified: `npx tsc --noEmit` clean; Python files AST-parse clean; both Docker stacks (`sam-backend`, `ai-employees-app`) rebuilt, and the `sam-executive-agent` / `sam-backend` containers confirmed to start cleanly with the new functions importable and attached to `ExecutiveAssistant`. Not yet verified: a live retest against a business with the migration-pinned-token scenario (needs a real multi-location business that connected Gmail pre-2026-04-11), and an interactive browser walkthrough of the new bulk-email card.
+
+## Bug fix: bulk email sent `{first_name}` literally (AIE-90, 2026-10-17)
+
+QA (Sam) confirmed bulk sends went through, but recipients received "Hi {first_name}," — the placeholder was never replaced.
+
+- **Root cause**: the bulk-email tools did no per-recipient substitution at all. Remi's LLM wrote `{first_name}` into the body on its own initiative, `prepare_bulk_customer_email` dropped `first_name`/`last_name` from the recipient list (kept only a combined `name`), and `send_bulk_customer_email` attached the identical `body` string to every message.
+- **Fix** (`agent/gmail_helpers.py`, `agent/executive_agent.py`):
+  - New `_personalize(text, recipient)` replaces `{first_name}`, `{last_name}`, `{full_name}` and `{name}` — case-insensitive, optional inner spaces, single or double braces. Implemented with a regex, not `str.format`, so unrelated braces in the body are left untouched and can't raise.
+  - Applied to both the subject and body for every recipient at send time.
+  - A customer with no first name gets `there` ("Hi there,") so a raw token or an empty "Hi ," never reaches a customer. Missing last name becomes an empty string.
+  - `prepare_bulk_customer_email` now keeps `first_name` and `last_name` on each recipient.
+  - The `bulk_email_preview` card shows the first recipient's personalized subject/body as a sample (backend-only change; no frontend change, same card fields).
+  - Tool docstring and the system prompt tell Remi to write the literal `{first_name}` token for greetings and not to invent other placeholder styles or names.
+- **Tests**: `agent/tests/test_personalize.py` (basic replace, token variants/case, missing-name fallback, unrelated braces untouched).
+
+Verified (2026-10-17): Docker stack rebuilt (`docker compose down` + `up --build -d`). In the rebuilt `sam-executive-agent` container, a scripted run of `prepare_bulk_customer_email` → `send_bulk_customer_email` with mocked Supabase rows and a mocked Gmail send produced, per recipient: "Hi Sarah," for a customer with a name, "Hi there," for customers with an empty/null first name; the subject was personalized too; the customer with no email was excluded; no `{` token remained in any sent message; the preview card showed the sample "Hi Sarah,". Not yet verified: a live Gmail send through the real Remi UI, and whether the LLM reliably emits `{first_name}` (the prompt now instructs it to; `_personalize` also covers the common variants).

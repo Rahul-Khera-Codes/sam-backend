@@ -26,7 +26,7 @@ from livekit.plugins import openai, liveavatar
 
 import httpx as _httpx
 from constants import GOOGLE_TOKEN_URL, GOOGLE_CALENDAR_BASE, GMAIL_SEND_URL
-from gmail_helpers import _gmail_get_valid_token, _gmail_connection_diagnostic, _gmail_send_raw
+from gmail_helpers import _gmail_get_valid_token, _gmail_connection_diagnostic, _gmail_send_raw, _personalize
 from gcal_helpers import _gcal_get_valid_token, _gcal_refresh_token
 from supabase_helpers import (
     _get_supabase,
@@ -217,7 +217,7 @@ You are Remi, the personal executive assistant for {business_name}. You work dir
 - ANSWER GENERAL AND PERSONAL QUESTIONS DIRECTLY. Your name is Remi — if asked who you are or your name, say "I'm Remi, your assistant for {business_name}." Do NOT turn casual or identity questions into a task, and never say you don't have a name.
 - Only use a tool when the owner actually wants an email, calendar, or appointment action. Never assume a message is a scheduling/appointment request unless they clearly ask for one.
 - If the owner asks about a customer, or wants to retrieve a customer's info or email them, call `search_customers` first to find them (or `get_customer` if you already have their id from a prior search). Use the email address it returns for `draft_email`/`send_email_draft` — never guess or invent a customer's email address. If the customer is marked do-not-contact, tell the owner clearly and get explicit confirmation before drafting anything to them.
-- If the owner wants to email EVERY customer (or "everyone in the list", "all my customers") rather than one person, use `prepare_bulk_customer_email` — never loop `draft_email` per customer. It shows the owner how many customers will receive it before anything sends. Only call `send_bulk_customer_email` after the owner explicitly confirms that preview.
+- If the owner wants to email EVERY customer (or "everyone in the list", "all my customers") rather than one person, use `prepare_bulk_customer_email` — never loop `draft_email` per customer. It shows the owner how many customers will receive it before anything sends. To greet each customer by name, write the literal token `{first_name}` in the body (e.g. "Hi {first_name},") — it is filled in per customer automatically; never write any other placeholder style or a made-up name. Only call `send_bulk_customer_email` after the owner explicitly confirms that preview.
 - Always confirm before sending emails or creating calendar events — draft first, show the preview, then wait for "yes, go ahead".
 - If an email draft is already shown and the owner asks for changes, call `update_email_draft` with the revised recipient, subject, or full body as needed. Do not merely say the changes are complete.
 - When a tool shows a card on screen (emails, schedule), the details are visible to the owner — give a brief one-line summary and ask what they'd like to do; do NOT read every item aloud.
@@ -1358,8 +1358,11 @@ class ExecutiveAssistant(Agent):
         """
         Prepare one email to send to every qualifying customer in the customer
         list at once — excludes customers marked do-not-contact and those with
-        no email on file. Shows the owner the exact recipient count and list
-        on screen before anything sends. Only call send_bulk_customer_email
+        no email on file. Use {first_name} (or {last_name}, {full_name}) in the
+        subject/body wherever the customer's name belongs — it is replaced per
+        recipient when sending. The on-screen preview shows the first
+        recipient's version as a sample. Shows the owner the exact recipient
+        count and list on screen before anything sends. Only call send_bulk_customer_email
         after the owner explicitly confirms this preview.
         """
         await _set_state(self._room, "thinking")
@@ -1384,7 +1387,9 @@ class ExecutiveAssistant(Agent):
         recipients = [
             {
                 "id": c["id"],
-                "name": f"{c.get('first_name', '')} {c.get('last_name', '')}".strip(),
+                "first_name": (c.get("first_name") or "").strip(),
+                "last_name": (c.get("last_name") or "").strip(),
+                "name": f"{c.get('first_name') or ''} {c.get('last_name') or ''}".strip(),
                 "email": c["email"],
             }
             for c in rows if c.get("email")
@@ -1395,8 +1400,8 @@ class ExecutiveAssistant(Agent):
         card_id = await self._send_card(
             "bulk_email_preview",
             {
-                "subject": subject,
-                "body": body,
+                "subject": _personalize(subject, recipients[0]),
+                "body": _personalize(body, recipients[0]),
                 "count": len(recipients),
                 "recipients": [{"name": r["name"] or r["email"], "email": r["email"]} for r in recipients],
             },
@@ -1453,8 +1458,8 @@ class ExecutiveAssistant(Agent):
             msg = MIMEMultipart("alternative")
             msg["From"] = f"{self._business_name} <{sender_email}>"
             msg["To"] = recip["email"]
-            msg["Subject"] = subject
-            msg.attach(MIMEText(body, "plain"))
+            msg["Subject"] = _personalize(subject, recip)
+            msg.attach(MIMEText(_personalize(body, recip), "plain"))
             raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
             try:
                 ok, status, text = await _gmail_send_raw(self._supabase, self._business_id, token, raw)
