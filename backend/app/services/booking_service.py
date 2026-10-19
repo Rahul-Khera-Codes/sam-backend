@@ -523,7 +523,7 @@ async def create_appointment(
 
     customer_id = resolve_or_create_customer(
         supabase_admin, req.business_id, req.location_id,
-        req.client_name, req.client_phone, req.client_email,
+        req.client_name, req.client_phone, req.client_email, req.do_not_contact,
     )
 
     row = {

@@ -78,3 +78,16 @@ QA (Sam) confirmed bulk sends went through, but recipients received "Hi {first_n
 - **Tests**: `agent/tests/test_personalize.py` (basic replace, token variants/case, missing-name fallback, unrelated braces untouched).
 
 Verified (2026-10-17): Docker stack rebuilt (`docker compose down` + `up --build -d`). In the rebuilt `sam-executive-agent` container, a scripted run of `prepare_bulk_customer_email` → `send_bulk_customer_email` with mocked Supabase rows and a mocked Gmail send produced, per recipient: "Hi Sarah," for a customer with a name, "Hi there," for customers with an empty/null first name; the subject was personalized too; the customer with no email was excluded; no `{` token remained in any sent message; the preview card showed the sample "Hi Sarah,". Not yet verified: a live Gmail send through the real Remi UI, and whether the LLM reliably emits `{first_name}` (the prompt now instructs it to; `_personalize` also covers the common variants).
+
+## Gotcha: literal `{first_name}` in EXECUTIVE_INSTRUCTIONS (AIE-90)
+`EXECUTIVE_INSTRUCTIONS` is rendered with `str.format()`, so any literal brace token in the prompt must be doubled (`{{first_name}}`). A bare `{first_name}` raised `KeyError` in `executive_agent()` before the session started, so Remi's job crashed and the UI sat on "Connecting..." forever. Same applies to `JOHN_INSTRUCTIONS`.
+
+## Bug fix: manual appointments didn't create customers (AIE-105, 2026-10-19)
+
+Sam booked manual appointments from the Calendar "New Appointment" modal and no new customer appeared in the Customer List.
+
+- **Root cause**: `resolve_or_create_customer` (backend) and `_resolve_or_create_customer` (agent) matched an existing customer on phone — or email — alone, ignoring the name. Any booking whose phone was already on file was linked to that customer instead of creating a new one (e.g. "Noshow Test", "Jane Doe", "Test Name" all linked to the existing "Greg Bitz" because they used the same phone). Separately, a booking with neither phone nor email returned `None`, so name-only bookings never created a customer. The modal's phone and email fields are both optional.
+- **Fix** (`backend/app/services/customers_service.py`, `agent/agent.py`): a customer matches only when the name (case-insensitive first + last) AND the phone or email agree. A different name on a known phone creates a new customer. With no phone/email, the name alone matches only a customer that also has no phone/email, and otherwise creates one. Returns `None` only for a blank name.
+- The Calendar modal's "do not contact" checkbox was sent by the frontend but dropped by `CreateAppointmentRequest`; it is now accepted (`do_not_contact`) and set on newly created customers.
+- No frontend change; no migration. Existing wrongly-linked appointments are not re-linked (same no-backfill stance as AIE-61).
+- Tests: `backend/tests/test_customers_service.py` (same person reused, different name + same phone creates new, name-only create/reuse, blank name).

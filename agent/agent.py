@@ -115,18 +115,36 @@ def _resolve_or_create_customer(
     """Resolve-or-create a `customers` record for a booking (AIE-61). Duplicated
     from backend/app/services/customers_service.py — agent/ and backend/ are
     separate deployables with no shared module."""
+    first_name, last_name = _split_client_name(client_name)
+    if not (client_name or "").strip():
+        return None
     phone = _normalize_phone_e164(client_phone) if client_phone else None
     email = (client_email or "").strip().lower() or None
-    if not phone and not email:
-        return None
 
-    query = supabase.table("customers").select("id").eq("business_id", business_id)
-    query = query.eq("phone", phone) if phone else query.eq("email", email)
-    existing = query.limit(1).execute()
-    if existing.data:
-        return existing.data[0]["id"]
+    candidates: list[dict] = []
+    if phone or email:
+        for col, val in (("phone", phone), ("email", email)):
+            if val:
+                found = (
+                    supabase.table("customers").select("id, first_name, last_name")
+                    .eq("business_id", business_id).eq(col, val).execute()
+                )
+                candidates.extend(found.data or [])
+    else:
+        found = (
+            supabase.table("customers").select("id, first_name, last_name")
+            .eq("business_id", business_id).is_("phone", "null").is_("email", "null")
+            .ilike("first_name", first_name).execute()
+        )
+        candidates.extend(found.data or [])
 
-    first_name, last_name = _split_client_name(client_name)
+    for row in candidates:
+        if (
+            (row.get("first_name") or "").strip().lower() == first_name.strip().lower()
+            and (row.get("last_name") or "").strip().lower() == last_name.strip().lower()
+        ):
+            return row["id"]
+
     created = supabase.table("customers").insert({
         "business_id": business_id,
         "location_id": location_id,
