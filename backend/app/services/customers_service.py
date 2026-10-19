@@ -30,6 +30,13 @@ def _split_name(client_name: str) -> tuple[str, str]:
     return parts[0], parts[1]
 
 
+def _same_name(row: dict, first_name: str, last_name: str) -> bool:
+    return (
+        (row.get("first_name") or "").strip().lower() == first_name.strip().lower()
+        and (row.get("last_name") or "").strip().lower() == last_name.strip().lower()
+    )
+
+
 def resolve_or_create_customer(
     supabase,
     business_id: str,
@@ -39,27 +46,51 @@ def resolve_or_create_customer(
     client_email: Optional[str],
     do_not_contact: bool = False,
 ) -> Optional[str]:
-    """Looks up an existing customer for this business by phone (or email if no
-    phone), creates one if not found, and returns its id. Returns None if there's
-    not enough identity info (no phone and no email) to resolve or create one.
+    """Finds this business's customer for a booking, or creates one, and returns its id.
+
+    A customer matches only when the name AND (phone or email) agree. Phone/email
+    alone is not enough — family members and coworkers share them, and a different
+    name on a known phone is a different person who belongs in the list (AIE-105).
+    With no phone or email, the name alone matches only a customer that also has no
+    phone or email on file, so name-only bookings still create a customer.
+    Returns None only if there is no name at all.
     """
+    first_name, last_name = _split_name(client_name)
+    if not (client_name or "").strip():
+        return None
+
     phone = _normalize_phone_e164(client_phone) if client_phone else None
     email = (client_email or "").strip().lower() or None
 
-    if not phone and not email:
-        return None
-
-    query = supabase.table("customers").select("id").eq("business_id", business_id)
-    if phone:
-        query = query.eq("phone", phone)
+    candidates: list[dict] = []
+    if phone or email:
+        for col, val in (("phone", phone), ("email", email)):
+            if val:
+                found = (
+                    supabase.table("customers")
+                    .select("id, first_name, last_name")
+                    .eq("business_id", business_id)
+                    .eq(col, val)
+                    .execute()
+                )
+                candidates.extend(found.data or [])
     else:
-        query = query.eq("email", email)
-    existing = query.limit(1).execute()
-    if existing.data:
-        return existing.data[0]["id"]
+        found = (
+            supabase.table("customers")
+            .select("id, first_name, last_name")
+            .eq("business_id", business_id)
+            .is_("phone", "null")
+            .is_("email", "null")
+            .ilike("first_name", first_name)
+            .execute()
+        )
+        candidates.extend(found.data or [])
 
-    first_name, last_name = _split_name(client_name)
-    row = {
+    for row in candidates:
+        if _same_name(row, first_name, last_name):
+            return row["id"]
+
+    created = supabase.table("customers").insert({
         "business_id": business_id,
         "location_id": location_id,
         "first_name": first_name or "Unknown",
@@ -67,8 +98,7 @@ def resolve_or_create_customer(
         "phone": phone,
         "email": email,
         "do_not_contact": do_not_contact,
-    }
-    created = supabase.table("customers").insert(row).execute()
+    }).execute()
     if created.data:
         return created.data[0]["id"]
     return None
