@@ -45,6 +45,14 @@ The feature was fully wired end-to-end but never actually fired, for three indep
    than the appointment date itself meant the appointment was permanently skipped. Fixed to
    window on `no_show_at`, matching `run_reschedule_calls()`'s existing `updated_at` pattern.
 
+## AIE-104 — attempt limit (2026-10-19)
+`noshow_followup` config now has `max_attempts` (default 2, UI: Edit Call Settings → "Number of
+attempts", 1–10). `appointments.noshow_attempts` counts calls placed (migration
+`20261019130000_noshow_attempts.sql`). `run_noshow_calls()` calls once `days` after the no-show;
+if that call ends `missed`/`failed` it retries `days` after the previous attempt, until
+`noshow_attempts >= max_attempts`. An answered call stops follow-up. Rebooking is not detected
+separately — a customer who answered is not called again.
+
 ## Known adjacent gap (not fixed, out of scope for AIE-65)
 `agent_settings` per-location seeding for newly-created locations is best-effort: the frontend
 calls `POST /locations/{id}/seed` after inserting the location, but the error is swallowed
