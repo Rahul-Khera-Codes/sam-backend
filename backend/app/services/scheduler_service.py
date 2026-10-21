@@ -313,8 +313,14 @@ async def run_noshow_calls() -> None:
     """
     Trigger follow-up calls for appointments marked no_show N days ago.
     Reads per-location config from agent_settings (feature_key=noshow_followup).
+
+    Each appointment gets at most `max_attempts` calls (default 2). The first
+    call goes out `days` after the no-show; a retry goes out `days` after the
+    previous attempt, but only if that attempt went unanswered (call status
+    missed/failed). An answered call ends the follow-up.
     """
     logger.info("Scheduler: no-show calls check started")
+    now = datetime.now(timezone.utc)
     today = date.today()
 
     try:
@@ -336,6 +342,7 @@ async def run_noshow_calls() -> None:
             continue
         config = cfg.get("config_value") or {}
         days = int(config.get("days") or 1)
+        max_attempts = max(int(config.get("max_attempts") or 2), 1)
         template = config.get("message_template") or (
             "Hi, we noticed you missed your recent appointment. "
             "We'd love to help you reschedule — would any of our available times work for you?"
@@ -345,16 +352,33 @@ async def run_noshow_calls() -> None:
         window_start = f"{target_date}T00:00:00+00:00"
         window_end   = f"{target_date}T23:59:59+00:00"
 
+        # First attempts: marked no-show on the target day, never called.
+        # Retries: already called, attempts left, last attempt at least `days` ago.
         try:
-            appts = (
+            base = (
                 supabase_admin.table("appointments")
-                .select("id, client_phone, client_name, service, appointment_date")
+                .select("id, client_phone, client_name, service, appointment_date, noshow_attempts")
                 .eq("business_id", business_id)
                 .eq("location_id", location_id)
                 .eq("status", "no_show")
-                .gte("no_show_at", window_start)
+                .lt("noshow_attempts", max_attempts)
+            )
+            first = (
+                base.gte("no_show_at", window_start)
                 .lte("no_show_at", window_end)
                 .is_("noshow_called_at", "null")
+                .execute()
+            )
+            retry_cutoff = (now - timedelta(days=days)).isoformat()
+            retries = (
+                supabase_admin.table("appointments")
+                .select("id, client_phone, client_name, service, appointment_date, noshow_attempts")
+                .eq("business_id", business_id)
+                .eq("location_id", location_id)
+                .eq("status", "no_show")
+                .lt("noshow_attempts", max_attempts)
+                .not_.is_("noshow_called_at", "null")
+                .lte("noshow_called_at", retry_cutoff)
                 .execute()
             )
         except Exception as e:
@@ -363,7 +387,26 @@ async def run_noshow_calls() -> None:
             )
             continue
 
-        for appt in (appts.data or []):
+        candidates = list(first.data or [])
+        for appt in (retries.data or []):
+            # Only retry when the previous attempt was never answered.
+            try:
+                last_call = (
+                    supabase_admin.table("calls")
+                    .select("status")
+                    .eq("appointment_id", appt["id"])
+                    .eq("caller_name", "noshow_followup")
+                    .order("started_at", desc=True)
+                    .limit(1)
+                    .execute()
+                )
+            except Exception as e:
+                logger.error("Scheduler: no-show last-call lookup failed for %s: %s", appt["id"], e)
+                continue
+            if last_call.data and last_call.data[0]["status"] in ("missed", "failed"):
+                candidates.append(appt)
+
+        for appt in candidates:
             phone = _normalize_phone_e164((appt.get("client_phone") or "").strip())
             if not phone:
                 logger.info(
@@ -371,10 +414,13 @@ async def run_noshow_calls() -> None:
                 )
                 continue
 
+            attempt_no = int(appt.get("noshow_attempts") or 0) + 1
+
             # Mark immediately to prevent double-calling on restart/overlap
             try:
                 supabase_admin.table("appointments").update({
-                    "noshow_called_at": datetime.now(timezone.utc).isoformat(),
+                    "noshow_called_at": now.isoformat(),
+                    "noshow_attempts": attempt_no,
                 }).eq("id", appt["id"]).execute()
             except Exception as e:
                 logger.error("Scheduler: failed to mark noshow_called_at for %s: %s", appt["id"], e)
@@ -391,12 +437,13 @@ async def run_noshow_calls() -> None:
 
             if call_id:
                 logger.info(
-                    "Scheduler: no-show call triggered — appointment=%s call=%s client=%s date=%s",
-                    appt["id"], call_id, appt.get("client_name"), target_date,
+                    "Scheduler: no-show call triggered — appointment=%s call=%s client=%s attempt=%d/%d",
+                    appt["id"], call_id, appt.get("client_name"), attempt_no, max_attempts,
                 )
             else:
                 logger.warning(
-                    "Scheduler: no-show call failed — appointment=%s", appt["id"]
+                    "Scheduler: no-show call failed — appointment=%s attempt=%d/%d",
+                    appt["id"], attempt_no, max_attempts,
                 )
 
     logger.info("Scheduler: no-show calls check finished")
